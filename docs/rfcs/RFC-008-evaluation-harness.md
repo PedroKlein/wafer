@@ -252,7 +252,7 @@ E-Iso-1 to E-Iso-6 are automated correctness tests using `TestPipeline` (pass/fa
 
 ### Decision 9: Statistical Analysis — UV-Managed Python Notebooks
 
-Rust handles recording (HdrHistogram + CSV). Python via UV-managed Jupyter notebooks handles analysis and figure generation. Statistical method per notebook: percentile bootstrap 95% CIs over runs (10,000 resamples) and effect size via Cliff's delta. A criterion with a threshold passes or fails on its one-sided 95% bootstrap bound against the value declared in `verdict_rules` in `eval/canonical-matrix.json`, and is inconclusive when the bounds straddle it; `eval/RESULT-CONTRACT.md` lists the rules. No normality, rank or t-test is run. Report: median, IQR, p95, p99.
+Rust handles recording (HdrHistogram + CSV). Python via UV-managed Jupyter notebooks handles analysis and figure generation. Statistical method per notebook: percentile bootstrap 95% CIs over runs, or over run pairs where conditions share one randomised block per run index (10,000 resamples), and effect size via Cliff's delta. A criterion with a threshold passes or fails on its one-sided 95% bootstrap bound against the value declared in `verdict_rules` in `eval/canonical-matrix.json`, and is inconclusive when the bounds straddle it; `eval/RESULT-CONTRACT.md` lists the rules. Jetson and x86 verdicts are compared with the Raspberry Pi 5 verdicts under `replication_concordance` in the same matrix and never change them. No normality, rank or t-test is run. Report: median, IQR, p95, p99.
 
 Recording output per experiment run: `config.toml`, `metadata.json`, `latency.hdr`, `throughput.csv`, `per_node_metrics.csv`, `memory.csv`, `swap_timeline.json`, `sequence.csv`.
 

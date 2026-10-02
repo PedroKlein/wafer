@@ -104,6 +104,61 @@ def batch_bracket_rates(
     return frozen_bracket_rates(record, matrix)
 
 
+def approved_host_batches(
+    experiment_id: str, results_root: pathlib.Path | str | None = None
+) -> dict[str, pathlib.Path]:
+    """Each host's approved batch of one experiment, by host tag, from eval/final-batches.json.
+
+    Every batch is validated against its own host's entry. A host without an
+    entry is absent, so a replication that has not been approved is missing,
+    never another host's batch.
+    """
+    repo = _find_repo_root()
+    path = repo / "eval/final-batches.json"
+    document = _read_object(path, "eval/final-batches.json") if path.is_file() else {}
+    batches = document.get("batches", {})
+    if not isinstance(batches, dict):
+        raise ValueError(f"malformed {path}: batches must be an object")
+    approved = {}
+    for host in HOST_TAGS:
+        if host in batches:
+            entry = _final_batch(repo, host, "<batch-id>")
+            approved[host] = find_canonical_batch(
+                experiment_id, f"{host}-{entry['batch_id']}", results_root
+            )
+    return approved
+
+
+def resolve_host_batches(
+    experiment_id: str,
+    diagnostic_paths: Mapping[str, str | None],
+    results_root: pathlib.Path | str | None = None,
+) -> tuple[dict[str, pathlib.Path], bool]:
+    """Each host's batch of one experiment, by host tag, and whether canonical gates apply.
+
+    Explicit diagnostic paths, keyed by host tag, select diagnostic mode for every
+    host. Otherwise ``WAFER_EVAL_BATCH_ID`` selects canonical mode: the named batch
+    must be approved, and each host's batch is the one its own entry approves, so a
+    batch is never reported under another host's tag.
+    """
+    unknown = set(diagnostic_paths) - set(HOST_TAGS)
+    if unknown:
+        raise ValueError(f"unknown host tags: {sorted(unknown)}")
+    explicit = {host: path for host, path in diagnostic_paths.items() if path}
+    if explicit:
+        return {
+            host: resolve_result_batch(
+                experiment_id, diagnostic_path=path, results_root=results_root
+            )
+            for host, path in explicit.items()
+        }, False
+    batch_id = os.environ.get("WAFER_EVAL_BATCH_ID")
+    if not batch_id:
+        return {}, False
+    find_canonical_batch(experiment_id, batch_id, results_root)
+    return approved_host_batches(experiment_id, results_root), True
+
+
 def find_canonical_ledger(
     batch_id: str, results_root: pathlib.Path | str | None = None
 ) -> pathlib.Path:

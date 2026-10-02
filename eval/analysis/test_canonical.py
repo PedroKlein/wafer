@@ -4,6 +4,7 @@ import hashlib
 import json
 import random
 from pathlib import Path
+from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,7 @@ from wafer_analysis.canonical import (
     density_table,
     depth_tables,
     metering_table,
+    overhead_contrast_table,
     startup_table,
     payload_table,
     recovery_table,
@@ -33,12 +35,15 @@ from wafer_analysis.canonical import (
     swap4_table,
     swap_phase_table,
     swap_sequence_table,
+    TARGET_LOAD_CRITERIA,
+    target_contrast_table,
     target_latency_table,
     validation_gate_table,
 )
 from wafer_analysis import paths
 from wafer_analysis.focused import admitted_runs
 from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
+from wafer_analysis.verdicts import concordance_table
 
 
 def percentile_runs(conditions: tuple[str, ...], n: int = 30) -> list[dict]:
@@ -88,6 +93,152 @@ def test_target_latency_uses_runs_and_reports_ci_effect_threshold_and_boundary()
     assert "pooled loss <= 0.01" in wafer["threshold"]
     assert wafer["claim_boundary"] == "matched 1,000 msg/s target load; not capacity"
     assert table["thesis_evidence"].eq(True).all()
+
+
+def test_target_latency_ratio_and_effect_resample_run_pairs() -> None:
+    block = {run: 100_000 * (1 + run % 5) for run in range(1, 31)}
+    records = percentile_runs(("wafer", "native", "ekuiper"))
+    for record in records:
+        scale = 1.9 if record["condition"] == "wafer" else 1.0
+        record["p95_ns"] = scale * block[record["run_index"]]
+
+    table = target_latency_table(records).set_index("condition")
+
+    wafer, native = table.loc["wafer"], table.loc["native"]
+    assert (wafer["p95_ratio_verdict"], wafer["verdict"]) == ("PASS", "PASS")
+    assert wafer["p95_ratio_ci_half_width"] == pytest.approx(0)
+    assert (wafer["ratio_ci95_low"], wafer["ratio_ci95_high"]) == pytest.approx((1.9, 1.9))
+    assert (native["ratio_ci95_low"], native["ratio_ci95_high"]) == pytest.approx((1, 1))
+    assert (native["cliffs_delta_ci95_low"], native["cliffs_delta_ci95_high"]) == (0.0, 0.0)
+    assert "over run pairs" in wafer["estimator"]
+
+
+def test_target_latency_diagnostic_table_pairs_the_run_indices_both_systems_have() -> None:
+    records = [
+        record
+        for record in percentile_runs(("wafer", "native", "ekuiper"), n=5)
+        if (record["condition"], record["run_index"]) != ("ekuiper", 5)
+    ]
+
+    table = target_latency_table(records, canonical=False).set_index("condition")
+
+    assert table["N_runs"].to_dict() == {"wafer": 5, "native": 5, "ekuiper": 4}
+    assert table["thesis_evidence"].eq(False).all()
+    assert table.loc["wafer", "p95_ratio_verdict"] == "PASS"
+    assert table.loc["wafer", "median_ratio_vs_reference"] == pytest.approx(120_002.5 / 122_002.5)
+
+
+BLOCKS = {run: 100_000.0 * (1 + run % 5) for run in range(1, 31)}
+
+
+def contrast_runs(conditions: tuple[str, ...], wafer_p95_extra, n: int = 30) -> list[dict]:
+    """Runs whose latency follows a block effect shared by every system of a run index."""
+    return [
+        {
+            "condition": condition,
+            "run_index": run,
+            "p50_ns": (1.2 if condition == "wafer" else 1.0) * BLOCKS[run],
+            "p95_ns": 2 * BLOCKS[run] + (wafer_p95_extra(run) if condition == "wafer" else 0),
+        }
+        for condition in conditions
+        for run in range(1, n + 1)
+    ]
+
+
+def test_target_contrast_reports_the_paired_difference_and_its_minimum_detectable_size() -> None:
+    def extra(run: int) -> int:
+        return 10_000 if run % 2 else 30_000
+
+    table = target_contrast_table(contrast_runs(("wafer", "native", "ekuiper"), extra))
+
+    p95 = table.set_index("statistic").loc["p95"]
+    differences = np.asarray([extra(run) for run in range(1, 31)], dtype=float)
+    z = NormalDist().inv_cdf(0.975) + NormalDist().inv_cdf(0.8)
+    assert table["statistic"].tolist() == ["p95", "p50"]
+    assert (p95["condition"], p95["reference_condition"], p95["N_pairs"]) == ("wafer", "native", 30)
+    assert p95["difference_ns"] == 20_000
+    assert (p95["difference_ci95_low_ns"], p95["difference_ci95_high_ns"]) == bootstrap_ci(differences)
+    assert p95["difference_ci_half_width_ns"] == pytest.approx(
+        (p95["difference_ci95_high_ns"] - p95["difference_ci95_low_ns"]) / 2
+    )
+    assert p95["paired_sd_ns"] == pytest.approx(np.std(differences, ddof=1))
+    assert p95["mdd_ns"] == pytest.approx(z * np.std(differences, ddof=1) / np.sqrt(30))
+    assert "verdict" not in table and table["thesis_evidence"].eq(True).all()
+    assert "power 0.80" in p95["estimator"]
+
+
+def test_overhead_contrast_resamples_run_pairs_for_the_ratio() -> None:
+    row = overhead_contrast_table(contrast_runs(("wafer", "native"), lambda run: 0)).iloc[0]
+
+    assert (row["statistic"], row["N_pairs"]) == ("p50", 30)
+    assert row["median_ratio"] == pytest.approx(1.2)
+    assert (row["ratio_ci95_low"], row["ratio_ci95_high"]) == pytest.approx((1.2, 1.2))
+    assert row["difference_ns"] == pytest.approx(0.2 * np.median(list(BLOCKS.values())))
+    assert "no cross-architecture claim" in row["claim_boundary"]
+
+
+def test_contrasts_need_complete_canonical_runs_but_pair_what_a_diagnostic_batch_has() -> None:
+    with pytest.raises(ValueError, match="30 independent runs"):
+        overhead_contrast_table(contrast_runs(("wafer", "native"), lambda run: 0, n=29))
+
+    runs = [
+        run
+        for run in contrast_runs(("wafer", "native"), lambda run: 0, n=3)
+        if (run["condition"], run["run_index"]) != ("native", 3)
+    ]
+    row = overhead_contrast_table(runs, canonical=False).iloc[0]
+    assert (row["N_pairs"], row["thesis_evidence"]) == (2, False)
+    single = overhead_contrast_table(runs[:1] + runs[3:4], canonical=False).iloc[0]
+    assert single["N_pairs"] == 1
+    assert pd.isna(single["paired_sd_ns"]) and pd.isna(single["mdd_ns"])
+    assert overhead_contrast_table(runs[:2], canonical=False).empty
+
+
+def test_contrasts_leave_out_a_run_the_system_stopped_early_and_its_partner() -> None:
+    runs = contrast_runs(("wafer", "native"), lambda run: 0)
+    runs[16] = {"condition": "wafer", "run_index": 17, "sut_outcome_reasons": ["runtime-exit"]}
+
+    row = overhead_contrast_table(runs).iloc[0]
+
+    assert (row["N_pairs"], row["runs_stopped_early"], row["thesis_evidence"]) == (29, 1, True)
+    assert row["median_ratio"] == pytest.approx(1.2)
+    assert "stopped early" in row["estimator"]
+    assert target_contrast_table(contrast_runs(("wafer", "native", "ekuiper"), lambda run: 0))[
+        "runs_stopped_early"
+    ].eq(0).all()
+
+
+def test_replication_concordance_reads_per_host_target_load_tables() -> None:
+    pi = target_latency_table(percentile_runs(("wafer", "native", "ekuiper")))
+    slower = percentile_runs(("wafer", "native", "ekuiper"))
+    for record in slower:
+        if record["condition"] == "wafer":
+            record["p95_ns"] *= 3
+    tables = {"rpi5": pi, "jetson": target_latency_table(slower), "x86": pi}
+
+    table = concordance_table(tables, TARGET_LOAD_CRITERIA).set_index(["criterion", "condition", "host"])
+
+    assert table.loc[("e-perf-1-p95-ratio", "wafer", "jetson"), "concordance"] == "opposite-direction"
+    assert table.loc[("e-perf-1-p95-ratio", "wafer", "x86"), "concordance"] == "same-verdict"
+    assert table.loc[("e-perf-1-p95-ratio", "wafer", "jetson"), "canonical_verdict"] == "PASS"
+    assert table.loc[("e-perf-1-pooled-loss", "ekuiper", "jetson"), "concordance"] == "same-verdict"
+    assert len(table) == (1 + 3 + 3 + 3) * 2
+    assert pi.loc[pi.condition == "wafer", "verdict"].item() == "PASS"
+
+
+def test_replication_concordance_shows_a_duplicate_that_flips_the_replication_verdict() -> None:
+    pi = target_latency_table(percentile_runs(("wafer", "native", "ekuiper")))
+    duplicated = percentile_runs(("wafer", "native", "ekuiper"))
+    duplicated[4]["duplicates"] = 3
+    jetson = target_latency_table(duplicated)
+
+    table = concordance_table({"rpi5": pi, "jetson": jetson}, TARGET_LOAD_CRITERIA)
+
+    wafer = table[(table.condition == "wafer") & (table.host == "jetson")].set_index("criterion")
+    assert jetson.loc[jetson.condition == "wafer", "verdict"].item() == "FAIL"
+    assert wafer.loc["e-perf-1-duplicates", "concordance"] == "opposite-direction"
+    assert (wafer.loc["e-perf-1-duplicates", "canonical_estimate"], wafer.loc["e-perf-1-duplicates", "replication_estimate"]) == (0, 3)
+    assert wafer.drop("e-perf-1-duplicates")["concordance"].eq("same-verdict").all()
 
 
 def test_target_latency_rejects_missing_delivery_evidence() -> None:
@@ -2096,17 +2247,19 @@ def wafer_target_row(edit) -> pd.Series:
 
 
 @pytest.mark.parametrize(("factor", "verdict"), [(1.0, "PASS"), (2.0, "INCONCLUSIVE"), (3.0, "FAIL")])
-def test_target_latency_ratio_verdict_reads_one_sided_bounds_over_runs(factor: float, verdict: str) -> None:
+def test_target_latency_ratio_verdict_reads_one_sided_bounds_over_run_pairs(factor: float, verdict: str) -> None:
     wafer_p95 = [factor * EKUIPER_MEDIAN_P95_NS + (run - 15.5) * 4_000 for run in range(1, 31)]
     wafer = wafer_target_row(lambda record: record.update(p95_ns=wafer_p95[record["run_index"] - 1]))
     _, low, high = median_shift_ci(
-        wafer_p95, [122_000 + run for run in range(1, 31)], relative=True, ci=0.9
+        wafer_p95, [122_000 + run for run in range(1, 31)], relative=True, paired=True, ci=0.9
     )
     assert (wafer["p95_ratio_verdict"], wafer["verdict"]) == (verdict, verdict)
     assert wafer["p95_ratio_threshold"] == 2.0
     assert wafer["p95_ratio_ci_half_width"] == pytest.approx((high - low) / 2)
+    assert wafer["p95_ratio_estimate"] == wafer["median_ratio_vs_reference"]
+    nearer = min((1 + low, 1 + high), key=lambda bound: abs(bound - 2.0))
     assert wafer["p95_ratio_flips_at"] == pytest.approx(
-        {"PASS": 1 + high, "INCONCLUSIVE": 1 + low, "FAIL": 1 + low}[verdict]
+        {"PASS": 1 + high, "INCONCLUSIVE": nearer, "FAIL": 1 + low}[verdict]
     )
 
 
@@ -2118,6 +2271,7 @@ def test_target_latency_loss_verdict_resamples_runs(lost: tuple[int, int], verdi
         lambda record: record.update(received_unique=60_000 - lost[record["run_index"] % 2])
     )
     assert wafer["loss_verdict"] == verdict
+    assert wafer["loss_estimate"] == wafer["pooled_loss"]
     assert wafer["delivery_verdict"] == verdict
     assert wafer["verdict"] == verdict
 
@@ -2134,6 +2288,7 @@ def test_target_latency_achieved_ratio_verdict_bounds_the_mean_over_runs(
     )
     low, high = bootstrap_ci(np.asarray([ratios[run % 2] for run in range(1, 31)]), ci=0.9, statistic=np.mean)
     assert wafer["achieved_ratio_verdict"] == verdict
+    assert wafer["achieved_ratio_estimate"] == wafer["mean_achieved_ratio"]
     assert wafer["achieved_ratio_ci_half_width"] == pytest.approx((high - low) / 2)
     assert wafer["delivery_verdict"] == verdict
 
@@ -2141,6 +2296,7 @@ def test_target_latency_achieved_ratio_verdict_bounds_the_mean_over_runs(
 def test_one_duplicate_fails_target_load_delivery_exactly() -> None:
     wafer = wafer_target_row(lambda record: record.update(duplicates=int(record["run_index"] == 1)))
     assert (wafer["loss_verdict"], wafer["achieved_ratio_verdict"]) == ("PASS", "PASS")
+    assert (wafer["duplicates_verdict"], wafer["duplicates_estimate"], wafer["duplicates_threshold"]) == ("FAIL", 1, 0)
     assert (wafer["delivery_verdict"], wafer["verdict"]) == ("FAIL", "FAIL")
 
 
@@ -2156,6 +2312,7 @@ def test_branch_isolation_is_inconclusive_when_the_drop_bounds_straddle_the_thre
     assert attack["throughput_drop_percent"] == pytest.approx(1.0)
     assert (attack["drop_verdict"], attack["verdict"]) == ("INCONCLUSIVE", "INCONCLUSIVE")
     assert attack["drop_threshold"] == 1.0
+    assert attack["drop_estimate"] == attack["throughput_drop_percent"]
     assert attack["drop_flips_at"] - attack["drop_ci_half_width"] < 1.0 < attack["drop_flips_at"]
     assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
     assert pd.isna(table.loc["control", "verdict"]) and pd.isna(table.loc["control", "drop_verdict"])
@@ -2196,6 +2353,7 @@ def test_swap3_dip_verdict_reads_the_one_sided_upper_bound(verdict: str) -> None
     )
     assert (wafer["dip_verdict"], wafer["verdict"]) == (verdict, verdict)
     assert wafer["dip_threshold"] == 5.0
+    assert wafer["dip_estimate"] == wafer["median_dip_percent"]
     assert wafer["dip_flips_at"] in (low, high)
     assert wafer["dip_ci_half_width"] == pytest.approx((high - low) / 2)
     assert table.loc[["wafer-restart", "ekuiper-restart"], "verdict"].isna().all()
@@ -2218,6 +2376,7 @@ def test_swap3_dip_is_pending_when_no_hot_swap_run_kept_running() -> None:
     wafer = swap3_table(runs).set_index("strategy").loc["wafer-hotswap"]
     assert (wafer["dip_verdict"], wafer["verdict"]) == ("PENDING", "FAIL")
     assert pd.isna(wafer["dip_flips_at"]) and pd.isna(wafer["dip_ci_half_width"])
+    assert pd.isna(wafer["dip_estimate"])
 
 
 @pytest.mark.parametrize(
@@ -2236,6 +2395,7 @@ def test_swap4_gap_verdict_bounds_the_across_run_p95(gaps: list[int], verdict: s
     assert (row["p95_gap_verdict"], row["verdict"]) == (verdict, verdict)
     assert row["p95_gap_threshold"] == 100_000_000
     assert row["p95_sink_gap_ns"] == sorted(gaps)[28]
+    assert row["p95_gap_estimate"] == row["p95_sink_gap_ns"]
 
 
 def test_swap4_loss_fails_the_burst_swap_whatever_the_gap() -> None:
@@ -2253,6 +2413,7 @@ def test_payload_reference_is_inconclusive_when_its_bounds_straddle_the_referenc
     row = payload_table(records).set_index("condition").loc["100kb"]
     assert row["boundary_p50_ns"] == pytest.approx(50_000)
     assert row["per_hop_reference_verdict"] == "INCONCLUSIVE"
+    assert row["per_hop_reference_estimate"] == row["boundary_p50_ns"]
     assert row["per_hop_reference_threshold"] == 50_000
     assert row["per_hop_reference_ci_half_width"] == pytest.approx(1_000)
     assert "a reference, not a pass criterion" in row["threshold"]

@@ -1810,5 +1810,38 @@
         "pilot_data_visible": false
       }
     ]
+  },
+  "replication_concordance": {
+    "schema_version": 1,
+    "canonical_host": "rpi5",
+    "replication_hosts": [
+      "jetson",
+      "x86"
+    ],
+    "criteria_rules": [
+      "one-sided-bound",
+      "exact-count"
+    ],
+    "direction": "the side of the declared threshold on which a host's point estimate falls, the count itself for an exact count: it meets the threshold or misses it",
+    "classes": [
+      {
+        "class": "not-estimable",
+        "rule": "either host lacks the criterion, reports it PENDING or has no point estimate"
+      },
+      {
+        "class": "same-verdict",
+        "rule": "both hosts report the same PASS, FAIL or INCONCLUSIVE verdict"
+      },
+      {
+        "class": "same-direction",
+        "rule": "the verdicts differ and both point estimates fall on the same side of the threshold"
+      },
+      {
+        "class": "opposite-direction",
+        "rule": "the verdicts differ and the point estimates fall on opposite sides of the threshold"
+      }
+    ],
+    "precedence": "the first class in the listed order whose rule holds",
+    "canonical_verdict": "unchanged: replication reports agreement with the canonical host and never alters its verdict"
   }
 }
