@@ -225,7 +225,7 @@ def test_jetson_backend_reads_ina3221_rails_and_the_cpu_thermal_zone(tmp_path: P
     summary, rails = sample(backend)
     assert [rail["rail"] for rail in rails] == ["VDD_IN", "VDD_CPU_GPU_CV", "VDD_SOC"]
     assert abs(float(rails[0]["power_w"]) - 6.0) < 1e-9
-    assert abs(float(summary["rail_proxy_watts"]) - 7.16) < 1e-9
+    assert abs(float(summary["rail_proxy_watts"]) - 6.0) < 1e-9
     assert summary["temperature_millicelsius"] == 47500
     assert summary["throttled"] == "0x0"
     assert summary["cpu_frequency_hz"] == 2_000_000_000

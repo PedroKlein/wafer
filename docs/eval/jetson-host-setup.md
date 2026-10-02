@@ -42,9 +42,9 @@ inference node runs on the CPU execution target, the same as on the Pi.
 `eval/scripts/lib/pi_telemetry.py` picks its `jetson` backend when
 `/etc/nv_tegra_release` exists and no `vcgencmd` is on the path. It writes the
 same `pi-telemetry.csv`, `pmic-rails.csv` and `power-boundary.json` as on the
-Pi, with the INA3221 rails from `/sys/class/hwmon` as the power source, the
-`cpu-thermal` zone as the temperature and a core running below 95% of its
-pinned clock as the throttle signal. `power-boundary.json` records
+Pi, with the INA3221 module input rail (`VDD_IN`) from `/sys/class/hwmon` as
+the power source, the `cpu-thermal` zone as the temperature and a core running
+below 95% of its pinned clock as the throttle signal. `power-boundary.json` records
 `jetson-ina3221-rail-proxy`, so these watts are never compared with Pi PMIC
 watts.
 

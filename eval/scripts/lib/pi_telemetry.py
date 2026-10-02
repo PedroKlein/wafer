@@ -43,12 +43,12 @@ JETSON_BOUNDARY = {
     "measurement": "jetson-ina3221-rail-proxy",
     "is_total_input_power": False,
     "excludes": [
-        "rails the on-board INA3221 monitors do not cover",
         "carrier-board regulators upstream of the monitored rails",
         "USB and PCIe devices powered from the carrier board",
     ],
     "source": "https://docs.nvidia.com/jetson/archives/r36.3/DeveloperGuide/SD/PlatformPowerAndPerformance.html",
 }
+JETSON_INPUT_RAILS = ("VDD_IN", "POM_5V_IN")
 X86_RAPL_BOUNDARY = {
     "measurement": "x86-rapl-package-energy",
     "is_total_input_power": False,
@@ -361,9 +361,15 @@ def sample(
         "cpu_frequency_hz": read_cpu_frequency_hz(backend.sysroot),
         "governor": read_governor(backend.sysroot),
         "throttled": backend.throttled(),
-        "rail_proxy_watts": sum(float(rail["power_w"]) for rail in rails),
+        "rail_proxy_watts": proxy_watts(rails),
     }
     return summary, rails
+
+
+def proxy_watts(rails: list[dict[str, float | str]]) -> float:
+    """Sum the rails, or take the Jetson module input alone, which already feeds the others."""
+    inputs = [rail for rail in rails if rail["rail"] in JETSON_INPUT_RAILS]
+    return sum(float(rail["power_w"]) for rail in inputs or rails)
 
 
 def write_error(output_dir: Path, error: BaseException) -> None:
