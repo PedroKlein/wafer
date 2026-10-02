@@ -71,18 +71,3 @@ RAII ties cleanup to ownership. `SwapGuard` sets the per-node swap-in-progress f
 **Intended design:** These Rust mechanisms reinforce ownership boundaries: data types do not perform I/O, messages move through bounded queues, adapters are owned by their tasks, and guards pair state changes with cleanup.
 
 **Known drift:** None for the behavior described above. The phrase "zero-copy envelope" remains deliberately bounded to shared host storage and borrow-only inspection; Component Model lifting/lowering still materializes strings, metadata, and Transform output bytes. Fan-in remains unordered.
-
-## Evidence
-
-- **Source:** [`Cargo.toml`](../../Cargo.toml) | symbols: `[workspace]`, `members = [`
-- **Source:** [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) | symbols: `pub use loader::load_config`, `pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}`
-- **Source:** [`crates/wafer-config/src/loader.rs`](../../crates/wafer-config/src/loader.rs) | symbols: `pub fn load_config`, `Result<Config, ConfigError>`
-- **Source:** [`crates/wafer-types/src/config/mod.rs`](../../crates/wafer-types/src/config/mod.rs) | symbols: `pub enum NodeDef`, `pub const fn category`
-- **Source:** [`crates/wafer-core/src/node/traits.rs`](../../crates/wafer-core/src/node/traits.rs) | symbols: `pub trait Lifecycle`, `pub trait Transform`, `Box<dyn Future`
-- **Source:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `pub struct RuntimeEnvelope`, `Arc<EnvelopeHeader>`, `pub payload: Bytes`
-- **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub struct SwapGuard`, `impl Drop for SwapGuard`
-- **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `fn collect_downstream_senders`, `overflow: e.overflow`
-- **Source:** [`crates/wafer-core/src/runner/mod.rs`](../../crates/wafer-core/src/runner/mod.rs) | symbols: `async fn send_one`, `sender.sender.reserve().await`
-- **Test:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `fn test_clone_shares_header_via_arc()`, `fn test_clone_shares_payload_bytes()`
-- **Test:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbol: `async fn test_source_loop_messages_flow()`
-- **Test:** [`crates/wafer-config/src/validation.rs`](../../crates/wafer-config/src/validation.rs) | symbol: `fn test_accumulated_errors()`

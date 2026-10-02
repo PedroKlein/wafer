@@ -17,11 +17,11 @@ WAFER is a Rust workspace whose runtime loads a typed pipeline configuration and
 | Repository | `github.com/PedroKlein/wafer` |
 | Source revision | The `main` branch. A published copy names the commit it was staged from |
 | Implementation authority | Rust source, Cargo manifests, WIT files, and tests at that revision |
-| Current implementation | A claim verified directly in those files and named tests |
+| Current implementation | A claim verified directly in those files and tests |
 | Intended design | A design goal or rationale that is not proof of runtime behavior |
 | Known drift | A documented statement that differs from the cited source, or an explicit implementation limit |
 
-The guides are updated with `main`. If a cited symbol or test is missing from the revision you are reading, trust the source and re-check the claim.
+The guides are updated with `main`. If a guide disagrees with the source you are reading, trust the source.
 
 ## Start with your question
 
@@ -37,10 +37,6 @@ The guides are updated with `main`. If a cited symbol or test is missing from th
 - To look up TOML, WIT, or guest SDK details, use the [interface references](../interfaces/README.md) instead of this guide.
 - To check implementation limits, use [implementation status](../status/implementation-status.md) together with the [drift ledger](../status/implementation-gaps.md), then confirm the claim in source.
 
-## How to read the evidence blocks
-
-Learning pages use explicit `Source` and `Test` entries. A source entry names a repository path and one or more literal symbols found there. A test entry names the behavior check rather than presenting prose as proof. Status labels separate verified behavior from design intent and known drift.
-
 ## Status boundaries
 
 **Current implementation:** The root manifest declares seven workspace members. `wafer-runtime` imports `load_config` and `validate` from `wafer-config`, while `wafer-core` owns the source and sink factories used at launch.
@@ -48,12 +44,3 @@ Learning pages use explicit `Source` and `Test` entries. A source entry names a 
 **Intended design:** This guide follows ownership boundaries and vertical flows. It does not attempt to replace implementation or interface references.
 
 **Known drift:** Existing architecture and status pages can contain historical or intended statements. Resolve disagreements in favor of the pinned source and tests.
-
-## Evidence
-
-- **Source:** [`Cargo.toml`](../../Cargo.toml) | symbols: `[workspace]`, `members = [`
-- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbol: `use wafer_config::{load_config, validate}`
-- **Source:** [`crates/wafer-core/src/orchestrator/launcher.rs`](../../crates/wafer-core/src/orchestrator/launcher.rs) | symbols: `fn create_source`, `fn create_sink`
-- **Test:** [`crates/wafer-config/tests/eval_configs_load.rs`](../../crates/wafer-config/tests/eval_configs_load.rs) | symbol: `fn every_eval_config_loads_and_validates()`
-
-This first page stays at orientation level. The next pages provide the detailed workspace and Rust explanations.

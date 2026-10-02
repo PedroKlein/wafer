@@ -131,19 +131,6 @@ The configuration validator gives operators broad, accumulated diagnostics. The 
 
 **Known drift:** `wafer-config::DagGraph` remains a separate public graph implementation, while production orchestration uses the core graph.
 
-## Evidence
-
-- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `load_config(&args.config)`, `validate(&config)`, `launch_pipeline_timed`
-- **Source:** [`crates/wafer-config/src/loader.rs`](../../crates/wafer-config/src/loader.rs) | symbols: `pub fn load_config`, `toml::from_str`
-- **Source:** [`crates/wafer-config/src/validation.rs`](../../crates/wafer-config/src/validation.rs) | symbols: `pub fn validate`, `check_no_cycles`
-- **Source:** [`crates/wafer-core/src/dag/graph.rs`](../../crates/wafer-core/src/dag/graph.rs) | symbols: `pub struct DagGraph`, `pub fn from_config`, `pub fn topo_order`
-- **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `use crate::dag::graph::DagGraph`, `fn wire_queues`, `mpsc::channel(capacity)`, `fn collect_downstream_senders`
-- **Source:** [`crates/wafer-core/Cargo.toml`](../../crates/wafer-core/Cargo.toml) | symbols: `[dev-dependencies]`, `wafer-config = { path = "../wafer-config" }`
-- **Source:** [`crates/wafer-core/src/orchestrator/launcher.rs`](../../crates/wafer-core/src/orchestrator/launcher.rs) | symbols: `pub async fn launch_pipeline_timed`, `build_pipeline_with_io`
-- **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub fn from_build_output`, `fn spawn_bundles`
-- **Test:** [`crates/wafer-config/tests/eval_configs_load.rs`](../../crates/wafer-config/tests/eval_configs_load.rs) | symbol: `fn every_eval_config_loads_and_validates()`
-- **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbol: `async fn test_spawn_creates_tasks()`
-
 ## Checkpoint
 
 Starting at `main`, name the function that owns each transition: TOML to `Config`, semantic checks, production graph creation, queue creation, bundle-to-task movement. Then explain why the two `DagGraph` types must not be treated as one call path.
