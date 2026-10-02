@@ -2,9 +2,12 @@
 
 import contextlib
 import hashlib
+import http.client
+import importlib.util
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -76,6 +79,7 @@ from canonical_runner import (  # noqa: E402
     write_progress,
 )
 
+REAL_CHECK_OUTPUT = subprocess.check_output
 T2_EXPERIMENTS = {
     "e-val-1",
     "e-perf-3",
@@ -1619,6 +1623,22 @@ def test_swap3_analysis_covers_no_partial_full_and_delayed_recovery() -> None:
     assert censored["recovery_right_censored"] is True
 
 
+def test_swap3_analysis_reports_the_same_dip_at_a_placebo_instant_before_the_action() -> None:
+    quiet = analyze_swap3_disruption(*swap3_fixture())
+    assert quiet["placebo_offset_ns"] == -6_000_000_000
+    assert quiet["placebo_dip_percent"] == 0
+
+    rates = [1_000.0] * 200
+    rates[100:103] = [0.0] * 3
+    rates[39:41] = [800.0] * 2
+    rates[19] = rates[60] = 0.0
+    analysis = analyze_swap3_disruption(*swap3_fixture(rates))
+    assert analysis["baseline_rate_msg_s"] == 1_000
+    assert analysis["dip_percent"] == 100
+    assert analysis["placebo_event_min_rate_msg_s"] == 800
+    assert analysis["placebo_dip_percent"] == 20
+
+
 def test_swap3_analysis_reports_loss_and_validator_rejects_drift() -> None:
     throughput, timeline, publisher, subscriber = swap3_fixture(received=119_990)
     analysis = analyze_swap3_disruption(throughput, timeline, publisher, subscriber)
@@ -1652,12 +1672,12 @@ def test_swap3_strategies_share_boundary_and_commands_except_strategy() -> None:
             item for item in build_schedule({"e-swap-3"}, seed=1729)
             if item.condition == strategy and item.run_index == 1
         )
-        for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
+        for strategy in runner.SWAP3_STRATEGIES
     ]
     invocations = [build_swap3_invocation(ROOT, item, Path("/tmp/swap3")) for item in items]
     assert all(invocation["controlled_factors"] == invocations[0]["controlled_factors"] for invocation in invocations)
     assert {invocation["strategy"] for invocation in invocations} == {
-        "wafer-hotswap", "wafer-restart", "ekuiper-restart"
+        "wafer-hotswap", "wafer-restart", "ekuiper-rule-update", "ekuiper-make-before-break"
     }
     assert all("--timing-receipt" in invocation["publisher_command"] for invocation in invocations)
     assert all("--publisher-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
@@ -1713,8 +1733,28 @@ def test_swap3_postprocess_removes_publisher_timing_temporary(
     assert (tmp_path / "disruption-analysis.json").is_file()
 
 
+# Read before any test replaces subprocess.run, which check_output calls.
+SEEDED_RULES = REAL_CHECK_OUTPUT(
+    [str(ROOT / "eval/ekuiper/seed-pipeline-a.sh"), "--dry-run"], text=True
+)
+
+
+def seeded_rules() -> dict:
+    """The stream and rules the seed script declares, as its dry run prints them."""
+    return json.loads(SEEDED_RULES)
+
+
 class FakeEkuiper:
-    """The kuiper unit as `systemctl show` reports it and pipeline_a as its REST API does."""
+    """The kuiper unit as `systemctl show` reports it and pipeline_a as its REST API does.
+
+    The REST API also lists the rules, creates the replacement rule, which starts emitting
+    after ``replacement_quiet_polls`` status reads, updates pipeline_a in place and starts it,
+    after which it publishes after ``update_quiet_polls`` status reads, and deletes rules.
+    ``update_status`` and ``start_status`` are the HTTP statuses the update and the start
+    answer with. ``broken_off`` names the calls whose answer ends early, ``timed_out`` the
+    calls that get no answer, ``refused`` the calls whose connection is refused, and
+    ``rule_list`` replaces the rule list with another body.
+    """
 
     def __init__(self) -> None:
         self.unit = {"NRestarts": 0, "ExecMainStatus": 0, "MainPID": 4242}
@@ -1726,21 +1766,131 @@ class FakeEkuiper:
         }
         self.pending_statuses: list[str] = []
         self.events: list[str] = []
+        self.leftover_rules: list[str] = []
+        self.replacement: dict | None = None
+        self.replacement_quiet_polls = 1
+        self.updated_rule: dict | None = None
+        self.update_quiet_polls = 1
+        self.update_status = 200
+        self.started_updated_rule = False
+        self.start_status = 200
+        self.broken_off: set[tuple[str, str]] = set()
+        self.timed_out: set[tuple[str, str]] = set()
+        self.refused: set[tuple[str, str]] = set()
+        self.rule_list: object | None = None
 
     def check_output(self, command: list[str], **kwargs: object) -> str:
+        if str(command[0]).endswith("seed-pipeline-a.sh"):
+            return REAL_CHECK_OUTPUT(command, **kwargs)
         assert list(command[:3]) == ["systemctl", "show", "kuiper.service"], command
         return "".join(f"{name}={value}\n" for name, value in self.unit.items())
 
-    def urlopen(self, url: str, timeout: float | None = None) -> io.BytesIO:
-        assert url == "http://127.0.0.1:9081/rules/pipeline_a/status", url
+    def urlopen(self, request: object, timeout: float | None = None) -> io.BytesIO:
+        if isinstance(request, runner.urllib.request.Request):
+            method, url = request.get_method(), request.full_url
+        else:
+            method, url = "GET", request
+        path = url.removeprefix("http://127.0.0.1:9081")
+        if (method, path) in self.broken_off:
+            self.events.append(f"{method} {path} broken off")
+            raise http.client.IncompleteRead(b"Rule pipeline_a", 24)
+        if (method, path) in self.timed_out:
+            self.events.append(f"{method} {path} timed out")
+            raise TimeoutError("timed out")
+        if (method, path) in self.refused:
+            self.events.append(f"{method} {path} refused")
+            raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        if (method, path) == ("GET", "/rules"):
+            self.events.append("rule-list")
+            if self.rule_list is not None:
+                return io.BytesIO(json.dumps(self.rule_list).encode())
+            rules = ["pipeline_a"] if self.rule is not None else []
+            rules += self.leftover_rules + (["pipeline_a_v2"] if self.replacement else [])
+            return io.BytesIO(json.dumps([{"id": rule, "status": "running"} for rule in rules]).encode())
+        if (method, path) == ("POST", "/rules"):
+            payload = json.loads(request.data)
+            assert payload["id"] == "pipeline_a_v2" and self.replacement is None
+            self.events.append("create-replacement")
+            self.replacement = {
+                "status": "running",
+                "message": "",
+                "lastStartTimestamp": runner.time.time_ns() // 1_000_000,
+                "lastStopTimestamp": 0,
+                "sink_mqtt_0_0_records_out_total": 0,
+                "sql": payload["sql"],
+            }
+            return self._response(201, "Rule pipeline_a_v2 was created successfully.")
+        if (method, path) == ("GET", "/rules/pipeline_a_v2/status"):
+            self.events.append("replacement-status")
+            if self.replacement_quiet_polls > 0:
+                self.replacement_quiet_polls -= 1
+            else:
+                self.replacement["sink_mqtt_0_0_records_out_total"] += 1
+            return self._response(200, json.dumps(self.replacement))
+        if (method, path) == ("DELETE", "/rules/pipeline_a"):
+            self.events.append("delete-pipeline_a")
+            self.rule = None
+            return self._response(200, "Rule pipeline_a is dropped.")
+        if (method, path) == ("PUT", "/rules/pipeline_a"):
+            self.events.append("update-pipeline_a")
+            if self.update_status != 200:
+                raise runner.urllib.error.HTTPError(
+                    url,
+                    self.update_status,
+                    "Bad Request",
+                    None,
+                    io.BytesIO(b'{"error":1000,"message":"Update rule error"}'),
+                )
+            self.updated_rule = json.loads(request.data)
+            # An update with triggered false stops the rule and keeps the stopped run's counters.
+            assert self.updated_rule["triggered"] is False
+            self.rule = {
+                **self.rule,
+                "status": "stopped",
+                "lastStopTimestamp": runner.time.time_ns() // 1_000_000,
+            }
+            return self._response(200, "Rule pipeline_a was updated successfully.")
+        if (method, path) == ("POST", "/rules/pipeline_a/start"):
+            self.events.append("start-pipeline_a")
+            if self.start_status != 200:
+                raise runner.urllib.error.HTTPError(
+                    url,
+                    self.start_status,
+                    "Bad Request",
+                    None,
+                    io.BytesIO(b'{"error":1000,"message":"start rule error"}'),
+                )
+            assert self.updated_rule is not None and request.data is None
+            # The start runs the saved rule on a new topology with new counters.
+            self.started_updated_rule = True
+            self.rule = {
+                **self.rule,
+                "status": "running",
+                "lastStartTimestamp": runner.time.time_ns() // 1_000_000,
+                "sink_mqtt_0_0_records_out_total": 0,
+            }
+            return self._response(200, "Rule pipeline_a was started")
+        assert (method, path) == ("GET", "/rules/pipeline_a/status"), (method, url)
         self.events.append("rule-status")
         if self.rule is None:
             raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        if self.started_updated_rule:
+            if self.update_quiet_polls > 0:
+                self.update_quiet_polls -= 1
+            else:
+                self.rule["sink_mqtt_0_0_records_out_total"] += 1
+            return self._response(200, json.dumps(self.rule))
         if self.pending_statuses:
             return io.BytesIO(
                 json.dumps({**self.rule, "status": self.pending_statuses.pop(0)}).encode()
             )
         return io.BytesIO(json.dumps(self.rule).encode())
+
+    @staticmethod
+    def _response(status: int, body: str) -> io.BytesIO:
+        response = io.BytesIO(body.encode())
+        response.status = status
+        return response
 
     def crash(self) -> None:
         """The main process dies; systemd starts a new one, which starts the rule again."""
@@ -1775,9 +1925,12 @@ def fake_ekuiper_audit(
     root: Path, destination: Path, cpus: str, gctrace: bool = False
 ) -> Path:
     path = destination / "ekuiper-audit.json"
-    path.write_text(
-        '{"service":{"properties":{"MainPID":"4242"}},"process_snapshot":{"processes":[]}}\n'
-    )
+    audit = {
+        "service": {"properties": {"MainPID": "4242"}},
+        "process_snapshot": {"processes": []},
+        "rule": seeded_rules()["rule_payload"],
+    }
+    path.write_text(json.dumps(audit) + "\n")
     return path
 
 
@@ -1789,7 +1942,7 @@ def test_swap3_stops_subscriber_after_the_drain_grace(
     config.write_text("[comparator]\n")
     item = RunItem(
         experiment="e-swap-3",
-        condition="ekuiper-restart",
+        condition="ekuiper-rule-update",
         run_index=1,
         config=config.name,
         warmup_secs=30,
@@ -1842,17 +1995,13 @@ def test_swap3_stops_subscriber_after_the_drain_grace(
         drain_anchors.append(publisher_finished_ns)
         return subscriber.returncode
 
-    def fake_audit(root: Path, destination: Path, cpus: str) -> Path:
-        path = destination / "ekuiper-audit.json"
-        path.write_text("{}\n")
-        return path
-
     ekuiper_states: list[bool] = []
     commands: list[tuple[str, dict]] = []
     monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
     monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
     monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: ekuiper_states.append(active))
-    monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
+    monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_ekuiper_audit)
+    monkeypatch.setattr(runner, "update_ekuiper_rule", lambda *args: None)
     monkeypatch.setattr(
         runner,
         "loadgen_command",
@@ -3546,6 +3695,22 @@ def test_repetitions_drops_alias_views_of_measured_runs() -> None:
     assert "PLAN e-perf-2 " not in result.stdout
 
 
+def test_swap3_smoke_task_runs_every_arm_once_as_a_diagnostic_batch() -> None:
+    task = tomllib.loads((ROOT / "mise.toml").read_text())["tasks"]["smoke-swap3"]
+    command = shlex.split(task["run"])
+    assert command[:2] == ["./eval/scripts/run-rpi5-canonical.sh", "--execute"]
+    assert command[-1] == "$@"
+
+    result = run_runner("--batch-id", "test", "--dry-run", *command[2:-1])
+
+    assert result.returncode == 0, result.stderr
+    assert "DIAGNOSTIC repetitions=1: not thesis evidence" in result.stdout
+    plans = [line.split()[1:4] for line in result.stdout.splitlines() if line.startswith("PLAN ")]
+    assert sorted(plans) == sorted(
+        ["e-swap-3", f"condition={strategy}", "runs=1"] for strategy in runner.SWAP3_STRATEGIES
+    )
+
+
 def test_status_reports_done_and_pending_runs_and_resume_keeps_the_schedule(
     tmp_path: Path,
 ) -> None:
@@ -4655,6 +4820,13 @@ def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
     stream_sql = rendered["stream_payload"]["sql"]
     rule = rendered["rule_payload"]
     action = rule["actions"][0]["mqtt"]
+    replacement = rendered["replacement_rule_payload"]
+    assert replacement == {
+        **rule,
+        "id": "pipeline_a_v2",
+        "sql": rule["sql"].replace("temperature >= 50", "temperature >= 60"),
+    }
+    assert replacement["sql"] != rule["sql"]
     assert "device_id STRING" in stream_sql
     assert "humidity FLOAT" in stream_sql
     assert "DATASOURCE=\"wafer/telemetry\"" in stream_sql
@@ -4728,10 +4900,121 @@ def test_ekuiper_concurrency_diagnostic_changes_only_rule_concurrency() -> None:
         rendered.append(json.loads(result.stdout))
 
     concurrency_one, concurrency_three = rendered
-    assert concurrency_one["rule_payload"]["options"] == {"concurrency": 1}
-    assert concurrency_three["rule_payload"]["options"] == {"concurrency": 3}
-    concurrency_one["rule_payload"]["options"] = {"concurrency": 3}
+    for payload in ("rule_payload", "replacement_rule_payload"):
+        assert concurrency_one[payload]["options"] == {"concurrency": 1}
+        assert concurrency_three[payload]["options"] == {"concurrency": 3}
+        concurrency_one[payload]["options"] = {"concurrency": 3}
     assert concurrency_one == concurrency_three
+
+
+def test_ekuiper_seed_drops_the_replacement_rule_before_recreating_pipeline_a(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    curl = bin_dir / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "method=GET\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "    case \"$1\" in\n"
+        "        -X) method=\"$2\"; shift 2 ;;\n"
+        "        http*) url=\"$1\"; shift ;;\n"
+        "        *) shift ;;\n"
+        "    esac\n"
+        "done\n"
+        "printf '%s %s\\n' \"$method\" \"$url\" >> \"$CURL_LOG\"\n"
+    )
+    curl.chmod(0o755)
+    log = tmp_path / "curl.log"
+
+    subprocess.run(
+        [str(ROOT / "eval/ekuiper/seed-pipeline-a.sh")],
+        check=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "CURL_LOG": str(log),
+            "EKUIPER_URL": "http://ekuiper.test",
+        },
+    )
+
+    assert log.read_text().splitlines() == [
+        "GET http://ekuiper.test/",
+        "DELETE http://ekuiper.test/rules/pipeline_a",
+        "DELETE http://ekuiper.test/rules/pipeline_a_v2",
+        "DELETE http://ekuiper.test/streams/wafer_telemetry",
+        "POST http://ekuiper.test/streams",
+        "POST http://ekuiper.test/rules",
+    ]
+
+
+STATEFUL_EKUIPER_CURL = """#!/usr/bin/env python3
+import json, os, pathlib, sys
+
+arguments, method, data, url = sys.argv[1:], "GET", None, ""
+while arguments:
+    argument = arguments.pop(0)
+    if argument == "-X":
+        method = arguments.pop(0)
+    elif argument == "-d":
+        data = arguments.pop(0)
+    elif argument.startswith("http"):
+        url = argument
+rules = pathlib.Path(os.environ["EKUIPER_RULES"])
+path = url.split("://", 1)[1].split("/", 1)[1] if url.count("/") > 2 else ""
+if method == "DELETE" and path.startswith("rules/"):
+    if os.environ.get("EKUIPER_DELETE_FAILS") or not (rules / path[6:]).exists():
+        sys.exit(22)
+    (rules / path[6:]).unlink()
+elif (method, path) == ("POST", "rules"):
+    rule = json.loads(data)
+    if (rules / rule["id"]).exists():
+        print('{"error":1000,"message":"rule already exists"}', file=sys.stderr)
+        sys.exit(22)
+    (rules / rule["id"]).write_text(data)
+print("{}")
+"""
+
+
+@pytest.mark.parametrize("delete_fails", [False, True])
+def test_ekuiper_seed_restores_pipeline_a_after_a_rule_update_or_fails(
+    tmp_path: Path, delete_fails: bool
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    curl = bin_dir / "curl"
+    curl.write_text(STATEFUL_EKUIPER_CURL)
+    curl.chmod(0o755)
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    seeded = seeded_rules()["rule_payload"]
+    audit = tmp_path / "ekuiper-audit.json"
+    audit.write_text(json.dumps({"rule": seeded}))
+    updated = runner.ekuiper_updated_rule(audit)
+    (rules / "pipeline_a").write_text(json.dumps(updated))
+    environment = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "EKUIPER_RULES": str(rules),
+    }
+    if delete_fails:
+        environment["EKUIPER_DELETE_FAILS"] = "1"
+
+    seed = subprocess.run(
+        [str(ROOT / "eval/ekuiper/seed-pipeline-a.sh")],
+        capture_output=True,
+        env=environment,
+    )
+
+    left = json.loads((rules / "pipeline_a").read_text())
+    if delete_fails:
+        assert seed.returncode != 0
+        assert left == updated
+    else:
+        assert seed.returncode == 0, seed.stderr
+        assert left == seeded
 
 
 def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:
@@ -5239,10 +5522,26 @@ def test_disruption_runtime_that_dies_at_startup_is_judged_by_its_exit(
     )
 
 
-def test_disruption_hot_swap_request_that_fails_is_a_failed_swap(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("response", "reasons"),
+    [
+        ({"http_status": 500, "body": "rejected"}, ["swap-failed"]),
+        (
+            {"http_status": 200, "body": {"node_id": "filter", "status": "rolled_back"}},
+            ["swap-failed"],
+        ),
+        ({"http_status": 202, "body": {"replacement_adopted": False}}, ["swap-failed"]),
+        ({"http_status": 200, "body": {"node_id": "filter"}}, ["swap-failed"]),
+        ({"http_status": 200, "body": {"replacement_adopted": True}}, None),
+    ],
+)
+def test_disruption_hot_swap_counts_only_an_adopted_replacement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, response: dict, reasons: list[str] | None
 ) -> None:
     stub_runner_host(monkeypatch, runtime_exit=0)
+    plugin = tmp_path / "wafer_threshold_filter_v2.wasm"
+    plugin.write_bytes(b"\0asm")
+    monkeypatch.setattr(runner, "SWAP3_REPLACEMENT_PLUGIN", str(plugin))
     clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
     monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
     item = next(
@@ -5277,18 +5576,53 @@ def test_disruption_hot_swap_request_that_fails_is_a_failed_swap(
             )
         return Process()
 
+    swaps: list[tuple[str, str]] = []
+
+    def swap(node: str, plugin: Path) -> dict:
+        swaps.append((node, plugin.name))
+        return response
+
     monkeypatch.setattr(runner.subprocess, "Popen", launch)
     monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
-    monkeypatch.setattr(
-        runner, "post_hot_swap", lambda node, plugin: {"http_status": 500, "body": "rejected"}
-    )
+    monkeypatch.setattr(runner, "post_hot_swap", swap)
     monkeypatch.setattr(runner, "wait_for_subscriber", lambda process, timeout=30: 0)
 
     assert runner.run_restart_item(ROOT, item, runner.AttemptSelection(output, False))
 
+    assert swaps == [("filter", "wafer_threshold_filter_v2.wasm")]
     receipt = json.loads((output / "canonical-status.json").read_text())
-    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["swap-failed"])
-    assert json.loads((output / "swap_requests.json").read_text())[0]["http_status"] == 500
+    assert receipt.get("reasons") == reasons
+    assert json.loads((output / "swap_requests.json").read_text()) == [
+        {"event_index": 0, "plugin": "wafer_threshold_filter_v2.wasm", **response}
+    ]
+
+
+def test_disruption_hot_swap_without_its_replacement_plugin_is_a_harness_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=0)
+    monkeypatch.setattr(
+        runner, "SWAP3_REPLACEMENT_PLUGIN", str(tmp_path / "wafer_threshold_filter_v2.wasm")
+    )
+    launched: list[list[str]] = []
+    monkeypatch.setattr(
+        runner.subprocess,
+        "Popen",
+        lambda command, **kwargs: launched.append(command) or StoppedRuntime(0),
+    )
+    monkeypatch.setattr(
+        runner, "post_hot_swap", lambda node, plugin: pytest.fail("swap posted without its plugin")
+    )
+    item = next(
+        item for item in build_schedule({"e-swap-3"}, seed=1729) if item.condition == "wafer-hotswap"
+    )
+    output = tmp_path / "wafer-hotswap/run-01-attempt-01"
+
+    assert not runner.run_restart_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    assert launched == []
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
 
 
 def stub_ekuiper_run(monkeypatch: pytest.MonkeyPatch, ekuiper: FakeEkuiper) -> list[list[str]]:
@@ -5330,9 +5664,15 @@ def test_ekuiper_run_waits_for_the_rule_before_warm_up_and_records_its_health(
         ROOT, ekuiper_item("e-perf-1", "ekuiper"), runner.AttemptSelection(output, False)
     )
 
-    # Three polls until the rule runs, the snapshot before warm-up, two publish phases, and
-    # the snapshot after the run.
-    assert ekuiper.events == ["rule-status"] * 4 + ["publish", "publish", "rule-status"]
+    # Three polls until the rule runs, the rule list, the snapshot before warm-up, two publish
+    # phases, and the snapshot after the run.
+    assert ekuiper.events == ["rule-status"] * 3 + [
+        "rule-list",
+        "rule-status",
+        "publish",
+        "publish",
+        "rule-status",
+    ]
     health = json.loads((output / "ekuiper-health.json").read_text())
     assert (health["unit"], health["rule"]) == ("kuiper.service", "pipeline_a")
     for snapshot in (health["before"], health["after"]):
@@ -5516,7 +5856,7 @@ def test_capacity_run_drains_before_sigint(
         ("e-perf-1", "ekuiper"),
         ("e-perf-10", "wafer/rate-04000"),
         ("e-swap-3", "wafer-hotswap"),
-        ("e-swap-3", "ekuiper-restart"),
+        ("e-swap-3", "ekuiper-rule-update"),
     ],
 )
 def test_every_mqtt_subscriber_declares_its_range_and_drain_grace(
@@ -5554,24 +5894,12 @@ def test_ekuiper_failure_in_the_capacity_scout_fails_the_attempt(
     assert "eKuiper failed during the run: runtime-exit" in receipt["detail"]
 
 
-@pytest.mark.parametrize(("crash", "reasons"), [(False, None), (True, ["runtime-exit"])])
-def test_swap3_rule_restart_is_the_arm_action_not_an_ekuiper_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    ekuiper: FakeEkuiper,
-    crash: bool,
-    reasons: list[str] | None,
+def stub_swap3_publisher(
+    monkeypatch: pytest.MonkeyPatch, output: Path, crash: Callable[[], None] | None = None
 ) -> None:
-    commands = stub_ekuiper_run(monkeypatch, ekuiper)
+    """Run E-Swap-3 on a fake clock whose publisher puts measured t=60 at once."""
     clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
     monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
-    output = tmp_path / "ekuiper-restart/run-01-attempt-01"
-    stub_run = runner.subprocess.run
-
-    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-        if command[0] == "curl" and command[-1].endswith("/start"):
-            ekuiper.restart_rule()
-        return stub_run(command, **kwargs)
 
     def launch(command: list[str], **kwargs: object) -> StoppedRuntime:
         if command == ["publish"]:
@@ -5585,22 +5913,44 @@ def test_swap3_rule_restart_is_the_arm_action_not_an_ekuiper_failure(
                     }
                 )
             )
-            if crash:
-                ekuiper.crash()
+            if crash is not None:
+                crash()
         return StoppedRuntime(0)
 
-    monkeypatch.setattr(runner.subprocess, "run", run)
     monkeypatch.setattr(runner.subprocess, "Popen", launch)
 
+
+def load_contract() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "verify_result_contract", ROOT / "eval/scripts/verify-result-contract.py"
+    )
+    assert spec is not None and spec.loader is not None
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    return contract
+
+
+@pytest.mark.parametrize(("crash", "reasons"), [(False, None), (True, ["runtime-exit"])])
+def test_swap3_rule_update_is_the_arm_action_not_an_ekuiper_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    crash: bool,
+    reasons: list[str] | None,
+) -> None:
+    commands = stub_ekuiper_run(monkeypatch, ekuiper)
+    output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output, ekuiper.crash if crash else None)
+
     assert runner.run_restart_item(
-        ROOT, ekuiper_item("e-swap-3", "ekuiper-restart"), runner.AttemptSelection(output, False)
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-rule-update"),
+        runner.AttemptSelection(output, False),
     )
 
-    assert [command[-1].rsplit("/", 1)[-1] for command in commands if command[0] == "curl"] == [
-        "stop",
-        "start",
-    ]
+    assert not [command for command in commands if command[0] == "curl"]
     health = json.loads((output / "ekuiper-health.json").read_text())
+    assert (health["rule"], health.get("replacement_rule")) == ("pipeline_a", None)
     assert (
         health["after"]["rule_status"]["lastStartTimestamp"]
         > health["before"]["rule_status"]["lastStartTimestamp"]
@@ -5611,9 +5961,291 @@ def test_swap3_rule_restart_is_the_arm_action_not_an_ekuiper_failure(
     assert exit_code == (None if crash else 0)
 
 
-def test_ekuiper_audit_hashes_the_engine_configuration(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_swap3_rule_update_puts_the_audited_rule_untriggered_starts_it_and_waits_for_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
 ) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    ekuiper.update_quiet_polls = 2
+    output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output)
+
+    assert runner.run_restart_item(
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-rule-update"),
+        runner.AttemptSelection(output, False),
+    )
+
+    # Two status reads before the started rule's new sink counts output, the one that sees it,
+    # and the health snapshot after the run.
+    action = ekuiper.events[ekuiper.events.index("update-pipeline_a") :]
+    assert action == ["update-pipeline_a", "start-pipeline_a"] + ["rule-status"] * 4
+    seeded = seeded_rules()["rule_payload"]
+    updated_sql = seeded["sql"].replace("temperature >= 50", "temperature >= 60")
+    assert ekuiper.updated_rule == {**seeded, "sql": updated_sql, "triggered": False}
+    record = json.loads((output / "rule-update.json").read_text())
+    assert record["updated_sql"] == updated_sql
+    assert [
+        (call["method"], call["path"], call["http_status"], call["request_sql"])
+        for call in record["calls"]
+    ] == [
+        ("PUT", "/rules/pipeline_a", 200, updated_sql),
+        ("POST", "/rules/pipeline_a/start", 200, None),
+    ] + [("GET", "/rules/pipeline_a/status", 200, None)] * 3
+    assert [call["request_body"] for call in record["calls"]] == [ekuiper.updated_rule] + [
+        None
+    ] * 4
+    assert [
+        json.loads(call["body"])["sink_mqtt_0_0_records_out_total"] for call in record["calls"][2:]
+    ] == [0, 0, 1]
+    timeline = json.loads((output / "disruption-timeline.json").read_text())
+    stamps = [
+        call[key] for call in record["calls"] for key in ("start_timestamp_ns", "end_timestamp_ns")
+    ]
+    assert stamps == sorted(stamps)
+    # eKuiper's answer to the start ends the action; the status reads come after it.
+    put, start = record["calls"][:2]
+    assert timeline["action_start_timestamp_ns"] <= put["start_timestamp_ns"]
+    assert (timeline["action_end_timestamp_ns"], timeline["action_duration_ns"]) == (
+        start["end_timestamp_ns"],
+        start["end_offset_ns"],
+    )
+    assert timeline["action_end_timestamp_ns"] < stamps[-1]
+    contract = load_contract()
+    metadata = json.loads((output / "metadata.json").read_text())
+    assert contract.check_ekuiper_health(output, metadata, "e-swap-3") == []
+    assert contract.check_swap3_rule_update(output) == []
+    assert json.loads((output / "canonical-status.json").read_text())["status"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("refused", "detail", "calls"),
+    [
+        ("update_status", "eKuiper refused the pipeline_a update: 400", [("PUT", 400)]),
+        (
+            "start_status",
+            "eKuiper did not start the updated pipeline_a: 400",
+            [("PUT", 200), ("POST", 400)],
+        ),
+    ],
+)
+def test_swap3_rule_update_that_ekuiper_refuses_is_a_harness_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    refused: str,
+    detail: str,
+    calls: list[tuple[str, int]],
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    setattr(ekuiper, refused, 400)
+    output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output)
+
+    assert not runner.run_restart_item(
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-rule-update"),
+        runner.AttemptSelection(output, False),
+    )
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
+    assert detail in receipt["detail"]
+    record = json.loads((output / "rule-update.json").read_text())
+    assert [(call["method"], call["http_status"]) for call in record["calls"]] == calls
+
+
+def test_swap3_rule_update_that_never_publishes_times_out(
+    tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    ekuiper.update_quiet_polls = 1_000_000
+    seeded = seeded_rules()["rule_payload"]
+    rule = {**seeded, "sql": seeded["sql"].replace("temperature >= 50", "temperature >= 60")}
+
+    with pytest.raises(RuntimeError, match="did not publish after its update within 0.05 s"):
+        runner.update_ekuiper_rule(tmp_path, rule, runner.time.monotonic_ns(), timeout_secs=0.05)
+
+    record = json.loads((tmp_path / "rule-update.json").read_text())
+    put, start, *reads = record["calls"]
+    assert (put["method"], start["method"]) == ("PUT", "POST")
+    assert reads and {call["method"] for call in reads} == {"GET"}
+    # As in the make-before-break arm, the deadline is checked after each read that sees no
+    # output, so the runner gives up at the first read that ends after it.
+    assert reads[-1]["end_offset_ns"] - start["end_offset_ns"] >= 50_000_000
+    assert all(call["end_offset_ns"] - start["end_offset_ns"] < 50_000_000 for call in reads[:-1])
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "emitted"),
+    [
+        (200, {"status": "running", "message": "", "sink_mqtt_0_0_records_out_total": 1}, True),
+        (200, {"status": "running", "message": "retrying", "sink_mqtt_0_0_records_out_total": 1}, True),
+        (200, {"status": "running", "message": "", "sink_mqtt_0_0_records_out_total": 0}, False),
+        (200, {"status": "running", "message": ""}, False),
+        (404, {"sink_mqtt_0_0_records_out_total": 1}, False),
+        (200, "Rule pipeline_a is not found", False),
+        (200, ["sink_mqtt_0_0_records_out_total"], False),
+    ],
+)
+def test_both_ekuiper_swap3_arms_wait_for_the_same_emission_signal(
+    status: int, body: object, emitted: bool
+) -> None:
+    text = body if isinstance(body, str) else json.dumps(body)
+    assert runner.ekuiper_rule_emitted(status, text) is emitted
+
+
+@pytest.mark.parametrize(
+    ("failure", "call", "detail", "recorded"),
+    [
+        (
+            "broken_off",
+            ("PUT", "/rules/pipeline_a"),
+            "eKuiper broke off its answer to PUT /rules/pipeline_a",
+            [],
+        ),
+        (
+            "broken_off",
+            ("POST", "/rules/pipeline_a/start"),
+            "eKuiper broke off its answer to POST /rules/pipeline_a/start",
+            ["PUT"],
+        ),
+        ("timed_out", ("PUT", "/rules/pipeline_a"), "timed out", []),
+        ("timed_out", ("POST", "/rules/pipeline_a/start"), "timed out", ["PUT"]),
+        ("refused", ("PUT", "/rules/pipeline_a"), "Connection refused", []),
+        ("refused", ("POST", "/rules/pipeline_a/start"), "Connection refused", ["PUT"]),
+    ],
+)
+def test_swap3_rule_update_whose_answer_breaks_off_or_never_comes_is_a_harness_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    failure: str,
+    call: tuple[str, str],
+    detail: str,
+    recorded: list[str],
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    getattr(ekuiper, failure).add(call)
+    output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output)
+
+    assert not runner.run_restart_item(
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-rule-update"),
+        runner.AttemptSelection(output, False),
+    )
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
+    assert detail in receipt["detail"]
+    record = json.loads((output / "rule-update.json").read_text())
+    assert [call["method"] for call in record["calls"]] == recorded
+
+
+def test_swap3_rule_update_needs_the_audited_v1_rule(tmp_path: Path) -> None:
+    seeded = seeded_rules()["rule_payload"]
+    audit = tmp_path / "ekuiper-audit.json"
+    audit.write_text(json.dumps({"rule": seeded}))
+    assert runner.ekuiper_updated_rule(audit) == {
+        **seeded,
+        "sql": seeded["sql"].replace("temperature >= 50", "temperature >= 60"),
+    }
+
+    audit.write_text(json.dumps({"rule": runner.ekuiper_updated_rule(audit)}))
+    with pytest.raises(ValueError, match="does not filter on temperature >= 50"):
+        runner.ekuiper_updated_rule(audit)
+
+
+def test_swap3_make_before_break_deletes_pipeline_a_only_after_the_replacement_emits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    replacement = runner.ekuiper_replacement_rule(ROOT)
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    monkeypatch.setattr(runner, "ekuiper_replacement_rule", lambda root: replacement)
+    ekuiper.replacement_quiet_polls = 2
+    output = tmp_path / "ekuiper-make-before-break/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output)
+
+    assert runner.run_restart_item(
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-make-before-break"),
+        runner.AttemptSelection(output, False),
+    )
+
+    # Two status reads before the replacement's sink counts output, the one that sees it, the
+    # delete, and the health snapshot after the run, which reads the replacement.
+    action = ekuiper.events[ekuiper.events.index("create-replacement") :]
+    assert action == ["create-replacement"] + ["replacement-status"] * 3 + [
+        "delete-pipeline_a",
+        "replacement-status",
+    ]
+    assert "60 AND" in ekuiper.replacement["sql"]
+    record = json.loads((output / "rule-replacement.json").read_text())
+    assert [(call["method"], call["path"], call["http_status"]) for call in record["calls"]] == [
+        ("POST", "/rules", 201),
+        ("GET", "/rules/pipeline_a_v2/status", 200),
+        ("DELETE", "/rules/pipeline_a", 200),
+    ]
+    assert record["status_polls"] == 3
+    assert json.loads(record["calls"][1]["body"])["sink_mqtt_0_0_records_out_total"] == 1
+    offsets = [call[key] for call in record["calls"] for key in ("start_offset_ns", "end_offset_ns")]
+    assert offsets == sorted(offsets)
+    health = json.loads((output / "ekuiper-health.json").read_text())
+    assert (health["rule"], health["replacement_rule"]) == ("pipeline_a", "pipeline_a_v2")
+    contract = load_contract()
+    metadata = json.loads((output / "metadata.json").read_text())
+    assert contract.check_ekuiper_health(output, metadata, "e-swap-3") == []
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert receipt["status"] == "passed"
+
+
+def test_swap3_make_before_break_keeps_pipeline_a_when_the_replacement_never_emits(
+    tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    ekuiper.replacement_quiet_polls = 1_000_000
+    replacement = runner.ekuiper_replacement_rule(ROOT)
+
+    with pytest.raises(RuntimeError, match="pipeline_a_v2 did not emit"):
+        runner.replace_ekuiper_rule(
+            tmp_path, replacement, runner.time.monotonic_ns(), timeout_secs=0.05
+        )
+
+    assert ekuiper.rule is not None
+    assert "delete-pipeline_a" not in ekuiper.events
+    record = json.loads((tmp_path / "rule-replacement.json").read_text())
+    assert [call["method"] for call in record["calls"]] == ["POST", "GET"]
+
+
+def test_ekuiper_run_refuses_a_rule_left_by_an_earlier_run(ekuiper: FakeEkuiper) -> None:
+    ekuiper.leftover_rules = ["pipeline_a_v2"]
+
+    with pytest.raises(RuntimeError, match="must hold only pipeline_a"):
+        runner.ekuiper_run_start()
+
+
+@pytest.mark.parametrize(
+    ("rule_list", "broken_off", "message"),
+    [
+        (["pipeline_a"], False, "eKuiper listed its rules as"),
+        ({"pipeline_a": "running"}, False, "eKuiper listed its rules as"),
+        (None, True, "eKuiper broke off its rule list"),
+    ],
+)
+def test_ekuiper_run_refuses_a_rule_list_it_cannot_read(
+    ekuiper: FakeEkuiper, rule_list: object, broken_off: bool, message: str
+) -> None:
+    ekuiper.rule_list = rule_list
+    if broken_off:
+        ekuiper.broken_off.add(("GET", "/rules"))
+
+    with pytest.raises(RuntimeError, match=message):
+        runner.ekuiper_run_start()
+
+
+def stub_ekuiper_host(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rule: dict) -> str:
+    """An eKuiper host whose audit inputs are canonical and whose pipeline_a is ``rule``.
+
+    Returns the CPU list the test process may run on, which the audit checks.
+    """
     config = tmp_path / "etc/kuiper"
     config.mkdir(parents=True)
     shutil.copy(ROOT / "eval/ekuiper/mqtt-source-default.yaml", config / "mqtt_source.yaml")
@@ -5642,19 +6274,42 @@ def test_ekuiper_audit_hashes_the_engine_configuration(
         return real_check_output(command, **kwargs)
 
     def urlopen(url: str, timeout: float | None = None) -> io.BytesIO:
-        body = {"options": {"concurrency": 1}} if url.endswith("/rules/pipeline_a") else {}
+        body = rule if url.endswith("/rules/pipeline_a") else {}
         return io.BytesIO(json.dumps(body).encode())
 
     monkeypatch.setattr(runner.subprocess, "check_output", check_output)
     monkeypatch.setattr(runner.urllib.request, "urlopen", urlopen)
+    return affinity
+
+
+def test_ekuiper_audit_hashes_the_engine_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    affinity = stub_ekuiper_host(monkeypatch, tmp_path, seeded_rules()["rule_payload"])
 
     audit = json.loads(runner.capture_ekuiper_audit(ROOT, tmp_path, affinity).read_text())
 
+    config = tmp_path / "etc/kuiper"
     assert audit["kuiper_config"] == {
         "path": str(config / "kuiper.yaml"),
         "sha256": hashlib.sha256(b"basic:\n  restPort: 9081\n").hexdigest(),
     }
     assert audit["mqtt_source_config"]["path"] == str(config / "mqtt_source.yaml")
+    assert audit["rule"] == audit["seed_dry_run"]["rule_payload"]
+
+
+def test_ekuiper_audit_refuses_a_pipeline_a_left_at_the_updated_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    audit = tmp_path / "before-update.json"
+    audit.write_text(json.dumps({"rule": seeded_rules()["rule_payload"]}))
+    updated = runner.ekuiper_updated_rule(audit)
+    affinity = stub_ekuiper_host(monkeypatch, tmp_path, updated)
+
+    with pytest.raises(ValueError, match="pipeline_a is not the seeded rule: .*temperature >= 60"):
+        runner.capture_ekuiper_audit(ROOT, tmp_path, affinity)
+
+    assert not (tmp_path / "ekuiper-audit.json").exists()
 
 
 def test_summaries_continue_past_one_a_system_outcome_left_incomplete(
@@ -5989,7 +6644,7 @@ def test_execute_records_the_batch_source_and_matrix(final_batch: tuple[Path, Pa
     }
     assert (ledger / "scout-complete.json").read_bytes() == (volume / scout).read_bytes()
     schedule = json.loads((ledger / "schedule.json").read_text())
-    assert len(schedule) == 2_321 + 6 * 4 * 30
+    assert len(schedule) == 2_351 + 6 * 4 * 30
 
 
 def test_resume_refuses_another_source_or_matrix(
@@ -6367,7 +7022,7 @@ def test_bracket_rates_join_the_common_grid_for_every_e_perf_10_system() -> None
 
     assert common == build_schedule({"e-perf-10"}, seed=1729, bracket_rates=())
     assert len(schedule) == 30 * len(runner.RATE_SWEEP_SYSTEMS) * len(rates)
-    assert len(build_schedule(runner.parse_experiments("all"), 1729, bracket)) == 2_321 + 2 * 120
+    assert len(build_schedule(runner.parse_experiments("all"), 1729, bracket)) == 2_351 + 2 * 120
     for system in runner.RATE_SWEEP_SYSTEMS:
         for rate in bracket:
             cells = [item for item in schedule if (item.system, item.offered_rate_msg_s) == (system, rate)]

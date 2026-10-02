@@ -12,10 +12,12 @@
 > and is not support evidence. `mnist-inference` targets the capability-gated
 > `inference-node` world and executes through the real wasi-nn host path.
 >
-> The inventory below predates four Rust plugins that drive the hot-swap and
+> The inventory below predates five Rust plugins that drive the hot-swap and
 > methodology experiments: `pass-through-v1` and `pass-through-v2` (swap
-> source and target for E-Swap-1..6; each stamps its version into the
-> message), `pass-through-v2-panics` (traps on its first `process()` call, for
+> source and target for the E-Swap experiments other than E-Swap-3; each
+> stamps its version into the message), `threshold-filter-v2` (the E-Swap-3
+> swap target, `threshold-filter` with its lower bound raised to 60),
+> `pass-through-v2-panics` (traps on its first `process()` call, for
 > E-Swap-5 rollback verification only), and `delay-injector` (fixed-delay
 > transform for E-Val-1 and the delayed backpressure configurations).
 >

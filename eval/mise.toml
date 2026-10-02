@@ -6,8 +6,8 @@
 # `mise run plan-canonical-pi5` / `mise run run-canonical-pi5` (root mise.toml).
 
 [tasks.build-plugins-eval]
-description = "Build the three plugins consumed by the E-* experiments"
-run = "../plugins/build-plugins.sh pass-through uppercase threshold-filter"
+description = "Build the four plugins consumed by the E-* experiments"
+run = "../plugins/build-plugins.sh pass-through uppercase threshold-filter threshold-filter-v2"
 
 [tasks.eval-clean]
 description = "Remove every timestamped result tree under eval/results/"

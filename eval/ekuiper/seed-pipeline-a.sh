@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Register Pipeline A on eKuiper via REST API.
 #
-# Idempotent — deletes existing wafer_telemetry stream and pipeline_a
-# rule before re-creating. Safe to run repeatedly during shakedown.
+# Idempotent: deletes the existing wafer_telemetry stream, pipeline_a rule and
+# the E-Swap-3 replacement rule pipeline_a_v2 before re-creating the stream
+# and pipeline_a, which also restores the bound an E-Swap-3 rule update
+# raised. Safe to run repeatedly during shakedown.
+#
+# --dry-run also prints pipeline_a_v2, which the E-Swap-3 make-before-break
+# arm creates during its run: Pipeline A with the lower bound raised to 60,
+# the change threshold-filter-v2 makes on WAFER.
 #
 # Pre-req: native eKuiper is reachable through its REST API and Mosquitto
 # is listening at EKUIPER_BROKER_URL (default: localhost).
@@ -39,10 +45,11 @@ case "$concurrency" in
         ;;
 esac
 
-RULE_PAYLOAD="$(cat <<EOF
+rule_payload() {
+    cat <<EOF
 {
-  "id": "pipeline_a",
-  "sql": "SELECT device_id, temperature, humidity, ts, seq FROM wafer_telemetry WHERE temperature >= 50 AND temperature <= 99999",
+  "id": "$1",
+  "sql": "SELECT device_id, temperature, humidity, ts, seq FROM wafer_telemetry WHERE temperature >= $2 AND temperature <= 99999",
   "options": {
     "concurrency": ${concurrency}
   },
@@ -60,11 +67,13 @@ RULE_PAYLOAD="$(cat <<EOF
   ]
 }
 EOF
-)"
+}
+RULE_PAYLOAD="$(rule_payload pipeline_a 50)"
+REPLACEMENT_RULE_PAYLOAD="$(rule_payload pipeline_a_v2 60)"
 
 if [ "$dry_run" -eq 1 ]; then
-    printf '{"ekuiper_url":"%s","broker_url":"%s","stream_payload":%s,"rule_payload":%s}\n' \
-        "$EKUIPER" "$BROKER_URL" "$STREAM_PAYLOAD" "$RULE_PAYLOAD"
+    printf '{"ekuiper_url":"%s","broker_url":"%s","stream_payload":%s,"rule_payload":%s,"replacement_rule_payload":%s}\n' \
+        "$EKUIPER" "$BROKER_URL" "$STREAM_PAYLOAD" "$RULE_PAYLOAD" "$REPLACEMENT_RULE_PAYLOAD"
     exit 0
 fi
 
@@ -79,6 +88,7 @@ done
 
 # Drop existing definitions (ignore 404).
 curl -sf -X DELETE "$EKUIPER/rules/pipeline_a"       >/dev/null 2>&1 || true
+curl -sf -X DELETE "$EKUIPER/rules/pipeline_a_v2"    >/dev/null 2>&1 || true
 curl -sf -X DELETE "$EKUIPER/streams/wafer_telemetry" >/dev/null 2>&1 || true
 
 _log "creating stream wafer_telemetry"

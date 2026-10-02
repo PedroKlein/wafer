@@ -50,8 +50,8 @@ CAPACITY_BRACKET_RULE_TEXT = {
     "purpose", "source", "scout_ceiling", "decision_points", "rounding", "max_rate",
     "selection", "runs_per_rate",
 }
-FINAL_SCHEDULE_RECORDS = 2_321
-FINAL_MEASURED_LEAVES = 2_091
+FINAL_SCHEDULE_RECORDS = 2_351
+FINAL_MEASURED_LEAVES = 2_121
 PAYLOAD_SIZES = ("120b", "1kb", "10kb", "100kb")
 NATIVE_PASS_THROUGH = {"kind": "native", "function": "passthrough"}
 PAYLOAD_BOUNDARY = (
@@ -490,7 +490,12 @@ def validate_matrix(matrix: dict) -> list[str]:
     swap3 = experiments.get("e-swap-3", {})
     if swap3.get("sample_unit") != "run" or swap3.get("repetitions") != 30:
         errors.append("e-swap-3 must use 30 run-level repetitions")
-    if swap3.get("conditions") != ["wafer-hotswap", "wafer-restart", "ekuiper-restart"]:
+    if swap3.get("conditions") != [
+        "wafer-hotswap",
+        "wafer-restart",
+        "ekuiper-rule-update",
+        "ekuiper-make-before-break",
+    ]:
         errors.append("e-swap-3 conditions differ from the frozen strategies")
     swap3_outputs = {
         "latency.hdr",
@@ -513,6 +518,7 @@ def validate_matrix(matrix: dict) -> list[str]:
         "series_end_secs": 10,
         "baseline_window_secs": [-10, -2],
         "event_window_secs": [-2, 2],
+        "placebo_offset_secs": -6,
         "recovery_window_secs": [2, 10],
         "recovery_fraction": 0.95,
         "recovery_consecutive_buckets": 5,

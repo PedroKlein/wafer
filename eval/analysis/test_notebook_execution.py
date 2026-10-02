@@ -319,7 +319,12 @@ def build_complete_fixture(root: Path) -> None:
             }
         )
     )
-    for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart"):
+    for strategy in (
+        "wafer-hotswap",
+        "wafer-restart",
+        "ekuiper-rule-update",
+        "ekuiper-make-before-break",
+    ):
         leaf = root / "e-swap-3" / strategy / "run-01"
         leaf.mkdir(parents=True, exist_ok=True)
         (leaf / "throughput-buckets.json").write_text(
@@ -337,6 +342,9 @@ def build_complete_fixture(root: Path) -> None:
                 "baseline_rate_msg_s": 1_000,
                 "event_min_rate_msg_s": 980,
                 "dip_percent": 2.0,
+                "placebo_offset_ns": -6_000_000_000,
+                "placebo_event_min_rate_msg_s": 990.0,
+                "placebo_dip_percent": 1.0,
                 "interruption_ns": 100_000_000,
                 "recovery_ns": 200_000_000,
                 "recovery_right_censored": False,
@@ -576,8 +584,9 @@ def test_all_notebooks_execute_against_complete_fixture(
 
     output_by_name = dict(zip((path.name for path in NOTEBOOKS), outputs))
     hotswap_output = output_by_name["05-hotswap-timeline.ipynb"]
-    assert "N=4" in hotswap_output
+    assert "N=5" in hotswap_output
     assert "median_dip_percent" in hotswap_output
+    assert "median_placebo_dip_percent" in hotswap_output
     assert "e-swap-1" in hotswap_output
     assert "e-swap-2" not in hotswap_output
     assert "e-swap-4" in hotswap_output
@@ -663,6 +672,23 @@ def test_all_notebooks_execute_against_complete_fixture(
         "10-summary-stats.ipynb",
     ):
         assert "[image/png]" in output_by_name[name], name
+
+
+def test_hotswap_notebook_renders_a_diagnostic_swap3_batch_without_placebo_fields(
+    tmp_path, monkeypatch
+) -> None:
+    build_complete_fixture(tmp_path)
+    for path in (tmp_path / "e-swap-3").rglob("disruption-analysis.json"):
+        value = json.loads(path.read_text())
+        for field in ("placebo_offset_ns", "placebo_event_min_rate_msg_s", "placebo_dip_percent"):
+            del value[field]
+        path.write_text(json.dumps(value))
+    notebook = Path(__file__).parent / "notebooks" / "05-hotswap-timeline.ipynb"
+
+    (output,) = execute_notebooks(monkeypatch, tmp_path, [notebook])
+
+    assert "median_dip_percent" in output
+    assert "median_placebo_dip_percent" in output
 
 
 def test_all_notebooks_render_missing_conditions_as_pending(

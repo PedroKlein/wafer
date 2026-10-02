@@ -40,18 +40,18 @@ Expected matrix output:
 
 ```text
 27 experiments
-schedule_records=2321
-measured_leaves=2091
+schedule_records=2351
+measured_leaves=2121
 ```
 
-The 2,321 records include shared-result aliases with `independent_n_contribution=0`. The 2,091 measured-or-static leaves are the processes/static measurements that produce new evidence. These counts are the common schedule that every host shares. Each host's final batch adds its E-Perf-10 bracket rates (see [Run the host's capacity scout](#run-the-hosts-capacity-scout)): 120 leaves per rate, at most six rates, so at most 720 leaves. The `BRACKETS` line of a dry run with `--scout-batch-id`, and the batch's `batch.json`, give the host's own figure. Without `--scout-batch-id`, as above, the dry run prints the common schedule and a `NOTE` that `--execute` refuses to start that final batch. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+The 2,351 records include shared-result aliases with `independent_n_contribution=0`. The 2,121 measured-or-static leaves are the processes/static measurements that produce new evidence. These counts are the common schedule that every host shares. Each host's final batch adds its E-Perf-10 bracket rates (see [Run the host's capacity scout](#run-the-hosts-capacity-scout)): 120 leaves per rate, at most six rates, so at most 720 leaves. The `BRACKETS` line of a dry run with `--scout-batch-id`, and the batch's `batch.json`, give the host's own figure. Without `--scout-batch-id`, as above, the dry run prints the common schedule and a `NOTE` that `--execute` refuses to start that final batch. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
 
 The current estimate is:
 
 | Estimate | Value | Basis |
 |---|---:|---|
-| Nominal active-run time | 49.88 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
-| Operational estimate | 54.87 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
+| Nominal active-run time | 51.13 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
+| Operational estimate | 56.25 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
 | Bracket rates, per host | at most 18.00 h nominal, 19.80 h operational | 3.00 h nominal per rate (120 runs of 90 s) on top of the common schedule above, at most six rates |
 | Storage estimate | 43,433,437,093 bytes | Primary N=30 estimate over the earlier 2,165 schedule records, including the three E-Backpressure policies; it predates the 120 E-Perf-4 native runs and the ten-run E-Swap-1 and E-Swap-5 sessions, so regenerate before execution |
 | Required free space | at least 50 GiB; 60 GiB preferred | Allows attempt evidence and operational headroom |
@@ -131,7 +131,17 @@ Run this on every host (Raspberry Pi 5, Jetson and x86) after deploying the comm
   --repetitions 5
 ```
 
-Use `--host jetson` or `--host x86` on the replication hosts. The smoke test confirms that the rule passes only the boundary record, with its schema and `ts`/`seq` unchanged. The E-Swap-3 batch then stops and starts `pipeline_a` once in each of five `ekuiper-restart` runs under the 1,000 msg/s Pipeline A load, and runs the two WAFER strategies alongside: 15 runs, about 45 minutes. Each eKuiper run first refuses a package other than 2.1.5, and a restart fails its run if either REST call fails or the rule does not report `running` within 10 seconds. The command exits non-zero when a run failed for the harness, and the batch's `failures.json` lists those runs. A run in which the `kuiper` unit restarted or `pipeline_a` stopped or reported an error is a system outcome instead: the command still exits 0, prints an `OUTCOME` line with `runtime-exit` or `rule-error`, and the run's `canonical-status.json` records it. Investigate any failure or outcome before running that host's diagnostic or final batch. The re-check batch is diagnostic: its `batch.json` records `repetitions=5` and `thesis_evidence=false`, `approve-batch` refuses it, and it is never pooled with the final batch.
+Use `--host jetson` or `--host x86` on the replication hosts. The smoke test confirms that the rule passes only the boundary record, with its schema and `ts`/`seq` unchanged. The E-Swap-3 batch then runs five repetitions of each arm under the 1,000 msg/s Pipeline A load: five `ekuiper-rule-update` runs that update `pipeline_a` once with `PUT /rules/pipeline_a` and `"triggered": false`, then start it with `POST /rules/pipeline_a/start`, five `ekuiper-make-before-break` runs that replace it with `pipeline_a_v2`, and the two WAFER arms alongside: 20 runs, about an hour. Each eKuiper run first refuses a package other than 2.1.5, a rule list other than `pipeline_a` alone, and a `pipeline_a` other than the rule the seed script creates. A rule update fails its run if the PUT or the start does not return 200 or the updated rule does not count output within 10 seconds, and a make-before-break replacement fails its run if a REST call fails or `pipeline_a_v2` does not count output within 10 seconds. The command exits non-zero when a run failed for the harness, and the batch's `failures.json` lists those runs. A run in which the `kuiper` unit restarted or the rule the run ends with stopped or reported an error is a system outcome instead: the command still exits 0, prints an `OUTCOME` line with `runtime-exit` or `rule-error`, and the run's `canonical-status.json` records it. Investigate any failure or outcome before running that host's diagnostic or final batch. The re-check batch is diagnostic: its `batch.json` records `repetitions=5` and `thesis_evidence=false`, `approve-batch` refuses it, and it is never pooled with the final batch.
+
+## Smoke-run the E-Swap-3 arms before each batch
+
+Before the diagnostic batch, and again before the final batch, run every E-Swap-3 arm once from the deployed commit:
+
+```sh
+mise run smoke-swap3 -- --batch-id swap3-smoke-<date>
+```
+
+The task runs `./eval/scripts/run-rpi5-canonical.sh --execute --experiments e-swap-3 --repetitions 1` with the arguments given; add `--host jetson` or `--host x86` on the replication hosts. That is four runs, one for each of `wafer-hotswap`, `wafer-restart`, `ekuiper-rule-update` and `ekuiper-make-before-break`, and about ten minutes of nominal run time. It exercises what only one arm uses: the hot swap to `threshold-filter-v2` and its adopted response in `swap_requests.json`, the WAFER restart, the eKuiper rule update (PUT with `triggered` false, then start) and its REST calls in `rule-update.json`, and the make-before-break REST calls in `rule-replacement.json`. The batch is diagnostic: its `batch.json` records `repetitions=1` and `thesis_evidence=false`, `approve-batch` refuses it, and its results are never pooled with another batch. When a run fails for the harness or prints an `OUTCOME` line, investigate it before starting the batch. A `wafer-hotswap` run fails for the harness before warm-up when `threshold-filter-v2` is not built on the host; build the plugins with `mise run //plugins:build-plugins` and run the smoke test again.
 
 ## Run the host's capacity scout
 
@@ -170,12 +180,12 @@ Before the final batch, run the first three repetitions of every experiment from
   --repetitions 3
 ```
 
-That is 214 runs and about five hours of nominal run time, plus 12 runs and 18 minutes for each bracket rate. Without `--scout-batch-id` the diagnostic batch runs the common E-Perf-10 grid only. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
+That is 217 runs and about five and a half hours of nominal run time, plus 12 runs and 18 minutes for each bracket rate. Without `--scout-batch-id` the diagnostic batch runs the common E-Perf-10 grid only. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
 
 - E-Val-1;
 - all four E-Perf-7 modes;
 - all E-Perf-10 systems and rates;
-- all three E-Swap-3 strategies;
+- all four E-Swap-3 arms, with the placebo dip next to each dip;
 - true-burst E-Swap-4.
 
 Stop and preserve the failed attempt if metering truth, capacity counters, event alignment, E-Swap-4 phase or drain boundaries, provenance, or throttling fails. Fix it in a new commit, verify and deploy that commit, and run a new diagnostic batch. E-Swap-4 must retain 1,200 source-origin primary buckets over `[0,120s)` and 100 separate drain buckets over `[120s,130s)`; full-run counters reconcile both regions. Reconciled drain arrivals are reported, while an after-drain receive, source completion at or after 130 seconds, or incomplete population fails closed.
@@ -184,7 +194,7 @@ The diagnostic batch must also demonstrate resume behavior: stop it with SIGINT 
 
 ## Launch and resume the final batch
 
-Launch only after the diagnostic batch passes review, from the same deployed commit:
+Launch only after the diagnostic batch passes review and a new E-Swap-3 smoke run from the same deployed commit is clean:
 
 ```sh
 ./eval/scripts/run-rpi5-canonical.sh \

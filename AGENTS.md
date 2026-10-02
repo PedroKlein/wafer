@@ -198,6 +198,7 @@ mise run plan-campaign -- --host rpi5                # Print the schedule (no ru
 mise run run-campaign -- --host rpi5 --capacity-scout --batch-id SCOUT   # Next scout probe; repeat until it stops
 mise run run-campaign -- --host rpi5 --batch-id ID --scout-batch-id SCOUT   # Run or resume a batch
 mise run run-campaign -- --host rpi5 --batch-id ID --scout-batch-id SCOUT --repetitions 3   # Diagnostic batch, never thesis evidence
+mise run smoke-swap3 -- --host rpi5 --batch-id ID    # Every E-Swap-3 arm once before a batch, diagnostic
 mise run campaign-status -- --host rpi5 --batch-id ID
 mise run approve-batch -- --host rpi5 --batch-id ID  # Check a finished final batch, record it in eval/final-batches.json
 mise run idle-baseline-pi5                           # Diagnostic idle-power baseline

@@ -56,6 +56,10 @@ SWAP_REQUEST_EXPERIMENTS = SWAP_EXPERIMENTS | {"e-swap-3"}
 ROLLBACK_EXPERIMENTS = frozenset({"e-swap-5", "e-swap-rollback-sessions"})
 ZERO_LOSS_EXPERIMENTS = SWAP_EXPERIMENTS | ROLLBACK_EXPERIMENTS
 EKUIPER_UNIT_PROPERTIES = ("NRestarts", "ExecMainStatus", "MainPID")
+EKUIPER_REPLACEMENT_RULE = "pipeline_a_v2"
+# threshold-filter-v2 raises Pipeline A's lower bound from 50 to 60. Both E-Swap-3 eKuiper arms
+# make the same change to the pipeline_a SQL the audit recorded before warm-up.
+SWAP3_RULE_BOUND_CHANGE = ("temperature >= 50", "temperature >= 60")
 
 _ATTEMPT_NAME = re.compile(r"run-(\d+)(?:-attempt-(\d+))?")
 
@@ -102,10 +106,11 @@ def ekuiper_health_reasons(health: Mapping) -> list[str]:
     """The outcomes the two snapshots in ``ekuiper-health.json`` show.
 
     ``before`` is taken once the rule runs, before warm-up, and ``after`` once the load
-    generators are done, before the harness stops eKuiper. A new restart count or main PID
-    means the process that ran the measurement ended, a ``runtime-exit`` as a crash is for
-    WAFER; the rule status after it belongs to the new process and is not judged. Otherwise a
-    rule that does not run at the end or carries a message is a ``rule-error``. The
+    generators are done, before the harness stops eKuiper. When the run replaced the rule,
+    ``after`` holds the status of the rule named in ``replacement_rule``. A new restart count
+    or main PID means the process that ran the measurement ended, a ``runtime-exit`` as a
+    crash is for WAFER; the rule status after it belongs to the new process and is not judged.
+    Otherwise a rule that does not run at the end or carries a message is a ``rule-error``. The
     per-operator exception counters are not judged: eKuiper counts each message it drops from
     a full buffer there, and the run measures that loss itself.
     """
@@ -131,6 +136,23 @@ def ekuiper_exit_code(health: Mapping) -> int | None:
     return after["ExecMainStatus"] if after["MainPID"] == 0 else None
 
 
+def swap_adopted(request: object) -> bool:
+    """Whether one recorded hot-swap request shows its replacement adopted.
+
+    The runtime answers 200 both when it adopted the replacement and when it rolled back to
+    the old plugin, so only a body that says ``replacement_adopted`` and reports no rollback
+    counts.
+    """
+    body = request.get("body") if isinstance(request, dict) else None
+    return (
+        isinstance(request, dict)
+        and request.get("http_status") == 200
+        and isinstance(body, dict)
+        and body.get("replacement_adopted") is True
+        and body.get("status") != "rolled_back"
+    )
+
+
 def sut_outcome_reasons(leaf: Path, experiment: str) -> list[str]:
     """The criteria the system under test failed in one attempt, read from its artifacts.
 
@@ -151,7 +173,9 @@ def sut_outcome_reasons(leaf: Path, experiment: str) -> list[str]:
         reasons.append("containment-escape")
     requests = _read_json(leaf / "swap_requests.json")
     if isinstance(requests, list):
-        if experiment in SWAP_REQUEST_EXPERIMENTS and any(
+        if experiment == "e-swap-3" and not all(swap_adopted(request) for request in requests):
+            reasons.append("swap-failed")
+        elif experiment in SWAP_REQUEST_EXPERIMENTS and any(
             not isinstance(request, dict) or request.get("http_status") != 200
             for request in requests
         ):
