@@ -113,6 +113,8 @@ write "$x86/sys/devices/system/cpu/smt/control" "off"
 write "$x86/sys/devices/system/cpu/cpufreq/boost" "0"
 cpu_tree "$x86"
 write "$x86/sys/class/hwmon/hwmon2/name" "k10temp"
+write "$x86/sys/class/powercap/intel-rapl:0/energy_uj" "123456789"
+write "$x86/sys/class/powercap/intel-rapl:0:0/energy_uj" "1234"
 
 log="$tmp/x86.log"
 if ! PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" \
@@ -125,10 +127,12 @@ grep -q '^PASS  hardware model: ASUS PRIME B550M (AMD Ryzen 7 5800X' "$log"
 grep -q '^PASS  SMT: off' "$log"
 grep -q '^PASS  turbo: off' "$log"
 grep -q '^PASS  CPU temperature sensor: k10temp' "$log"
+grep -q '^PASS  RAPL package energy readable: /sys/class/powercap/intel-rapl:0/energy_uj' "$log"
 assert_cpu_affinity_passed "$log"
 
 write "$x86/sys/devices/system/cpu/smt/control" "on"
 write "$x86/sys/devices/system/cpu/cpufreq/boost" "1"
+rm -r "$x86/sys/class/powercap/intel-rapl:0"
 if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" PREFLIGHT_MOSQUITTO_PID=0 \
     WAFER_PREFLIGHT_SYSROOT="$x86" "$ROOT/eval/scripts/preflight-x86.sh" >"$log" 2>&1; then
     echo 'x86 preflight passed with SMT and turbo enabled and no Mosquitto process' >&2
@@ -137,6 +141,7 @@ fi
 grep -q '^FAIL  SMT off — detected: on' "$log"
 grep -q '^FAIL  turbo off — turbo is enabled' "$log"
 grep -q '^FAIL  Mosquitto CPU affinity — mosquitto.service is not running' "$log"
+grep -q '^FAIL  RAPL package energy readable' "$log"
 
 pi="$tmp/pi"
 mkdir -p "$pi/proc/device-tree"

@@ -658,9 +658,9 @@ E-Swap-2/E-Swap-6 of E-Swap-1. Candidate independent swap and rollback sessions
 use new IDs and do not turn these aliases into additional observations.
 
 The PMIC internal-rail proxy is not total input power. External total-input
-power and matched x86 execution are future work; E-Perf-5 remains PENDING until
-the matching x86 Linux block exists, and no cross-architecture claim is made.
-Each host's half has its own descriptive WAFER/native contrast in the meantime.
+power is future work. E-Perf-5 remains PENDING until an approved x86 batch
+exists; the Pi and x86 WAFER/native contrasts are then set side by side as
+descriptive results, and no cross-architecture verdict is drawn.
 The retained 5 V / 4.2 A supply gets no threshold waiver: every final run must
 record `throttled=0x0`, and `approve-batch` refuses a batch with any other value.
 
