@@ -185,6 +185,21 @@ def build_complete_fixture(root: Path) -> None:
                 (leaf / "throughput.csv").write_text(
                     "timestamp_ns,messages_received,throughput_msg_s,duration_ns\n1,60000,1000.0,60000000000\n"
                 )
+                (leaf / "subscriber-metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "sequence_end_exclusive": 60_000,
+                            "total_recorded": 60_000,
+                            "sequence": {
+                                "expected": 60_000,
+                                "total_received": 60_000,
+                                "received_unique": 60_000,
+                                "total_gaps": 0,
+                                "total_duplicates": 0,
+                            },
+                        }
+                    )
+                )
             if experiment == "e-perf-4":
                 (leaf / "service-percentiles.json").write_text(
                     json.dumps(
