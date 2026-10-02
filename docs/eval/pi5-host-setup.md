@@ -154,7 +154,7 @@ vcgencmd get_throttled
 
 Campaign evidence uses one physical exFAT filesystem labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAF_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
 
-Do not format or relabel a device from this guide. Formatting requires the separate destructive-operation gate and a fresh confirmation of the exact device identity. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
+Do not format or relabel a device from this guide. If the volume ever needs formatting, confirm the exact device identity first. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
 
 Before moving the drive, stop all writers, run `sync`, and unmount it cleanly. After each mount or host transition, confirm the UUID and label and verify the complete SHA-256 manifest before exposing `raw/` to analysis. Analysis opens `raw/` read-only and writes only under `derived/` and `reports/`. Never copy the raw tree to the SD card, Mac internal storage, or another removable volume.
 

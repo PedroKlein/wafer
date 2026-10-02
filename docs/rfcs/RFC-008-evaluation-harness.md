@@ -131,14 +131,6 @@ Figures and tables state N, units, estimator, evidence class, and claim boundary
 
 E-Perf-2 remains an alternate analysis of E-Perf-1, E-Perf-8 of E-Perf-6, and E-Swap-2/E-Swap-6 of E-Swap-1. Each alias points directly to one final admitted source, preserves its identity/digest, is acyclic, and declares `independent_n_contribution=0`; aliases never multiply sample counts. E-Swap-4 retains 1,200 source-origin primary buckets over `[0,120s)`, 100 separate drain buckets over `[120s,130s)`, zero after-drain arrivals, and no accepted right censoring.
 
-## Enhanced evidence storage
-
-V9 raw evidence lives as one physical copy on the exFAT volume labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit and replaces the unrepresentable v5 label. Pi and Jetson use `/mnt/wafer-results`; macOS uses `/Volumes/WAF_RESULTS`. Manifests record volume-root-relative paths. The same full SHA-256 manifest is verified after each mount or host transition, and the drive is synchronized and unmounted cleanly before physical movement.
-
-Raw attempts are append-only, including failed and interrupted attempts. Analysis opens `raw/` read-only and writes only to `derived/` and `reports/`. The method does not depend on symlinks, hardlinks, case-only path distinctions, or POSIX ownership persistence, and it never creates a second raw-data copy.
-
-The retained 5 V / 4.2 A supply is admitted empirically. It receives no threshold waiver for nonzero throttling, high temperature, reboot, kernel I/O errors, or checksum failure.
-
 ## Reproducibility
 
 A final leaf contains clean source provenance (one commit SHA for the whole batch), config and binary identities, thermal/throttle state, experiment-specific artifacts, and a completion receipt that classes the attempt as a clean pass, a system outcome, or an infrastructure failure. The canonical runner is sequential and resumable. It writes a deterministic schedule and never overwrites an attempt. A clean pass or a system outcome is admitted; a system outcome counts against the criterion it failed and is never retried. An infrastructure failure is retried once in place, and a unit whose retry also fails is reported missing. The E-Val-1 gate is never retried.
