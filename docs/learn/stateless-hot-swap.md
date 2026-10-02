@@ -67,18 +67,6 @@ The documented node-state tracker has Error, Recovering, and Running transitions
 
 **Known drift:** The guest `close` export is not called on replacement, recovery, or shutdown. Current builder comments call every configured processing category a Wasm node even though Transform and Filter can select native baseline functions. Those native variants reject a Wasm swap. Also, only the transform runner establishes process-time canary rollback; do not generalize it to Filter or Router. The integration tests are conditional on prebuilt component fixtures.
 
-## Evidence
-
-- **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `watch::channel(None)`, `watch_senders.insert`
-- **Source:** [`crates/wafer-core/src/orchestrator/hotswap.rs`](../../crates/wafer-core/src/orchestrator/hotswap.rs) | symbols: `pub async fn prepare_transform_swap_timed`, `SwapPayload::Transform`
-- **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub fn send_swap`, `pub fn record_hotswap_phase`
-- **Source:** [`crates/wafer-core/src/runner/mod.rs`](../../crates/wafer-core/src/runner/mod.rs) | symbols: `pub(crate) fn take_pending_swap`, `swap_rx.has_changed()`, `pub struct HotSwapProgress`, `pub fn report_rolled_back`, `pub enum SwapPayload`
-- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `take_pending_swap(&mut swap_rx)`, `transform.recover_from_cached_pre()`, `metrics.record_rollback()`
-- **Source:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `pub async fn try_hot_swap`, `self.store = old_store`, `pub async fn recover_from_cached_pre`
-- **Source:** [`crates/wafer-core/src/node/metrics.rs`](../../crates/wafer-core/src/node/metrics.rs) | symbols: `pub fn record_swap`, `pub fn record_rollback`, `pub fn record_recovery`
-- **Source:** [`crates/wafer-core/src/api/handlers.rs`](../../crates/wafer-core/src/api/handlers.rs) | symbols: `pub async fn hot_swap`, `"status": "rolled_back"`, `"replacement_adopted": true`
-- **Test:** [`crates/wafer-core/tests/hotswap_process_time_rollback.rs`](../../crates/wafer-core/tests/hotswap_process_time_rollback.rs) | symbols: `async fn hotswap_process_time_rollback()`, `async fn hotswap_budget_trap_in_canary_window_rolls_back()`
-
 ## Checkpoint
 
 Locate the point where `take_pending_swap` checks `swap_rx.has_changed()`. List what a full replacement transfers, what survives only as reusable host-side code/configuration, and what mutable guest state disappears. Finally, explain why `rolled_back` is an API outcome rather than a new `NodeState` variant.
