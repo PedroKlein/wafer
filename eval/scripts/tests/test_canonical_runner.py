@@ -412,6 +412,27 @@ def test_ekuiper_profile_artifacts_accept_terminal_partial_interval(
     assert runtime["interval_alignment"]["row_count"] == 61
 
 
+def test_ekuiper_profile_artifacts_accept_rows_from_the_drain_grace(tmp_path: Path) -> None:
+    item = next(
+        item
+        for item in runner.build_ekuiper_profile_schedule(seed=1729)
+        if item.condition == "rate-08000/unprofiled-control" and item.run_index == 1
+    )
+    output = tmp_path / "lossy"
+    context = write_ekuiper_profile_fixture(output, item, process_available=False)
+    intervals = json.loads((output / "interval-metrics.json").read_text())
+    intervals["rows"].extend(
+        {"interval_start_ns": second * 1_000_000_000, "interval_end_ns": (second + 1) * 1_000_000_000}
+        for second in range(60, 66)
+    )
+    intervals["row_count"] = 66
+    (output / "interval-metrics.json").write_text(json.dumps(intervals))
+
+    runtime, _ = runner.write_ekuiper_profile_artifacts(item, output, context)
+
+    assert runtime["interval_alignment"]["row_count"] == 66
+
+
 def test_ekuiper_profile_artifacts_gracefully_record_unavailable_process_metrics(
     tmp_path: Path,
 ) -> None:
@@ -1729,7 +1750,7 @@ def fake_ekuiper_audit(
     return path
 
 
-def test_swap3_stops_subscriber_when_publisher_window_ends(
+def test_swap3_stops_subscriber_after_the_drain_grace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ekuiper: FakeEkuiper
 ) -> None:
     output = tmp_path / "attempt"
@@ -1747,7 +1768,9 @@ def test_swap3_stops_subscriber_when_publisher_window_ends(
         system="ekuiper",
     )
     event_ns = 61_000_000_000
-    times = iter((0, 500_000_000, 1_000_000_000, event_ns, event_ns, event_ns + 1_000_000))
+    times = iter(
+        (0, 500_000_000, 1_000_000_000, event_ns, event_ns, event_ns + 1_000_000, event_ns + 2_000_000)
+    )
     class Process:
         def __init__(self, returncode: int) -> None:
             self.returncode = returncode
@@ -1794,11 +1817,16 @@ def test_swap3_stops_subscriber_when_publisher_window_ends(
         return path
 
     ekuiper_states: list[bool] = []
+    commands: list[tuple[str, dict]] = []
     monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
     monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
     monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: ekuiper_states.append(active))
     monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
-    monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
+    monkeypatch.setattr(
+        runner,
+        "loadgen_command",
+        lambda root, candidate, action, **kwargs: commands.append((action, kwargs)) or [action],
+    )
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(runner, "wait_for_ekuiper_rule_ready", lambda rule: None)
@@ -1812,8 +1840,12 @@ def test_swap3_stops_subscriber_when_publisher_window_ends(
         runner.AttemptSelection(path=output, skip=False),
     )
 
-    assert observed_timeouts == [0]
+    assert observed_timeouts == [runner.MQTT_DRAIN_GRACE_SECS]
     assert ekuiper_states == [True, False]
+    assert commands[0] == (
+        "publish",
+        {"duration": 30, "sequence_start": 120_000, "event_aligned": False},
+    )
 
 
 def test_both_host_samplers_pin_themselves_to_the_support_cpus(tmp_path: Path, monkeypatch) -> None:
@@ -1829,7 +1861,7 @@ def test_both_host_samplers_pin_themselves_to_the_support_cpus(tmp_path: Path, m
 @pytest.mark.parametrize(
     ("state", "gctrace"), [("unprofiled-control", False), ("profiled", True)]
 )
-def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
+def test_ekuiper_profile_stops_subscriber_after_the_drain_grace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     state: str,
@@ -1898,7 +1930,7 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
         runner.AttemptSelection(path=output, skip=False),
     )
 
-    assert observed_timeouts == [0]
+    assert observed_timeouts == [runner.MQTT_DRAIN_GRACE_SECS]
     assert ekuiper_states == [(True, gctrace), (False, False)]
     assert audited_gctrace == [gctrace]
 
@@ -5315,6 +5347,76 @@ def test_ekuiper_failure_during_a_capacity_run_is_an_admitted_outcome(
     metadata = json.loads((output / "metadata.json").read_text())
     assert metadata["exit_codes"] == {"ekuiper": exit_code}
     assert not (output / "capacity-run.json").exists()
+
+
+def record_mqtt_run_end(monkeypatch: pytest.MonkeyPatch) -> tuple[list, list]:
+    """Record the load generator calls and how long the subscriber may drain."""
+    commands: list[tuple[str, dict]] = []
+    timeouts: list[int] = []
+    monkeypatch.setattr(
+        runner,
+        "loadgen_command",
+        lambda root, candidate, action, **kwargs: commands.append((action, kwargs)) or [action],
+    )
+    monkeypatch.setattr(
+        runner, "wait_for_subscriber", lambda process, timeout=30: timeouts.append(timeout) or 0
+    )
+    return commands, timeouts
+
+
+def test_ekuiper_target_load_run_offsets_warm_up_and_drains_before_sigint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    commands, timeouts = record_mqtt_run_end(monkeypatch)
+    item = ekuiper_item("e-perf-1", "ekuiper")
+    output = tmp_path / "ekuiper/run-01-attempt-01"
+
+    assert runner.run_ekuiper_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    assert commands == [
+        ("publish", {"duration": 30, "sequence_start": 60_000}),
+        ("subscribe", {"output": output}),
+        ("publish", {"summary_file": output / "publisher-summary.json"}),
+    ]
+    assert timeouts == [5]
+
+
+def test_capacity_run_drains_before_sigint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    monkeypatch.setattr(runner, "_running_sut_processes", lambda: [])
+    _, timeouts = record_mqtt_run_end(monkeypatch)
+    output = tmp_path / "ekuiper/rate-04000/run-01-attempt-01"
+
+    runner.run_rate_sweep_item(
+        ROOT, ekuiper_item("e-perf-10", "ekuiper/rate-04000"), runner.AttemptSelection(output, False)
+    )
+
+    assert timeouts == [5]
+
+
+@pytest.mark.parametrize(
+    ("experiment", "condition"),
+    [
+        ("e-perf-1", "ekuiper"),
+        ("e-perf-10", "wafer/rate-04000"),
+        ("e-swap-3", "wafer-hotswap"),
+        ("e-swap-3", "ekuiper-restart"),
+    ],
+)
+def test_every_mqtt_subscriber_declares_its_range_and_drain_grace(
+    experiment: str, condition: str
+) -> None:
+    item = ekuiper_item(experiment, condition)
+
+    subscriber = loadgen_command(ROOT, item, "subscribe", output=Path("/tmp/leaf"))
+
+    assert subscriber[subscriber.index("--sequence-end-exclusive") + 1] == str(item.total_messages)
+    assert subscriber[subscriber.index("--total-messages") + 1] == str(item.total_messages)
+    assert subscriber[subscriber.index("--drain-grace-secs") + 1] == "5"
+    assert subscriber[subscriber.index("--sequence-example-limit") + 1] == "1024"
 
 
 def test_ekuiper_failure_in_the_capacity_scout_fails_the_attempt(
