@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::MAX_PACKET_BYTES;
+use crate::publish::EXIT_DRAIN_SECS;
 use crate::recorder::{
     ActionTimingReceipt, EventBucketRecorder, LatencyRecorder, PublisherTimingReceipt,
     RecordOutcome, SequenceReport, SubscriberMetadata, now_ns,
@@ -82,8 +83,9 @@ pub struct SubscribeArgs {
     #[arg(long, default_value_t = 300)]
     pub measurement_secs: u64,
 
-    /// Seconds the harness may keep listening after the publisher finished;
-    /// widens the interval row bound without changing the declared window.
+    /// Seconds the harness may keep listening after the publisher exited;
+    /// widens the interval row bound, with the publisher's own exit drain,
+    /// without changing the declared window.
     #[arg(long, default_value_t = 0)]
     pub drain_grace_secs: u64,
 
@@ -197,6 +199,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     recorder.enable_intervals(
         measurement_start_unix_epoch_ns,
         args.measurement_secs,
+        EXIT_DRAIN_SECS,
         args.drain_grace_secs,
     )?;
     recorder.anchor_clock(measurement_start_unix_epoch_ns);

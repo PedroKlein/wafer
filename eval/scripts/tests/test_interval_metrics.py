@@ -165,6 +165,32 @@ def test_subscriber_rows_may_run_into_the_declared_drain_grace(tmp_path: Path) -
         INTERVALS.validate_interval_metrics(destination)
 
 
+def test_subscriber_rows_may_run_through_the_publisher_drain(tmp_path: Path) -> None:
+    write_fixture(tmp_path)
+    fragment_path = tmp_path / "interval-latency.json"
+    fragment = json.loads(fragment_path.read_text())
+    fragment.update(
+        declared_measurement_duration_ns=1_000_000_000,
+        publisher_drain_ns=2_000_000_000,
+        drain_grace_ns=1_000_000_000,
+        maximum_rows=6,
+    )
+    fragment_path.write_text(json.dumps(fragment))
+
+    destination = INTERVALS.compose_interval_metrics(tmp_path, clock_ticks=100)
+
+    value = json.loads(destination.read_text())
+    assert (value["publisher_drain_ns"], value["drain_grace_ns"], value["maximum_rows"]) == (
+        2_000_000_000,
+        1_000_000_000,
+        6,
+    )
+    del value["publisher_drain_ns"]
+    destination.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="maximum rows"):
+        INTERVALS.validate_interval_metrics(destination)
+
+
 def test_interval_validation_rejects_forbidden_fields_and_excess_rows(tmp_path: Path) -> None:
     write_fixture(tmp_path)
     destination = INTERVALS.compose_interval_metrics(tmp_path, clock_ticks=100)

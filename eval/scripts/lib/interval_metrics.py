@@ -52,9 +52,12 @@ def _clock_start(path: Path) -> int | None:
     return int(value["start_unix_epoch_ns"])
 
 
-def _maximum_rows(duration_ns: int, drain_grace_ns: int) -> int:
-    grace_rows = math.ceil(drain_grace_ns / INTERVAL_WIDTH_NS)
-    return math.ceil(duration_ns / INTERVAL_WIDTH_NS) + grace_rows + 2
+def _maximum_rows(duration_ns: int, value: dict[str, Any]) -> int:
+    tail_rows = sum(
+        math.ceil(int(value.get(key, 0)) / INTERVAL_WIDTH_NS)
+        for key in ("publisher_drain_ns", "drain_grace_ns")
+    )
+    return math.ceil(duration_ns / INTERVAL_WIDTH_NS) + tail_rows + 2
 
 
 def _validate_fragment(
@@ -87,7 +90,7 @@ def _validate_fragment(
     duration_ns = int(fragment["declared_measurement_duration_ns"])
     if duration_ns <= 0:
         raise ValueError("interval latency duration must be positive")
-    expected_maximum = _maximum_rows(duration_ns, int(fragment.get("drain_grace_ns", 0)))
+    expected_maximum = _maximum_rows(duration_ns, fragment)
     maximum_rows = int(fragment["maximum_rows"])
     rows = fragment["rows"]
     if not isinstance(rows, list) or fragment["row_count"] != len(rows):
@@ -354,8 +357,9 @@ def compose_interval_metrics(
                 "late_arrivals",
             )
         }
-        if "drain_grace_ns" in fragment:
-            artifact["drain_grace_ns"] = fragment["drain_grace_ns"]
+        for key in ("publisher_drain_ns", "drain_grace_ns"):
+            if key in fragment:
+                artifact[key] = fragment[key]
         artifact["sample_unit"] = "interval-within-run"
         sources = {"latency_throughput": fragment_path.name}
         if resource_rows:
@@ -416,7 +420,7 @@ def validate_interval_metrics(path: Path, aggregate_count: int | None = None) ->
         raise ValueError("interval-metrics has invalid schema or clock labels")
     duration_ns = int(value.get("declared_measurement_duration_ns", -1))
     maximum_rows = int(value.get("maximum_rows", -1))
-    if maximum_rows != _maximum_rows(duration_ns, int(value.get("drain_grace_ns", 0))):
+    if maximum_rows != _maximum_rows(duration_ns, value):
         raise ValueError("interval-metrics maximum rows differs from declared duration")
     if int(value.get("late_arrivals", -1)) != 0:
         raise ValueError("interval-metrics contains late arrivals")

@@ -587,6 +587,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// rest as unacked. A run stopped by a signal skips the wait.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long the publisher waits for its event loop to finish after disconnecting.
+const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The longest a publisher that completed its schedule takes to exit after it.
+pub(crate) const EXIT_DRAIN_SECS: u64 = DRAIN_TIMEOUT.as_secs() + DISCONNECT_TIMEOUT.as_secs();
+
 /// What the event-loop task has seen from the broker so far.
 #[derive(Debug, Clone, Copy, Default)]
 struct LinkStats {
@@ -861,7 +867,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         );
     }
     let _disc = client.disconnect().await;
-    if tokio::time::timeout(Duration::from_secs(1), &mut eventloop_task).await.is_err() {
+    if tokio::time::timeout(DISCONNECT_TIMEOUT, &mut eventloop_task).await.is_err() {
         eventloop_task.abort();
     }
     // A failed swap fails the run, but only after the summary is written so
