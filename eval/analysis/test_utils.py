@@ -965,5 +965,26 @@ def test_cross_architecture_validates_each_side_against_its_own_host(
         utils.require_cross_architecture(x86_batch, pi_batch)
 
 
+def test_approved_host_batches_resolve_every_host_from_its_own_entry(
+    fake_results: pathlib.Path,
+):
+    pi_batch = canonical_batch(fake_results)
+    assert utils.approved_host_batches("e-val-1") == {"rpi5": pi_batch}
+
+    write_host_approval(fake_results, "jetson")
+    jetson_batch = fake_results / "eval/results/e-val-1/jetson-batch-a"
+    write_canonical_leaf(jetson_batch / "delay-50ms/run-01-attempt-01", host="jetson")
+    assert utils.approved_host_batches("e-val-1") == {"rpi5": pi_batch, "jetson": jetson_batch}
+
+    write_host_approval(fake_results, "x86")
+    with pytest.raises(FileNotFoundError, match="x86-batch-a"):
+        utils.approved_host_batches("e-val-1")
+
+
+def test_approved_host_batches_are_empty_without_approvals(fake_results: pathlib.Path):
+    (fake_results / "eval/final-batches.json").unlink()
+    assert utils.approved_host_batches("e-val-1") == {}
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

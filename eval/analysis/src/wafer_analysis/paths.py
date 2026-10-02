@@ -91,6 +91,31 @@ def find_canonical_batch(
     raise FileNotFoundError(f"Canonical batch does not exist: {path}")
 
 
+def approved_host_batches(
+    experiment_id: str, results_root: pathlib.Path | str | None = None
+) -> dict[str, pathlib.Path]:
+    """Each host's approved batch of one experiment, by host tag, from eval/final-batches.json.
+
+    Every batch is validated against its own host's entry. A host without an
+    entry is absent, so a replication that has not been approved is missing,
+    never another host's batch.
+    """
+    repo = _find_repo_root()
+    path = repo / "eval/final-batches.json"
+    document = _read_object(path, "eval/final-batches.json") if path.is_file() else {}
+    batches = document.get("batches", {})
+    if not isinstance(batches, dict):
+        raise ValueError(f"malformed {path}: batches must be an object")
+    approved = {}
+    for host in HOST_TAGS:
+        if host in batches:
+            entry = _final_batch(repo, host, "<batch-id>")
+            approved[host] = find_canonical_batch(
+                experiment_id, f"{host}-{entry['batch_id']}", results_root
+            )
+    return approved
+
+
 def find_canonical_ledger(
     batch_id: str, results_root: pathlib.Path | str | None = None
 ) -> pathlib.Path:

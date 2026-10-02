@@ -70,6 +70,13 @@ def _nearest_rank_p95(values) -> float:
     return float(ordered[math.ceil(len(ordered) * 0.95) - 1])
 
 
+TARGET_LOAD_CRITERIA = {
+    "p95_ratio": "e-perf-1-p95-ratio",
+    "loss": "e-perf-1-pooled-loss",
+    "achieved_ratio": "e-perf-1-achieved-ratio",
+}
+
+
 def target_latency_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     """E-Perf-1 latency and delivery per system at the matched 1,000 msg/s target load.
 

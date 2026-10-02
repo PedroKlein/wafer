@@ -35,6 +35,7 @@ from wafer_analysis.canonical import (
     swap4_table,
     swap_phase_table,
     swap_sequence_table,
+    TARGET_LOAD_CRITERIA,
     target_contrast_table,
     target_latency_table,
     validation_gate_table,
@@ -42,6 +43,7 @@ from wafer_analysis.canonical import (
 from wafer_analysis import paths
 from wafer_analysis.focused import admitted_runs
 from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
+from wafer_analysis.verdicts import concordance_table
 
 
 def percentile_runs(conditions: tuple[str, ...], n: int = 30) -> list[dict]:
@@ -190,6 +192,24 @@ def test_contrasts_need_complete_canonical_runs_but_pair_what_a_diagnostic_batch
     assert single["N_pairs"] == 1
     assert pd.isna(single["paired_sd_ns"]) and pd.isna(single["mdd_ns"])
     assert overhead_contrast_table(runs[:2], canonical=False).empty
+
+
+def test_replication_concordance_reads_per_host_target_load_tables() -> None:
+    pi = target_latency_table(percentile_runs(("wafer", "native", "ekuiper")))
+    slower = percentile_runs(("wafer", "native", "ekuiper"))
+    for record in slower:
+        if record["condition"] == "wafer":
+            record["p95_ns"] *= 3
+    tables = {"rpi5": pi, "jetson": target_latency_table(slower), "x86": pi}
+
+    table = concordance_table(tables, TARGET_LOAD_CRITERIA).set_index(["criterion", "condition", "host"])
+
+    assert table.loc[("e-perf-1-p95-ratio", "wafer", "jetson"), "concordance"] == "opposite-direction"
+    assert table.loc[("e-perf-1-p95-ratio", "wafer", "x86"), "concordance"] == "same-verdict"
+    assert table.loc[("e-perf-1-p95-ratio", "wafer", "jetson"), "canonical_verdict"] == "PASS"
+    assert table.loc[("e-perf-1-pooled-loss", "ekuiper", "jetson"), "concordance"] == "same-verdict"
+    assert len(table) == (1 + 3 + 3) * 2
+    assert pi.loc[pi.condition == "wafer", "verdict"].item() == "PASS"
 
 
 def test_target_latency_rejects_missing_delivery_evidence() -> None:
