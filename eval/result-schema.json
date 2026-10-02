@@ -125,6 +125,7 @@
           "alignment_clock_purpose",
           "bucket_width_ns",
           "declared_measurement_duration_ns",
+          "drain_grace_ns",
           "interval_clock",
           "late_arrivals",
           "maximum_rows",

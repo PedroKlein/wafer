@@ -67,6 +67,7 @@ struct IntervalLatencyRow {
 struct IntervalRecorder {
     measurement_start_unix_epoch_ns: u64,
     declared_measurement_duration_ns: u64,
+    drain_grace_ns: u64,
     maximum_rows: usize,
     current_bucket: usize,
     current_histogram: Histogram<u64>,
@@ -79,19 +80,25 @@ struct IntervalRecorder {
 }
 
 impl IntervalRecorder {
-    fn new(measurement_start_unix_epoch_ns: u64, measurement_secs: u64) -> anyhow::Result<Self> {
+    fn new(
+        measurement_start_unix_epoch_ns: u64,
+        measurement_secs: u64,
+        drain_grace_secs: u64,
+    ) -> anyhow::Result<Self> {
         if measurement_secs == 0 {
             anyhow::bail!("interval measurement duration must be positive");
         }
-        let maximum_rows = usize::try_from(measurement_secs)
-            .unwrap_or(usize::MAX)
-            .checked_add(2)
+        let maximum_rows = measurement_secs
+            .checked_add(drain_grace_secs)
+            .and_then(|secs| usize::try_from(secs).ok())
+            .and_then(|rows| rows.checked_add(2))
             .ok_or_else(|| anyhow::anyhow!("interval maximum row count overflow"))?;
         let histogram =
             Histogram::new_with_bounds(LATENCY_LOWEST_NS, LATENCY_HIGHEST_NS, LATENCY_SIG_DIGITS)?;
         Ok(Self {
             measurement_start_unix_epoch_ns,
             declared_measurement_duration_ns: measurement_secs.saturating_mul(INTERVAL_WIDTH_NS),
+            drain_grace_ns: drain_grace_secs.saturating_mul(INTERVAL_WIDTH_NS),
             maximum_rows,
             current_bucket: 0,
             current_histogram: histogram,
@@ -195,6 +202,7 @@ impl IntervalRecorder {
             "alignment_clock_purpose": "cross-process-alignment-only",
             "measurement_start_unix_epoch_ns": self.measurement_start_unix_epoch_ns,
             "declared_measurement_duration_ns": self.declared_measurement_duration_ns,
+            "drain_grace_ns": self.drain_grace_ns,
             "bucket_width_ns": INTERVAL_WIDTH_NS,
             "maximum_rows": self.maximum_rows,
             "row_count": self.rows.len(),
@@ -705,9 +713,13 @@ impl LatencyRecorder {
         &mut self,
         measurement_start_unix_epoch_ns: u64,
         measurement_secs: u64,
+        drain_grace_secs: u64,
     ) -> anyhow::Result<()> {
-        self.intervals =
-            Some(IntervalRecorder::new(measurement_start_unix_epoch_ns, measurement_secs)?);
+        self.intervals = Some(IntervalRecorder::new(
+            measurement_start_unix_epoch_ns,
+            measurement_secs,
+            drain_grace_secs,
+        )?);
         Ok(())
     }
 
@@ -1130,7 +1142,7 @@ mod tests {
     fn out_of_range_latencies_are_recorded_at_a_bound_and_counted() {
         let dir = tempfile::tempdir().unwrap();
         let mut rec = LatencyRecorder::new();
-        rec.enable_intervals(0, 4).unwrap();
+        rec.enable_intervals(0, 4, 0).unwrap();
         let receive_origin = 2 * LATENCY_HIGHEST_NS;
         // (scheduled time relative to receive, value the histograms must get)
         let cases = [
@@ -1454,12 +1466,12 @@ mod tests {
 
     #[test]
     fn interval_recorder_rejects_zero_duration() {
-        assert!(IntervalRecorder::new(0, 0).is_err());
+        assert!(IntervalRecorder::new(0, 0, 0).is_err());
     }
 
     #[test]
     fn one_second_intervals_emit_empty_and_final_partial_rows() {
-        let mut intervals = IntervalRecorder::new(10_000_000_000, 3).unwrap();
+        let mut intervals = IntervalRecorder::new(10_000_000_000, 3, 0).unwrap();
         intervals.record(0, 10_000, false).unwrap();
         intervals.record(2_000_000_000, 30_000, false).unwrap();
         intervals.finalize(2_500_000_000).unwrap();
@@ -1475,7 +1487,7 @@ mod tests {
 
     #[test]
     fn exact_boundary_starts_the_next_interval_without_extra_shutdown_row() {
-        let mut intervals = IntervalRecorder::new(5_000_000_000, 2).unwrap();
+        let mut intervals = IntervalRecorder::new(5_000_000_000, 2, 0).unwrap();
         intervals.record(999_999_999, 10_000, false).unwrap();
         intervals.record(1_000_000_000, 20_000, true).unwrap();
         intervals.finalize(2_000_000_000).unwrap();
@@ -1490,7 +1502,7 @@ mod tests {
 
     #[test]
     fn intervals_bound_cardinality_and_count_late_arrivals() {
-        let mut intervals = IntervalRecorder::new(0, 2).unwrap();
+        let mut intervals = IntervalRecorder::new(0, 2, 0).unwrap();
         let allocated_rows = intervals.rows.capacity();
         intervals.record(1_000_000_000, 10_000, false).unwrap();
         intervals.record(500_000_000, 10_000, false).unwrap();
@@ -1503,14 +1515,30 @@ mod tests {
 
     #[test]
     fn interval_shutdown_beyond_declared_slack_fails_closed() {
-        let mut intervals = IntervalRecorder::new(0, 1).unwrap();
+        let mut intervals = IntervalRecorder::new(0, 1, 0).unwrap();
         intervals.record(0, 10_000, false).unwrap();
         assert!(intervals.finalize(3_000_000_001).is_err());
     }
 
     #[test]
+    fn interval_bound_admits_drain_grace_rows() {
+        let mut intervals = IntervalRecorder::new(0, 1, 2).unwrap();
+        intervals.record(4_500_000_000, 10_000, false).unwrap();
+        intervals.finalize(5_000_000_000).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&intervals.artifact(1).unwrap()).unwrap();
+        assert_eq!(value["declared_measurement_duration_ns"], 1_000_000_000_u64);
+        assert_eq!(value["drain_grace_ns"], 2_000_000_000_u64);
+        assert_eq!(value["maximum_rows"], 5);
+        assert_eq!(value["row_count"], 5);
+        assert!(
+            IntervalRecorder::new(0, 1, 0).unwrap().record(4_500_000_000, 10_000, false).is_err()
+        );
+    }
+
+    #[test]
     fn interval_artifact_has_clock_labels_and_no_per_message_fields() {
-        let mut intervals = IntervalRecorder::new(9_000_000_000, 1).unwrap();
+        let mut intervals = IntervalRecorder::new(9_000_000_000, 1, 0).unwrap();
         intervals.record(0, 10_000, false).unwrap();
         intervals.finalize(1_000_000_000).unwrap();
         let value: serde_json::Value =
@@ -1526,7 +1554,7 @@ mod tests {
 
     #[test]
     fn interval_artifact_rejects_population_mismatch() {
-        let mut intervals = IntervalRecorder::new(0, 1).unwrap();
+        let mut intervals = IntervalRecorder::new(0, 1, 0).unwrap();
         intervals.record(0, 10_000, false).unwrap();
         intervals.finalize(1_000_000_000).unwrap();
         intervals.artifact(2).unwrap_err();
@@ -1549,7 +1577,7 @@ mod tests {
     fn latency_recorder_writes_interval_fragment_on_shutdown() {
         let dir = tempfile::tempdir().unwrap();
         let mut recorder = LatencyRecorder::with_sequence_example_limit(Some(4));
-        recorder.enable_intervals(1_000_000_000, 2).unwrap();
+        recorder.enable_intervals(1_000_000_000, 2, 0).unwrap();
         let payload = br#"{"ts":1000000000,"seq":0}"#;
         recorder.record_json_at(payload, 1_000_010_000, 500_000_000);
         let metadata = SubscriberMetadata {
@@ -1596,7 +1624,7 @@ mod tests {
     fn interval_overflow_keeps_aggregate_artifacts_and_marks_run_partial() {
         let dir = tempfile::tempdir().unwrap();
         let mut recorder = LatencyRecorder::new();
-        recorder.enable_intervals(1_000_000_000, 1).unwrap();
+        recorder.enable_intervals(1_000_000_000, 1, 0).unwrap();
         for (seq, elapsed_ns) in [(0, 0), (1, 5_000_000_000), (2, 5_100_000_000)] {
             let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
             recorder.record_json_at(payload.as_bytes(), 1_000_010_000, elapsed_ns);
@@ -1634,7 +1662,7 @@ mod tests {
     fn interval_population_mismatch_marks_run_partial() {
         let dir = tempfile::tempdir().unwrap();
         let mut recorder = LatencyRecorder::new();
-        recorder.enable_intervals(1_000_000_000, 5).unwrap();
+        recorder.enable_intervals(1_000_000_000, 5, 0).unwrap();
         for (seq, elapsed_ns) in [(0, 0), (1, 1_500_000_000), (2, 500_000_000)] {
             let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
             recorder.record_json_at(payload.as_bytes(), 1_000_010_000, elapsed_ns);
@@ -1681,7 +1709,7 @@ mod tests {
         let interval_dir = tempfile::tempdir().unwrap();
         let mut baseline = LatencyRecorder::with_sequence_example_limit(Some(4));
         let mut interval = LatencyRecorder::with_sequence_example_limit(Some(4));
-        interval.enable_intervals(1_000_000_000, 1).unwrap();
+        interval.enable_intervals(1_000_000_000, 1, 0).unwrap();
         for seq in 0..3 {
             let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
             let elapsed = seq * 100_000_000;

@@ -82,6 +82,11 @@ pub struct SubscribeArgs {
     #[arg(long, default_value_t = 300)]
     pub measurement_secs: u64,
 
+    /// Seconds the harness may keep listening after the publisher finished;
+    /// widens the interval row bound without changing the declared window.
+    #[arg(long, default_value_t = 0)]
+    pub drain_grace_secs: u64,
+
     /// Publisher timing receipt used to bound disruption timestamp capture.
     #[arg(long)]
     pub publisher_timing_receipt: Option<PathBuf>,
@@ -189,7 +194,11 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
 
     let mut recorder = LatencyRecorder::with_sequence_example_limit(args.sequence_example_limit)
         .with_sequence_end(args.sequence_end_exclusive);
-    recorder.enable_intervals(measurement_start_unix_epoch_ns, args.measurement_secs)?;
+    recorder.enable_intervals(
+        measurement_start_unix_epoch_ns,
+        args.measurement_secs,
+        args.drain_grace_secs,
+    )?;
     recorder.anchor_clock(measurement_start_unix_epoch_ns);
     let mut event_buckets = match &args.publisher_timing_receipt {
         Some(path) => {
@@ -446,6 +455,7 @@ mod tests {
             sequence_example_limit: None,
             sequence_end_exclusive: None,
             measurement_secs: 0,
+            drain_grace_secs: 0,
             publisher_timing_receipt: None,
             action_timing_receipt: None,
         };
