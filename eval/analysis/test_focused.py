@@ -4,6 +4,7 @@ import pytest
 from wafer_analysis.focused import (
     admitted_artifacts,
     admitted_runs,
+    depth_run_records,
     evidence_label,
     pending_record,
     percentile_rows,
@@ -81,8 +82,9 @@ def write_target_load_leaf(
     duplicates: int,
     sequence_end: int | None = 60_000,
     sequence_csv: str = "event_type,seq_start,seq_end,count\n",
+    condition: str = "wafer",
 ):
-    leaf = batch / "wafer" / "run-01-attempt-01"
+    leaf = batch / condition / "run-01-attempt-01"
     leaf.mkdir(parents=True)
     (leaf / "canonical-status.json").write_text('{"status":"passed"}')
     (leaf / "percentiles.json").write_text(
@@ -167,6 +169,26 @@ def test_target_load_rows_reject_counter_mismatch(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="counters do not reconcile"):
         target_load_rows(tmp_path)
+
+
+def test_depth_run_records_report_the_loss_of_each_mqtt_depth_run(tmp_path) -> None:
+    write_target_load_leaf(
+        tmp_path, received_events=57_000, received_unique=57_000, duplicates=0, condition="depth-10"
+    )
+
+    assert depth_run_records(tmp_path, canonical=True) == [
+        {
+            "condition": "depth-10",
+            "run_index": 1,
+            "p50_ns": 1,
+            "p95_ns": 2,
+            "received_unique": 57_000,
+            "loss_fraction": 3_000 / 60_000,
+        }
+    ]
+    assert depth_run_records(tmp_path, canonical=False) == [
+        {"condition": "depth-10", "run_index": 1, "p50_ns": 1, "p95_ns": 2}
+    ]
 
 
 def test_evidence_label_exposes_sample_units_and_claim_boundary() -> None:

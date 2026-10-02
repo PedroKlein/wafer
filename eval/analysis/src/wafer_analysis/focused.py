@@ -167,3 +167,28 @@ def target_load_rows(
             }
         )
     return pd.DataFrame(rows)
+
+
+def depth_run_records(batch: Path, *, canonical: bool) -> list[dict]:
+    """One record per admitted MQTT depth run; a canonical run adds its declared-range loss."""
+    if not canonical:
+        return [
+            {
+                "condition": path.relative_to(batch).parts[0],
+                "run_index": run_index(path.parent),
+                "p50_ns": values["p50_ns"],
+                "p95_ns": values["p95_ns"],
+            }
+            for path, values in admitted_artifacts(batch, "percentiles.json")
+        ]
+    return [
+        {
+            "condition": row["condition"],
+            "run_index": run_index(Path(row["run"])),
+            "p50_ns": row["p50_ns"],
+            "p95_ns": row["p95_ns"],
+            "received_unique": row["received_unique"],
+            "loss_fraction": row["loss_fraction"],
+        }
+        for row in target_load_rows(batch).to_dict("records")
+    ]
