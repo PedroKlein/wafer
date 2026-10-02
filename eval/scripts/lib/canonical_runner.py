@@ -3461,18 +3461,19 @@ def write_ekuiper_profile_artifacts(
     interval_end_ns = interval_start_ns + interval_duration_ns
     interval_rows = intervals.get("rows", [])
     interval_row_count = intervals.get("row_count")
+    maximum_rows = intervals.get("maximum_rows")
     if (
-        not measurement_start_ns <= interval_start_ns < measurement_end_ns
+        not measurement_start_ns
+        <= interval_start_ns
+        < measurement_end_ns + MQTT_DRAIN_GRACE_SECS * 1_000_000_000
         or interval_duration_ns != CANDIDATE_MEASUREMENT_SECS * 1_000_000_000
-        or interval_end_ns > measurement_end_ns + 1_000_000_000
         or interval_row_count != len(interval_rows)
-        or not CANDIDATE_MEASUREMENT_SECS
-        <= interval_row_count
-        <= CANDIDATE_MEASUREMENT_SECS + MQTT_DRAIN_GRACE_SECS + 2
+        or type(maximum_rows) is not int
+        or not 1 <= interval_row_count <= maximum_rows
     ):
         raise ValueError("eKuiper profile intervals do not align to the measurement window")
     process_metrics = _ekuiper_profile_process_summary(
-        output, context, interval_start_ns, interval_end_ns
+        output, context, measurement_start_ns, measurement_end_ns
     )
     gc_runtime_metrics = _ekuiper_gctrace_summary(
         output, context, interval_start_ns, interval_end_ns
@@ -3500,6 +3501,7 @@ def write_ekuiper_profile_artifacts(
             "measurement_start_ns": interval_start_ns,
             "measurement_end_ns": interval_end_ns,
             "row_count": intervals["row_count"],
+            "maximum_rows": maximum_rows,
             "path": "interval-metrics.json",
             "sha256": hashlib.sha256((output / "interval-metrics.json").read_bytes()).hexdigest(),
         },

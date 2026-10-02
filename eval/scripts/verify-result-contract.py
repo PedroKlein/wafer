@@ -1186,7 +1186,9 @@ def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
         interval_path = leaf / str(interval["path"])
         if (
             interval.get("clock") != "unix-epoch"
-            or not 60 <= int(interval["row_count"]) <= 62 + MQTT_DRAIN_GRACE_SECS
+            or interval.get("maximum_rows")
+            != json.loads(interval_path.read_text()).get("maximum_rows")
+            or not 1 <= int(interval["row_count"]) <= int(interval["maximum_rows"])
             or int(interval["measurement_end_ns"])
             - int(interval["measurement_start_ns"])
             != 60_000_000_000

@@ -266,6 +266,7 @@ def write_ekuiper_profile_fixture(
                 "measurement_start_unix_epoch_ns": 10_000_000_000,
                 "declared_measurement_duration_ns": 60_000_000_000,
                 "aggregate_latency_count": item.total_messages,
+                "maximum_rows": 73,
                 "row_count": 60,
                 "rows": [
                     {
@@ -431,6 +432,36 @@ def test_ekuiper_profile_artifacts_accept_rows_from_the_drain_grace(tmp_path: Pa
     runtime, _ = runner.write_ekuiper_profile_artifacts(item, output, context)
 
     assert runtime["interval_alignment"]["row_count"] == 66
+
+
+def test_ekuiper_profile_artifacts_accept_a_late_first_measured_message(
+    tmp_path: Path,
+) -> None:
+    item = next(
+        item
+        for item in runner.build_ekuiper_profile_schedule(seed=1729)
+        if item.condition == "rate-08000/profiled" and item.run_index == 1
+    )
+    output = tmp_path / "backlog"
+    context = write_ekuiper_profile_fixture(output, item, process_available=True)
+    intervals = json.loads((output / "interval-metrics.json").read_text())
+    intervals["measurement_start_unix_epoch_ns"] = 17_000_000_000
+    intervals["rows"] = intervals["rows"][:58]
+    intervals["row_count"] = 58
+    (output / "interval-metrics.json").write_text(json.dumps(intervals))
+
+    runtime, _ = runner.write_ekuiper_profile_artifacts(item, output, context)
+
+    assert runtime["interval_alignment"]["measurement_start_ns"] == 17_000_000_000
+    assert runtime["interval_alignment"]["row_count"] == 58
+    assert runtime["interval_alignment"]["maximum_rows"] == 73
+    assert runtime["process_metrics"]["status"] == "available"
+
+    intervals["rows"] = [intervals["rows"][0]] * 74
+    intervals["row_count"] = 74
+    (output / "interval-metrics.json").write_text(json.dumps(intervals))
+    with pytest.raises(ValueError, match="do not align"):
+        runner.write_ekuiper_profile_artifacts(item, output, context)
 
 
 def test_ekuiper_profile_artifacts_gracefully_record_unavailable_process_metrics(

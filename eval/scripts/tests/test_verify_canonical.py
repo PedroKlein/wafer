@@ -2098,7 +2098,7 @@ def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, 
     leaf = tmp_path / state
     leaf.mkdir(parents=True)
     interval = leaf / "interval-metrics.json"
-    interval.write_text('{"aggregate_latency_count":240000}\n')
+    interval.write_text('{"aggregate_latency_count":240000,"maximum_rows":73}\n')
     metadata = {
         "experiment": "e-compare-ekuiper-profile",
         "system": "ekuiper",
@@ -2171,6 +2171,7 @@ def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, 
             "measurement_start_ns": 10_000_000_000,
             "measurement_end_ns": 70_000_000_000,
             "row_count": 60,
+            "maximum_rows": 73,
             "path": interval.name,
             "sha256": hashlib.sha256(interval.read_bytes()).hexdigest(),
         },
@@ -2219,17 +2220,16 @@ def test_ekuiper_profile_verifier_enforces_diagnostic_pairing_and_limitations(
     )
     runtime_path = leaf / "ekuiper-runtime-summary.json"
     runtime = json.loads(runtime_path.read_text())
-    runtime["interval_alignment"]["row_count"] = 61
-    runtime_path.write_text(json.dumps(runtime))
-    assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
-    runtime["interval_alignment"]["row_count"] = 67
-    runtime_path.write_text(json.dumps(runtime))
-    assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
-    runtime["interval_alignment"]["row_count"] = 68
-    runtime_path.write_text(json.dumps(runtime))
-    assert "interval alignment" in " ".join(
-        CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
-    )
+    for row_count in (1, 58, 61, 73):
+        runtime["interval_alignment"]["row_count"] = row_count
+        runtime_path.write_text(json.dumps(runtime))
+        assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
+    for row_count, maximum_rows in ((0, 73), (74, 73), (74, 74)):
+        runtime["interval_alignment"].update(row_count=row_count, maximum_rows=maximum_rows)
+        runtime_path.write_text(json.dumps(runtime))
+        assert "interval alignment" in " ".join(
+            CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
+        )
 
     leaf, metadata = ekuiper_profile_contract_fixture(tmp_path / "invalid", "profiled")
     runtime_path = leaf / "ekuiper-runtime-summary.json"

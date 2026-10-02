@@ -1165,7 +1165,7 @@ def ekuiper_profile_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         interval = record.get("interval_alignment", {})
         if (
             interval.get("clock") != "unix-epoch"
-            or not 60 <= int(interval.get("row_count", 0)) <= 62
+            or not 1 <= int(interval.get("row_count", 0)) <= int(interval.get("maximum_rows", 0))
             or int(interval.get("measurement_end_ns", 0))
             - int(interval.get("measurement_start_ns", 0))
             != 60_000_000_000

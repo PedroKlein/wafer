@@ -524,7 +524,13 @@ starts a one-second external `/proc` sampler bounded to at most 62 rows; it
 stops when the publisher exits, before the drain grace. If
 required process files are unreadable, the run continues and records process
 metrics as unavailable. The unprofiled control must not contain
-`resource-usage.csv`.
+`resource-usage.csv`. The latency intervals start at the first measured
+arrival, so a warmup backlog moves them later and can leave fewer than 60
+rows. The runtime summary's `interval_alignment` records `row_count` and the
+interval file's `maximum_rows`; the run is rejected only when it has no row,
+more rows than that bound, or a first measured arrival outside the publisher's
+window plus the drain grace. The process sampler is checked against
+`measurement-window.json`, the window it sampled.
 
 The profiled arm also starts eKuiper with `GODEBUG=gctrace=1`, through the
 runtime drop-in `/run/systemd/system/kuiper.service.d/wafer-gctrace.conf`
