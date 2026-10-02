@@ -22,7 +22,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,6 +50,7 @@ from attempts import (
     sut_outcome_reasons,
 )
 from backpressure import validate_backpressure_result
+from capacity_brackets import derive_bracket_rates, frozen_bracket_rates
 from rollback import (
     build_post_rollback_continuity,
     build_swap5_rollback,
@@ -477,7 +478,9 @@ def validate_candidate_capacity_run_result(result: dict) -> None:
         raise ValueError("candidate capacity achieved ratio differs from counters")
 
 
-def validate_capacity_run_result(result: dict) -> None:
+def validate_capacity_run_result(
+    result: dict, rate_points: Collection[int] = RATE_SWEEP_RATES
+) -> None:
     required = {
         "schema_version", "batch_class", "experiment", "thesis_evidence", "system",
         "rate_msg_s", "run_index", "source_git_sha", "source_dirty", "measurement_duration_ns",
@@ -502,8 +505,8 @@ def validate_capacity_run_result(result: dict) -> None:
     }
     if set(result["controlled_factors"]) != controlled_fields:
         raise ValueError("capacity-run controlled factors are incomplete")
-    if result["rate_msg_s"] not in RATE_SWEEP_RATES:
-        raise ValueError("capacity-run result rate is outside the frozen grid")
+    if result["rate_msg_s"] not in rate_points:
+        raise ValueError("capacity-run result rate is outside the batch's rate points")
     run_index = result.get("run_index")
     if type(run_index) is not int or not 1 <= run_index <= RATE_SWEEP_REPETITIONS:
         raise ValueError("capacity-run run_index is outside the frozen repetitions")
@@ -567,8 +570,10 @@ def validate_capacity_run_result(result: dict) -> None:
             raise ValueError(f"capacity-run {receipt} receipt has invalid sha256")
 
 
-def verify_capacity_result_files(output: Path, result: dict) -> None:
-    validate_capacity_run_result(result)
+def verify_capacity_result_files(
+    output: Path, result: dict, rate_points: Collection[int] = RATE_SWEEP_RATES
+) -> None:
+    validate_capacity_run_result(result, rate_points)
     expected_paths = {
         "latency_hdr": "latency.hdr",
         "process_audit": "process-audit.json",
@@ -713,21 +718,24 @@ def estimate_candidate_capacity_envelope(runs_by_system: dict[str, list[dict]]) 
 def estimate_capacity_envelope(
     runs_by_system: dict[str, list[dict]],
     outcome_runs: dict[tuple[str, int], int] | None = None,
+    bracket_rates: Sequence[int] = (),
 ) -> dict:
     """Capacity envelope from passed runs and the runs each system under test failed.
 
     ``outcome_runs`` counts admitted outcome runs per (system, rate); they hold no
-    capacity result but complete the rate and make it delivery-bad.
+    capacity result but complete the rate and make it delivery-bad. ``bracket_rates``
+    are the host's frozen rates beside the common grid.
     """
     outcome_runs = outcome_runs or {}
+    rate_points = sorted({*RATE_SWEEP_RATES, *bracket_rates})
     if set(runs_by_system) != set(RATE_SWEEP_SYSTEMS):
         raise ValueError("capacity envelope requires all four frozen systems")
     by_system_rate: dict[str, dict[int, list[dict]]] = {}
     for system, runs in runs_by_system.items():
-        by_rate = {rate: [] for rate in RATE_SWEEP_RATES}
+        by_rate = {rate: [] for rate in rate_points}
         seen_runs: set[tuple[int, int]] = set()
         for run in runs:
-            validate_capacity_run_result(run)
+            validate_capacity_run_result(run, rate_points)
             if run["system"] != system:
                 raise ValueError("capacity run stored under the wrong system")
             identity = (run["rate_msg_s"], run["run_index"])
@@ -745,10 +753,10 @@ def estimate_capacity_envelope(
             RATE_SWEEP_REPETITIONS,
             outcome_runs.get(("mqtt-loopback", rate), 0),
         )[0]
-        for rate in RATE_SWEEP_RATES
+        for rate in rate_points
     }
     first_support_bad = next(
-        (rate for rate in RATE_SWEEP_RATES if mqtt_classifications[rate] == "bad"), None
+        (rate for rate in rate_points if mqtt_classifications[rate] == "bad"), None
     )
     systems = {}
     for system in RATE_SWEEP_SYSTEMS:
@@ -761,7 +769,7 @@ def estimate_capacity_envelope(
             else None
         )
         rates = []
-        for rate in RATE_SWEEP_RATES:
+        for rate in rate_points:
             rate_runs = by_system_rate[system][rate]
             failed_runs = outcome_runs.get((system, rate), 0)
             classification = _classify_delivery_runs(
@@ -828,7 +836,7 @@ def estimate_capacity_envelope(
         good_rates = [entry["rate_msg_s"] for entry in rates if entry["classification"] == "good"]
         highest_good = max(good_rates, default=None)
         if highest_good is None:
-            ceiling_censoring = f"left-censored-below-{RATE_SWEEP_RATES[0]}"
+            ceiling_censoring = f"left-censored-below-{rate_points[0]}"
         elif non_monotonic:
             ceiling_censoring = "non-monotonic"
         elif system != "mqtt-loopback" and first_support_bad is not None:
@@ -859,7 +867,7 @@ def estimate_capacity_envelope(
             if system != "mqtt-loopback" and first_support_bad is not None:
                 knee_censoring += "-by-support-path"
         else:
-            knee_censoring = f"left-censored-below-{RATE_SWEEP_RATES[0]}"
+            knee_censoring = f"left-censored-below-{rate_points[0]}"
 
         systems[system] = {
             "complete": all(
@@ -870,9 +878,9 @@ def estimate_capacity_envelope(
             "support_censoring": {
                 "from_rate_msg_s": first_support_bad,
                 "highest_support_uncensored_rate_msg_s": (
-                    max((rate for rate in RATE_SWEEP_RATES if first_support_bad is None or rate < first_support_bad), default=None)
+                    max((rate for rate in rate_points if first_support_bad is None or rate < first_support_bad), default=None)
                     if system != "mqtt-loopback"
-                    else max(RATE_SWEEP_RATES)
+                    else max(rate_points)
                 ),
             },
             "delivery_ceiling": {"rate_msg_s": highest_good, "censoring": ceiling_censoring},
@@ -885,7 +893,8 @@ def estimate_capacity_envelope(
         "thesis_evidence": True,
         "sample_unit": "run",
         "required_runs_per_rate": RATE_SWEEP_REPETITIONS,
-        "rate_points_msg_s": list(RATE_SWEEP_RATES),
+        "rate_points_msg_s": list(rate_points),
+        "bracket_rate_points_msg_s": sorted(bracket_rates),
         "systems": systems,
     }
 
@@ -2470,6 +2479,17 @@ def _capacity_knee_config(system: str) -> str:
     return CAPACITY_KNEE_PROFILE if system == "mqtt-loopback" else _rate_sweep_config(system)
 
 
+def _rate_sweep_condition(system: str, rate: int) -> Condition:
+    return Condition(
+        f"{system}/rate-{rate:05d}",
+        _rate_sweep_config(system),
+        RATE_SWEEP_PROFILE,
+        system=system,
+        offered_rate_msg_s=rate,
+        exclusive_sut=True,
+    )
+
+
 CONDITIONS: dict[str, tuple[Condition, ...]] = {
     "e-perf-1": tuple(
         Condition(
@@ -2486,14 +2506,7 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
         for system in ("wafer", "native", "ekuiper")
     ),
     "e-perf-10": tuple(
-        Condition(
-            f"{system}/rate-{rate:05d}",
-            _rate_sweep_config(system),
-            RATE_SWEEP_PROFILE,
-            system=system,
-            offered_rate_msg_s=rate,
-            exclusive_sut=True,
-        )
+        _rate_sweep_condition(system, rate)
         for system in RATE_SWEEP_SYSTEMS
         for rate in RATE_SWEEP_RATES
     ),
@@ -2741,7 +2754,10 @@ def _capacity_knee_rate_order(seed: int, run_index: int) -> list[int]:
     return rates[offset:] + rates[:offset]
 
 
-def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
+def build_schedule(
+    experiments: set[str], seed: int, bracket_rates: Sequence[int] = ()
+) -> list[RunItem]:
+    """The batch schedule, with the host's E-Perf-10 ``bracket_rates`` beside the common grid."""
     unknown = experiments - CONDITIONS.keys()
     if unknown:
         raise ValueError(f"unsupported experiments: {', '.join(sorted(unknown))}")
@@ -2770,6 +2786,7 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
         for entry in matrix_document["final_campaign"]["wafer_config_catalog"]
     }
     schedule: list[RunItem] = []
+    rate_sweep_rates = sorted({*RATE_SWEEP_RATES, *bracket_rates})
 
     for experiment in (item for item in EXPERIMENT_ORDER if item in experiments):
         definition = (
@@ -2778,6 +2795,22 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
             else final_experiments[experiment]
         )
         conditions = CONDITIONS[experiment]
+        if experiment == "e-perf-10":
+            conditions = tuple(
+                _rate_sweep_condition(system, rate)
+                for system in RATE_SWEEP_SYSTEMS
+                for rate in rate_sweep_rates
+            )
+            # The catalog cannot list per-host rates; they take the config it gives every
+            # common-grid WAFER rate.
+            catalog = {
+                wafer_configs[(experiment, f"wafer/rate-{rate:05d}")] for rate in RATE_SWEEP_RATES
+            }
+            if len(catalog) != 1:
+                raise ValueError("the e-perf-10 WAFER rates of the config catalog differ")
+            wafer_configs.update(
+                {(experiment, f"wafer/rate-{rate:05d}"): next(iter(catalog)) for rate in bracket_rates}
+            )
         for run_index in range(1, definition["repetitions"] + 1):
             if experiment == "e-perf-9":
                 ordered = list(conditions)
@@ -2789,12 +2822,12 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
                 rate_grid = (
                     CAPACITY_KNEE_GRID
                     if experiment == CAPACITY_KNEE_EXPERIMENT
-                    else {system: RATE_SWEEP_RATES for system in RATE_SWEEP_SYSTEMS}
+                    else {system: rate_sweep_rates for system in RATE_SWEEP_SYSTEMS}
                 )
                 rates = (
                     _capacity_knee_rate_order(seed, run_index)
                     if experiment == CAPACITY_KNEE_EXPERIMENT
-                    else list(RATE_SWEEP_RATES)
+                    else list(rate_sweep_rates)
                 )
                 if experiment == "e-perf-10":
                     random.Random(f"{seed}:{experiment}:{run_index}:rates").shuffle(rates)
@@ -5320,14 +5353,15 @@ def _write_capacity_result(
             result["n30_admitted"] = False
             validate_candidate_capacity_run_result(result)
         else:
-            validate_capacity_run_result(result)
+            # The batch's frozen schedule, not the common grid alone, chose this rate.
+            validate_capacity_run_result(result, (item.offered_rate_msg_s,))
         name = "capacity-run.json"
     else:
         validate_capacity_scout_result(result)
         name = "capacity-scout.json"
     (output / name).write_text(json.dumps(result, indent=2) + "\n")
     if final:
-        verify_capacity_result_files(output, result)
+        verify_capacity_result_files(output, result, (item.offered_rate_msg_s,))
     return result
 
 
@@ -6662,6 +6696,14 @@ def summarize_capacity_knee(root: Path, batch_id: str) -> Path:
 def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
     layout = results_layout(root)
     result_root = layout.raw_path("e-perf-10", batch_name(batch_id))
+    ledger = layout.manifest_path("canonical-batches", batch_name(batch_id))
+    batch = json.loads((ledger / "batch.json").read_text())
+    bracket_rates = (
+        frozen_bracket_rates(batch, json.loads(CANONICAL_MATRIX_PATH.read_text()))
+        if batch.get("capacity_brackets") is not None
+        else []
+    )
+    rate_points = {*RATE_SWEEP_RATES, *bracket_rates}
     by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
     for path in result_root.rglob("capacity-run.json"):
         status_path = path.parent / "canonical-status.json"
@@ -6669,7 +6711,7 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
             if json.loads(status_path.read_text()).get("status") != "passed":
                 continue
             result = json.loads(path.read_text())
-            validate_capacity_run_result(result)
+            validate_capacity_run_result(result, rate_points)
         except (OSError, ValueError, KeyError, TypeError):
             continue
         by_system[result["system"]].append(result)
@@ -6679,7 +6721,7 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
             system, rate = unit.condition.split("/rate-")
             outcomes[(system, int(rate))] += 1
     summary = {
-        **estimate_capacity_envelope(by_system, outcomes),
+        **estimate_capacity_envelope(by_system, outcomes, bracket_rates),
         "batch_id": batch_id,
         "criteria": {
             "max_pooled_loss": RATE_SWEEP_MAX_LOSS_PERCENT / 100,
@@ -6687,7 +6729,7 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
             "normalized_p99_knee_multiplier": RATE_SWEEP_P99_MULTIPLIER,
         },
     }
-    path = layout.manifest_path("canonical-batches", batch_name(batch_id), "rate-sweep-summary.json")
+    path = ledger / "rate-sweep-summary.json"
     path.write_text(json.dumps(summary, indent=2) + "\n")
     return path
 
@@ -6812,9 +6854,20 @@ def approve_batch(root: Path, layout: ResultsLayout, batch_id: str) -> None:
     matrix_sha256 = hashlib.sha256(CANONICAL_MATRIX_PATH.read_bytes()).hexdigest()
     if batch.get("canonical_matrix_sha256") != matrix_sha256:
         raise ValueError("the batch ran with a different eval/canonical-matrix.json than this checkout")
+    bracket_rates = frozen_bracket_rates(batch, json.loads(CANONICAL_MATRIX_PATH.read_text()))
+    recorded = batch["capacity_brackets"]
+    if bracket_origin(capacity_brackets(layout, recorded["scout_batch_id"])) != bracket_origin(
+        recorded
+    ):
+        raise ValueError(
+            f"the bracket rates in batch.json no longer follow from {recorded['scout_summary']}"
+        )
     schedule = [RunItem(**item) for item in json.loads((ledger / "schedule.json").read_text())]
-    if schedule != build_schedule(parse_experiments("all"), int(batch["seed"])):
-        raise ValueError(f"schedule.json is not the full schedule for seed {batch['seed']}")
+    if schedule != build_schedule(parse_experiments("all"), int(batch["seed"]), bracket_rates):
+        raise ValueError(
+            f"schedule.json is not the full schedule for seed {batch['seed']} and bracket "
+            f"rates {bracket_rates}"
+        )
     evidence = [(item, finished_evidence(layout, name, item)) for item in schedule]
     pending = [item.result_key for item, path in evidence if path is None]
     if pending:
@@ -6860,6 +6913,7 @@ def approve_batch(root: Path, layout: ResultsLayout, batch_id: str) -> None:
         )
 
     manifest = ledger / "raw.sha256"
+    scout_summary = scout_summary_path(layout, recorded["scout_batch_id"])
     directories = {ledger} | {
         layout.manifest_path("aliases", item.experiment, name)
         if item.shared_from
@@ -6867,12 +6921,15 @@ def approve_batch(root: Path, layout: ResultsLayout, batch_id: str) -> None:
         for item in schedule
     }
     files = sorted(
-        (layout.relative(path), path)
-        for directory in directories
-        for path in directory.rglob("*")
-        if path.is_file()
-        and path != manifest
-        and not any(part.startswith(".") for part in path.relative_to(directory).parts)
+        [
+            (layout.relative(path), path)
+            for directory in directories
+            for path in directory.rglob("*")
+            if path.is_file()
+            and path != manifest
+            and not any(part.startswith(".") for part in path.relative_to(directory).parts)
+        ]
+        + [(layout.relative(scout_summary), scout_summary)]
     )
     lines = []
     for relative, path in files:
@@ -7181,6 +7238,55 @@ def run_capacity_scout_item_with_timeout(root: Path, batch_id: str, item: RunIte
         signal.signal(signal.SIGALRM, previous)
 
 
+def scout_summary_path(layout: ResultsLayout, scout_batch_id: str) -> Path:
+    return layout.manifest_path("capacity-scout", batch_name(scout_batch_id), "scout-complete.json")
+
+
+def capacity_brackets(layout: ResultsLayout, scout_batch_id: str) -> dict:
+    """The E-Perf-10 bracket rates this host's finished capacity scout gives."""
+    path = scout_summary_path(layout, scout_batch_id)
+    try:
+        content = path.read_bytes()
+        rates = derive_bracket_rates(
+            json.loads(content), json.loads(CANONICAL_MATRIX_PATH.read_text())
+        )
+    except (AttributeError, OSError, TypeError, ValueError) as error:
+        raise ValueError(
+            f"no usable capacity scout summary at {layout.relative(path)}: {error}. "
+            "E-Perf-10 takes its bracket rates from this host's finished scout; run "
+            f"--capacity-scout --batch-id {scout_batch_id} --host {HOST.tag} to the end first"
+        ) from error
+    return {
+        "scout_batch_id": scout_batch_id,
+        "scout_summary": layout.relative(path),
+        "scout_summary_sha256": hashlib.sha256(content).hexdigest(),
+        "rates_msg_s": rates,
+    }
+
+
+def bracket_origin(brackets: dict | None) -> tuple | None:
+    if brackets is None:
+        return None
+    return tuple(
+        brackets.get(field) for field in ("scout_batch_id", "scout_summary_sha256", "rates_msg_s")
+    )
+
+
+def bracket_additions(schedule: list[RunItem], rates: list[int]) -> dict:
+    """The leaves and nominal run time the bracket rates add to the common schedule."""
+    added = [
+        item
+        for item in schedule
+        if item.experiment == "e-perf-10" and item.offered_rate_msg_s in rates
+    ]
+    return {
+        "added_measured_leaves": len(added),
+        "added_nominal_hours": round(
+            sum(item.warmup_secs + item.measurement_secs for item in added) / 3600, 2
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run resumable canonical evaluations on one host")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
@@ -7192,6 +7298,11 @@ def main() -> int:
     )
     parser.add_argument("--capacity-scout", action="store_true")
     parser.add_argument("--batch-id")
+    parser.add_argument(
+        "--scout-batch-id",
+        help="finished capacity scout of this host whose summary sets the E-Perf-10 bracket "
+        "rates; a final batch with E-Perf-10 needs it, a resumed batch reuses its own",
+    )
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--execute", action="store_true")
@@ -7249,23 +7360,14 @@ def main() -> int:
                 raise ValueError(f"capacity-scout seed must be {CAPACITY_SCOUT_SEED}")
             if not args.batch_id:
                 raise ValueError("--capacity-scout requires --batch-id")
+            if args.scout_batch_id:
+                raise ValueError("--scout-batch-id cannot be combined with --capacity-scout")
             schedule = []
             experiments = {"capacity-scout"}
         else:
             experiments = parse_experiments(args.experiments)
-            schedule = build_schedule(experiments, args.seed)
-            if args.repetitions is not None:
-                frozen = max(item.run_index for item in schedule)
-                if not 1 <= args.repetitions < frozen:
-                    raise ValueError(
-                        f"--repetitions must be at least 1 and below the frozen {frozen}; "
-                        "omit it for a final batch"
-                    )
-                schedule = [
-                    item
-                    for item in schedule
-                    if item.run_index <= args.repetitions and not item.shared_from
-                ]
+            if args.scout_batch_id and "e-perf-10" not in experiments:
+                raise ValueError("--scout-batch-id applies only to a batch that runs e-perf-10")
     except (KeyError, OSError, TypeError, ValueError) as error:
         parser.error(str(error))
 
@@ -7395,7 +7497,67 @@ def main() -> int:
         )
         return 0
 
+    ledger_group = (
+        "candidate-batches"
+        if experiments <= EXECUTABLE_CANDIDATE_EXPERIMENTS
+        else "canonical-batches"
+    )
+    ledger = layout.manifest_path(ledger_group, batch_name(batch_id))
+    batch_path = ledger / "batch.json"
+    started = json.loads(batch_path.read_text()) if batch_path.is_file() else None
+    thesis_evidence = ledger_group == "canonical-batches" and args.repetitions is None
+    brackets = None
+    if "e-perf-10" in experiments:
+        recorded = (started or {}).get("capacity_brackets")
+        scout_batch_id = args.scout_batch_id or (recorded or {}).get("scout_batch_id")
+        try:
+            brackets = capacity_brackets(layout, scout_batch_id) if scout_batch_id else None
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+        if started is not None and bracket_origin(brackets) != bracket_origin(recorded):
+            print(
+                f"error: batch {batch_name(batch_id)} froze E-Perf-10 bracket rates "
+                f"{bracket_origin(recorded)} as (scout batch, summary SHA-256, rates); "
+                f"this resume gives {bracket_origin(brackets)}. A batch keeps the bracket "
+                "rates it started with, so start a new batch id",
+                file=sys.stderr,
+            )
+            return 2
+    try:
+        schedule = build_schedule(
+            experiments, args.seed, brackets["rates_msg_s"] if brackets else ()
+        )
+        if args.repetitions is not None:
+            frozen = max(item.run_index for item in schedule)
+            if not 1 <= args.repetitions < frozen:
+                raise ValueError(
+                    f"--repetitions must be at least 1 and below the frozen {frozen}; "
+                    "omit it for a final batch"
+                )
+            schedule = [
+                item
+                for item in schedule
+                if item.run_index <= args.repetitions and not item.shared_from
+            ]
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        parser.error(str(error))
+    if brackets is not None:
+        brackets.update(bracket_additions(schedule, brackets["rates_msg_s"]))
+
     print_plan(schedule, args.seed, batch_id)
+    if brackets is not None:
+        print(
+            f"BRACKETS e-perf-10 rates={brackets['rates_msg_s']} "
+            f"scout={brackets['scout_summary']} sha256={brackets['scout_summary_sha256']} "
+            f"added_measured_leaves={brackets['added_measured_leaves']} "
+            f"added_nominal_hours={brackets['added_nominal_hours']}"
+        )
+    elif "e-perf-10" in experiments:
+        print(
+            "NOTE e-perf-10 runs the common grid only; --scout-batch-id adds this host's "
+            "bracket rates"
+        )
     if args.repetitions is not None:
         print(f"DIAGNOSTIC repetitions={args.repetitions}: not thesis evidence")
     if args.dry_run:
@@ -7404,12 +7566,6 @@ def main() -> int:
     if args.repetitions is not None:
         os.environ[DIAGNOSTIC_REPETITIONS_ENV] = str(args.repetitions)
 
-    ledger_group = (
-        "candidate-batches"
-        if experiments <= EXECUTABLE_CANDIDATE_EXPERIMENTS
-        else "canonical-batches"
-    )
-    ledger = layout.manifest_path(ledger_group, batch_name(batch_id))
     if (ledger / "raw.sha256").is_file():
         print(
             f"error: batch {batch_name(batch_id)} is approved and its files are sealed by "
@@ -7432,7 +7588,6 @@ def main() -> int:
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-    thesis_evidence = ledger_group == "canonical-batches" and args.repetitions is None
     if thesis_evidence and source["git_dirty"]:
         print(
             f"error: final batch {batch_name(batch_id)} needs a clean source tree; commit or "
@@ -7441,9 +7596,7 @@ def main() -> int:
         )
         return 2
     matrix_sha256 = hashlib.sha256(CANONICAL_MATRIX_PATH.read_bytes()).hexdigest()
-    batch_path = ledger / "batch.json"
-    if batch_path.is_file():
-        started = json.loads(batch_path.read_text())
+    if started is not None:
         if (started.get("source_git_sha"), started.get("canonical_matrix_sha256")) != (
             source["git_sha"],
             matrix_sha256,
@@ -7457,6 +7610,15 @@ def main() -> int:
             )
             return 2
     else:
+        if thesis_evidence and "e-perf-10" in experiments and brackets is None:
+            print(
+                f"error: final batch {batch_name(batch_id)} cannot start E-Perf-10 without "
+                f"the {HOST.tag} capacity scout that sets its bracket rates; run "
+                f"--capacity-scout --batch-id <scout-id> --host {HOST.tag} to the end on this "
+                "host, then start the batch with --scout-batch-id <scout-id>",
+                file=sys.stderr,
+            )
+            return 2
         atomic_write_json(
             batch_path,
             {
@@ -7471,6 +7633,7 @@ def main() -> int:
                 "repetitions": args.repetitions,
                 "thesis_evidence": thesis_evidence,
                 "started_at": utc_now(),
+                **({"capacity_brackets": brackets} if "e-perf-10" in experiments else {}),
             },
         )
     schedule_path.write_text(schedule_json)
