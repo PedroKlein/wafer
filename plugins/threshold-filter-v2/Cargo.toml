@@ -1,0 +1,19 @@
+[package]
+name = "wafer-threshold-filter-v2"
+version = "0.2.0"
+edition = "2024"
+description = "Threshold filter v2 for the E-Swap-3 hot-swap arm - filter-node world"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+wafer-plugin = { path = "../../crates/wafer-plugin" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"
