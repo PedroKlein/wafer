@@ -43,8 +43,8 @@ Required:
 
 Common options:
   --host <tag>               Host tag (default: shakedown-macos). Whitelist:
-                             shakedown-macos, rpi5, rpi4, jetson, x86.
-                             `rpi5` is canonical; `rpi4` is retained for legacy data.
+                             shakedown-macos, rpi5, jetson, x86.
+                             `rpi5` is canonical.
   --loadgen-profile <path>   TOML profile for wafer-loadgen publish. Required
                              when config uses an MQTT source.
   --subscribe-topic <topic>  Topic for wafer-loadgen subscribe. Auto-detected
