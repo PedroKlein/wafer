@@ -161,6 +161,10 @@ printf 'runtime\n' >>"${ORDER_LOG:?}"
 if [ -n "${FAKE_RUNTIME_EXIT:-}" ]; then
   exit "$FAKE_RUNTIME_EXIT"
 fi
+if [ -n "${FAKE_RUNTIME_SERVES:-}" ]; then
+  trap 'exit 0' TERM
+  while :; do sleep 0.1; done
+fi
 cat >"${WAFER_STARTUP_OUTPUT:?}" <<JSON
 {
   "schema_version": 1,
@@ -284,5 +288,96 @@ assert json.load(open(sys.argv[1]))["exit_codes"]["wafer_runtime"] == 134
 PY
   grep -q 'wafer-runtime exited with 134 before the run finished' "$tmp/crash.log"
 done
+
+cat >"$harness_root/eval/canonical-matrix.json" <<'JSON'
+{"final_campaign": {"mqtt_drain_grace_secs": 1}}
+JSON
+cat >"$harness_root/eval/mqtt.toml" <<'TOML'
+[pipeline]
+name = "mqtt-run-end-test"
+
+[nodes.source]
+type = "source"
+kind = "mqtt"
+topic = "wafer/telemetry"
+
+[nodes.sink]
+type = "sink"
+kind = "mqtt"
+topic = "wafer/telemetry/hot"
+
+[[edges]]
+from = "source"
+to = "sink"
+TOML
+cat >"$harness_root/target/release/wafer-loadgen" <<'PY'
+#!/usr/bin/env python3
+import os
+import signal
+import sys
+import time
+
+
+def note(text):
+    with open(os.environ["LOADGEN_LOG"], "a") as stream:
+        stream.write(text + "\n")
+
+
+note(" ".join(sys.argv[1:]))
+if sys.argv[1] == "publish":
+    if "--summary-file" in sys.argv:
+        time.sleep(1)
+        note(f"publisher-exit {time.time()}")
+    sys.exit(0)
+
+
+def stop(signum, frame):
+    note(f"{signal.Signals(signum).name} {time.time()}")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, stop)
+signal.signal(signal.SIGTERM, stop)
+while True:
+    time.sleep(0.05)
+PY
+started=$SECONDS
+ORDER_LOG="$tmp/mqtt-order.log" LOADGEN_LOG="$tmp/loadgen.log" FAKE_RUNTIME_SERVES=1 \
+"$harness_root/eval/scripts/run-experiment.sh" \
+  --config "$harness_root/eval/mqtt.toml" \
+  --experiment e-perf-1 \
+  --host shakedown-macos \
+  --broker 127.0.0.1:1883 \
+  --loadgen-profile "$harness_root/eval/mqtt.toml" \
+  --warmup-secs 1 \
+  --total-messages 100 \
+  --measurement-secs 1 \
+  --duration 8 \
+  --skip-build \
+  --output-dir "$tmp/mqtt-result" >"$tmp/mqtt-run.log" 2>&1
+[ $((SECONDS - started)) -lt 7 ] \
+  || { echo 'subscriber was not stopped by the drain grace' >&2; cat "$tmp/loadgen.log" >&2; exit 1; }
+python3 - "$tmp/loadgen.log" "$tmp/mqtt-result" <<'PY'
+import sys
+
+lines = open(sys.argv[1]).read().splitlines()
+output = sys.argv[2]
+warmup = next(line.split() for line in lines if line.startswith("publish") and "--duration-secs" in line)
+publisher = next(line.split() for line in lines if line.startswith("publish") and "--summary-file" in line)
+subscriber = next(line.split() for line in lines if line.startswith("subscribe"))
+assert warmup[warmup.index("--sequence-start") + 1] == "100", warmup
+assert publisher[publisher.index("--summary-file") + 1] == f"{output}/publisher-summary.json"
+for flag, value in (
+    ("--total-messages", "100"),
+    ("--sequence-end-exclusive", "100"),
+    ("--drain-grace-secs", "1"),
+    ("--sequence-example-limit", "1024"),
+):
+    assert subscriber[subscriber.index(flag) + 1] == value, (flag, subscriber)
+stops = [line.split() for line in lines if line.startswith(("SIGINT", "SIGTERM"))]
+assert [stop[0] for stop in stops] == ["SIGINT"], lines
+exited = float(next(line.split()[1] for line in lines if line.startswith("publisher-exit")))
+assert 1.0 <= float(stops[0][1]) - exited <= 2.5, lines
+PY
 
 echo 'canonical run-experiment tests: PASS'
