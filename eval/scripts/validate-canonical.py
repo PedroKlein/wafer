@@ -40,6 +40,16 @@ REQUIRED_FIELDS = {
     "evidence_class",
 }
 FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
+FINAL_CAPACITY_BRACKET_RULE = {
+    "ceiling_multipliers": [0.95, 1.05],
+    "competitive_threshold": "e-perf-10-competitive-ratio",
+    "step_msg_s": 100,
+    "max_extra_rates": 6,
+}
+CAPACITY_BRACKET_RULE_TEXT = {
+    "purpose", "source", "scout_ceiling", "decision_points", "rounding", "max_rate",
+    "selection", "runs_per_rate",
+}
 FINAL_SCHEDULE_RECORDS = 2_321
 FINAL_MEASURED_LEAVES = 2_091
 PAYLOAD_SIZES = ("120b", "1kb", "10kb", "100kb")
@@ -361,7 +371,8 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("final_campaign seed must be 1729")
     if campaign.get("thesis_evidence") is not True:
         errors.append("final_campaign thesis_evidence must be true")
-    grid = campaign.get("capacity_grid", {})
+    grid = dict(campaign.get("capacity_grid", {}))
+    bracket_rule = grid.pop("bracket_rates", None)
     if grid != {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -369,6 +380,16 @@ def validate_matrix(matrix: dict) -> list[str]:
         "common_rate_points_msg_s": FINAL_CAPACITY_RATES,
     }:
         errors.append("final_campaign capacity grid differs from the frozen scout-derived grid")
+    if (
+        not isinstance(bracket_rule, dict)
+        or set(bracket_rule) != FINAL_CAPACITY_BRACKET_RULE.keys() | CAPACITY_BRACKET_RULE_TEXT
+        or any(bracket_rule[field] != value for field, value in FINAL_CAPACITY_BRACKET_RULE.items())
+        or any(
+            not isinstance(bracket_rule[field], str) or not bracket_rule[field]
+            for field in CAPACITY_BRACKET_RULE_TEXT
+        )
+    ):
+        errors.append("final_campaign capacity bracket rule differs from the frozen per-host rule")
     metering = campaign.get("canonical_metering", {})
     if metering != {
         "policy": "explicit-fuel-and-epoch",

@@ -7,6 +7,7 @@ thesis figures and tables. It is a `uv` project: `uv sync`, then
 | Path | Role |
 |---|---|
 | `src/wafer_analysis/backpressure.py`, `rollback.py`, `results_layout.py` | Result validators and layout helpers. The campaign runner imports all three and the verifier imports `results_layout.py`, so they are part of the measurement path. |
+| `src/wafer_analysis/capacity_brackets.py` | Derives a host's E-Perf-10 bracket rates from its capacity scout summary and reads them back from `batch.json`. The campaign runner and the canonical analysis gate both use it. |
 | `src/wafer_analysis/canonical.py` | Final N=30 tables (target latency, metering, capacity knee, backpressure, swaps). |
 | `src/wafer_analysis/verdicts.py` | Reads the declared thresholds from `eval/canonical-matrix.json` and turns one-sided bootstrap bounds or exact counts into `PASS`, `FAIL`, `INCONCLUSIVE` or `PENDING`. |
 | `src/wafer_analysis/paths.py`, `focused.py`, `plots.py`, `tables.py`, `stats.py` | Batch resolution, evidence labels, thesis matplotlib style, table export, bootstrap CI and Cliff's delta. |

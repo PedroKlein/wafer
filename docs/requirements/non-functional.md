@@ -8,7 +8,7 @@ This reference lists the current quantitative requirements. The narrative explan
 |---|---|---|---|
 | NFR-PERF-1 | Typed Wasm boundary cost is bounded. | Median paired WAFER-minus-native service time of an empty pass-through hop < 50 µs on Raspberry Pi 5, on the in-process path. | E-Perf-4 |
 | NFR-PERF-2 | Matched target-load latency and delivery are bounded against eKuiper. | At 1,000 msg/s: pooled loss <= 1 percent, mean achieved/offered >= 0.99, median WAFER p95 / median eKuiper p95 <= 2.0. | E-Perf-1 |
-| NFR-PERF-3 | Gateway capacity is measured on one common grid. | Report each system's delivery ceiling, bracketed by tested rates, and the normalized p99 knee on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. WAFER's tested-grid delivery ceiling is at least 0.70 of eKuiper's across the whole bracketed ratio interval. | E-Perf-10 |
+| NFR-PERF-3 | Gateway capacity is measured on one common grid plus per-host bracket rates. | Report each system's delivery ceiling, bracketed by tested rates, and the normalized p99 knee on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s plus the bracket rates each host's capacity scout sets around the WAFER and eKuiper ceilings. WAFER's tested-grid delivery ceiling is at least 0.70 of eKuiper's across the whole bracketed ratio interval. | E-Perf-10 |
 | NFR-PERF-4 | Pipeline memory growth is bounded. | Five-node RSS < 150 MB and incremental slope < 10 MB/node. | E-Perf-6 |
 | NFR-PERF-5 | Isolation-cost ratios are portable across architectures. | `PENDING` until matched Raspberry Pi 5 and x86 Linux blocks exist. | E-Perf-5 |
 | NFR-PERF-6 | Linux filesystem page-cache startup effect is reported honestly. | Cold/warm phase estimates with disk compiled-component cache disabled. No AOT-cache claim. | E-Perf-9 |

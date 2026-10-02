@@ -17,7 +17,7 @@ from .attempts import (
     batch_units,
     infrastructure_retries,
 )
-from .paths import _expected_units
+from .paths import _expected_units, batch_bracket_rates
 
 _BUSY_FIELDS = ("user", "nice", "system", "irq", "softirq", "steal")
 _TOTAL_FIELDS = (*_BUSY_FIELDS, "idle", "iowait")
@@ -64,7 +64,10 @@ def attempts_table(batches: dict[str, Path], matrix: Mapping) -> pd.DataFrame:
     rows = []
     for experiment, batch in batches.items():
         retries = infrastructure_retries(matrix, experiment)
-        scheduled = _expected_units(matrix["experiments"][experiment])
+        scheduled = _expected_units(
+            matrix["experiments"][experiment],
+            batch_bracket_rates(batch, matrix) if experiment == "e-perf-10" else None,
+        )
         units = {(unit.condition, unit.run_index): unit for unit in batch_units(batch, retries)}
         for condition in sorted({condition for condition, _ in scheduled | units.keys()}):
             due = [key for key in scheduled if key[0] == condition]

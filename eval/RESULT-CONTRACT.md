@@ -67,13 +67,16 @@ copy. `BenchSink`, `BenchSource`, and the `wafer-loadgen` subscriber artifacts,
 hidden `.<name>.tmp` file beside the destination, synced, then renamed.
 
 Each batch ledger under `manifests/canonical-batches/` or `manifests/candidate-batches/`
-holds `schedule.json`, `progress.jsonl`, and `batch.json`. The runner writes `batch.json`
+holds `schedule.json`, `progress.jsonl`, and `batch.json`, plus `scout-complete.json` when
+the batch has bracket rates. The runner writes `batch.json`
 once, when the batch starts: `schema_version`, `batch_id`, `host`, `source_git_sha`,
 `source_dirty`, `canonical_matrix_sha256`, `seed`, sorted `experiments`, `repetitions`
 (the diagnostic override or `null`), `thesis_evidence` (true only for a
-`canonical-batches` ledger without `repetitions`), and `started_at`. A resume from another
-source SHA or matrix hash is refused. `mise run approve-batch` adds `raw.sha256`: one
-`sha256sum` line per file of the batch under `raw/`, its alias receipts, and its ledger,
+`canonical-batches` ledger without `repetitions`), `started_at`, and, for a batch that runs
+E-Perf-10, `capacity_brackets` (see [Per-host bracket rates](#per-host-bracket-rates)). A
+resume from another source SHA or matrix hash is refused. `mise run approve-batch` adds
+`raw.sha256`: one `sha256sum` line per file of the batch under `raw/`, its alias receipts,
+and its ledger, including the copy of the scout summary its bracket rates came from,
 sorted, with volume-relative paths. It records the batch and the SHA-256 of `raw.sha256`
 in the repository file `eval/final-batches.json`, which canonical analysis reads.
 
@@ -331,7 +334,7 @@ and have their own tests (`startup_phases.rs`, `hotswap_success.rs`).
 
 ### Final amended contract
 
-The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,321 schedule records, and 2,091 executed or static measurement leaves. Every final experiment has `thesis_evidence=true`.
+The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,321 schedule records, and 2,091 executed or static measurement leaves. These counts describe the common schedule that every host shares. Each host's final batch adds its own E-Perf-10 bracket rates: 120 leaves and 3.00 nominal hours per rate, at most six rates, so at most 720 leaves and 18.00 nominal hours per host, and its `batch.json` records what they add (see [Per-host bracket rates](#per-host-bracket-rates)). Every final experiment has `thesis_evidence=true`.
 
 Every MQTT arm (WAFER, native, eKuiper and MQTT loopback) of every experiment that measures over MQTT ends its run the same way. `final_campaign.mqtt_drain_grace_secs` (5 s) is the one drain grace. The warmup publisher numbers its messages from the measured count `N` up, and the subscriber declares the measured range `[0, N)` with `--sequence-end-exclusive N` and `--total-messages N`, so it ignores late warmup messages and counts every measured number it never received as a gap, tail included. The subscriber stops on its own once it has received all `N` measured numbers; a duplicate does not count toward `N`. After the measured publisher exits, the subscriber has the drain grace to get there; if it has not, the harness stops it with SIGINT and it writes its artefacts. The grace is counted from the publisher's exit time, the window's `finished_ns`, so SIGINT lands at that time plus 5 s in both harnesses. A run is never rejected or retried because messages were lost: the gaps are the run's loss, and the subscriber's interval rows are bounded to cover the publisher's exit drain and the grace (`--drain-grace-secs`), so a run that ends at the grace is never partial. The subscriber does not mark which messages arrived during the grace, so loss is reported only as messages that never arrived. Final E-Perf-1 to E-Perf-3 require `publisher-summary.json` and `subscriber-metadata.json`, which pass the same summary checks as E-Perf-10 and E-Swap-3, and the verifier rejects a final E-Perf-1 to E-Perf-3 or E-Swap-3 leaf whose `sequence_end_exclusive` and `sequence.expected` differ from the publisher's `intended`. For those leaves and final E-Perf-10 it also rejects an `interval-metrics.json` whose `drain_grace_ns` is not the matrix grace, and a subscriber whose `ended_at_ns` is more than the grace plus 0.5 s after the window's `finished_ns`. Target-load analysis takes received, duplicate and missing totals from `subscriber-metadata.json`, and the E-Perf-3 depth analysis reports each depth's median loss from the same totals next to its latency.
 
@@ -375,9 +378,9 @@ total_undelivered = rejected + downstream_lost
 
 It must contain no mandatory per-message traces. `check_capacity_run_result` rejects missing fields, inconsistent counters, non-final evidence labels, or trace mode.
 
-The batch summary `manifests/canonical-batches/<host-tag>-<batch-id>/rate-sweep-summary.json` carries, per system and rate, `run_count` (completed runs), `sut_outcome_runs`, `pooled_loss`, `mean_achieved_ratio`, `total_duplicates`, and one value per completed run of achieved rate, achieved ratio, loss, and p99; `run_count + sut_outcome_runs` is 30. Canonical analysis classifies every cell from these counters, never from the stored `classification` string: a cell is delivery-good when it has no outcome run, pooled loss is at most 0.01, mean achieved ratio is at least 0.99, and the duplicate total is zero (the `per-rate-cell` rows of `verdict_rules`), and a SUT cell at or above the lowest delivery-bad MQTT loopback rate is support-confounded. A stored classification or support-censoring rate that disagrees with the counters, or a pooled loss or mean achieved ratio that disagrees with the run values, rejects the summary. The rate table reports run-level min, quartiles, max, and a bootstrap 95% CI of the median for achieved rate, achieved ratio, loss, and p99; the pooled loss with a run-resampling bootstrap 95% CI; the mean achieved ratio; the duplicate total; and the normalized p99, whose interval resamples both that rate's runs and the 1,000 msg/s runs. These statistics cover the completed runs, and a rate with no completed run reports none. Any strictly increasing grid that contains 1,000 msg/s is accepted.
+The batch summary `manifests/canonical-batches/<host-tag>-<batch-id>/rate-sweep-summary.json` carries, per system and rate, `run_count` (completed runs), `sut_outcome_runs`, `pooled_loss`, `mean_achieved_ratio`, `total_duplicates`, and one value per completed run of achieved rate, achieved ratio, loss, and p99; `run_count + sut_outcome_runs` is 30. Canonical analysis classifies every cell from these counters, never from the stored `classification` string: a cell is delivery-good when it has no outcome run, pooled loss is at most 0.01, mean achieved ratio is at least 0.99, and the duplicate total is zero (the `per-rate-cell` rows of `verdict_rules`), and a SUT cell at or above the lowest delivery-bad MQTT loopback rate is support-confounded. A stored classification or support-censoring rate that disagrees with the counters, or a pooled loss or mean achieved ratio that disagrees with the run values, rejects the summary. The rate table reports run-level min, quartiles, max, and a bootstrap 95% CI of the median for achieved rate, achieved ratio, loss, and p99; the pooled loss with a run-resampling bootstrap 95% CI; the mean achieved ratio; the duplicate total; and the normalized p99, whose interval resamples both that rate's runs and the 1,000 msg/s runs. These statistics cover the completed runs, and a rate with no completed run reports none. `rate_points_msg_s` lists the tested rates, the common grid and the batch's bracket rates together, and `bracket_rate_points_msg_s` lists the bracket rates alone. Any strictly increasing grid that contains 1,000 msg/s is accepted.
 
-Each system's delivery ceiling is bracketed by tested rates, not read as one grid point. The lower bound is the highest delivery-good tested rate with no delivery-bad tested rate below it, or zero. The upper bound is the lowest delivery-bad tested rate above every delivery-good one; it is unbounded when no such rate exists, as when the top of the grid is delivery-good. A delivery-bad rate below a delivery-good one is flagged as non-monotonic and widens the bracket to cover both readings instead of invalidating the population. Support-confounded cells set neither bound, so a ceiling with only support-confounded cells above its lower bound is unbounded above. The WAFER/eKuiper ratio interval runs from WAFER lower / eKuiper upper (worst case) to WAFER upper / eKuiper lower (best case, unbounded when the eKuiper lower bound is zero). The decision is `PASS` when the worst case is at least 0.70, `FAIL` when the best case is below 0.70, and `CENSORED` otherwise, with 0.70 read from the `tested-rate-bracket` row of `verdict_rules`; an incomplete or malformed population is `PENDING`. The criterion is a statement about the tested grid: WAFER's tested-grid delivery ceiling is at least 0.70 of eKuiper's, with each ceiling bracketed by tested rates. The claim-boundary table reports both systems' bounds, the ratio interval, and the verdict.
+Each system's delivery ceiling is bracketed by tested rates, not read as one grid point. The tested rates are the common grid plus the host's bracket rates. The lower bound is the highest delivery-good tested rate with no delivery-bad tested rate below it, or zero. The upper bound is the lowest delivery-bad tested rate above every delivery-good one; it is unbounded when no such rate exists, as when the top of the grid is delivery-good. A delivery-bad rate below a delivery-good one is flagged as non-monotonic and widens the bracket to cover both readings instead of invalidating the population. Support-confounded cells set neither bound, so a ceiling with only support-confounded cells above its lower bound is unbounded above. The WAFER/eKuiper ratio interval runs from WAFER lower / eKuiper upper (worst case) to WAFER upper / eKuiper lower (best case, unbounded when the eKuiper lower bound is zero). The decision is `PASS` when the worst case is at least 0.70, `FAIL` when the best case is below 0.70, and `CENSORED` otherwise, with 0.70 read from the `tested-rate-bracket` row of `verdict_rules`; an incomplete or malformed population is `PENDING`. The criterion is a statement about the tested grid: WAFER's tested-grid delivery ceiling is at least 0.70 of eKuiper's, with each ceiling bracketed by tested rates. The claim-boundary table reports both systems' bounds, the ratio interval, and the verdict.
 
 Final E-Swap-3 requires `publisher-summary.json`, `subscriber-metadata.json`, 200 contiguous 100 ms buckets in `throughput-buckets.json`, 400 contiguous 10 ms buckets and 40 nested 100 ms parent buckets in `throughput-buckets-10ms.json`, `disruption-timeline.json`, and `disruption-analysis.json`. The 100 ms series stays aligned to the actual action-start `t0`, and the parent buckets equal the matching canonical event-window slice. `disruption-timeline.json` records the actual action start immediately before control issuance, the actual acknowledged/readiness wall-clock end, independent monotonic action duration, the scheduled measured t=60 target, actual event offset, signed alignment error, and a fixed 10 ms tolerance. `swap_timeline.json` is not a final E-Swap-3 artifact and must not remain in the admitted raw leaf. The leaf fails when the actual action start misses the scheduled target by more than 10 ms. Loss or duplication in a `wafer-hotswap` run is a `message-loss` or `duplicates` outcome; the restart comparators have no zero-loss criterion, so their loss is reported data. A `wafer-hotswap` run records its one request in `swap_requests.json`, and a request that does not return HTTP 200 is a `swap-failed` outcome. A runtime that exits during the run, including one restarted by `wafer-restart` that dies, is a `runtime-exit` outcome; a restarted runtime that keeps running without answering its control plane is an infrastructure failure.
 
@@ -678,11 +681,12 @@ consecutive probes are delivery-bad, then bisects that bracket. A run writes
 `batch_class=capacity-scout`, `thesis_evidence=false` and no per-message traces.
 Decisions are hash-chained under `manifests/capacity-scout/<batch>/decisions/`, and
 `scout-complete.json` records the final state of every system. The frozen grid
-comes from batch `capacity-scout-v3-20260904T045000Z`; a later scout batch does not
-change it. The grid's provenance is the summary and candidate hashes recorded in
-`eval/canonical-matrix.json`, not a replay of that batch: the runner replays a
-batch against its current system set, so a batch recorded before the diagnostic
-arm existed cannot be resumed with the current runner. The scout keeps its own stop
+comes from batch `capacity-scout-v3-20260904T045000Z`, and a later scout batch does not
+change it. Each host's own scout sets only that host's E-Perf-10 bracket rates (see
+[Per-host bracket rates](#per-host-bracket-rates)). The grid's provenance is the summary
+and candidate hashes recorded in `eval/canonical-matrix.json`, not a replay of that
+batch: the runner replays a batch against its current system set, so a batch recorded
+before the diagnostic arm existed cannot be resumed with the current runner. The scout keeps its own stop
 rules, so a WAFER runtime that exits non-zero, or an eKuiper run whose
 `ekuiper-health.json` gives `runtime-exit` or `rule-error`, fails the scout attempt
 as infrastructure instead of being admitted as a system outcome.
@@ -699,6 +703,67 @@ reports its state under `diagnostic_states`, apart from the `states` that inform
 the grid. The arm is never thesis evidence and has no verdict: it is not an E-Perf-10
 or capacity-knee system, the runner and the result verifier reject a
 `capacity-run.json` that names it, and the analysis never reads it.
+
+### Per-host bracket rates
+
+With the common grid alone, two ceilings between 4,000 and 8,000 msg/s can only give
+ratio bounds of 0.5, 1 or 2, so the competitive decision is often `CENSORED`. Each host's final batch therefore adds a few E-Perf-10 rates taken
+from that host's own capacity scout. `final_campaign.capacity_grid.bracket_rates` in
+`eval/canonical-matrix.json` declares the rule once:
+
+- For WAFER and for eKuiper, when the scout resolved its ceiling, the rates at 0.95x and
+  1.05x the scout ceiling, which is the highest delivery-good scout rate
+  (`lower_good_rate_msg_s`). 0.95x rounds down and 1.05x up to the 100 msg/s step. A
+  support-censored or left-censored state adds no rate.
+- Two decision points, from the threshold in the `e-perf-10-competitive-ratio` row of
+  `verdict_rules`: the threshold times eKuiper's 1.05x rate, rounded up, and the first
+  step strictly above WAFER's 1.05x rate divided by the threshold. With eKuiper
+  delivery-bad at its 1.05x rate, a WAFER lower bound at the first point gives a
+  worst-case ratio at or above the threshold; with WAFER delivery-bad at its 1.05x rate, an
+  eKuiper lower bound at the second point gives a best-case ratio below it.
+- Rates on the common grid, repeated rates and rates above the highest delivery-good
+  MQTT-loopback rate of the scout are dropped, since a rate the support path cannot carry
+  is support-confounded for every system. A decision point is added only when the 1.05x
+  rate it starts from is within that limit. At most six rates remain, taken in the order
+  WAFER 0.95x and 1.05x, eKuiper 0.95x and 1.05x, then the two decision points.
+
+Every E-Perf-10 system, MQTT loopback included, runs each bracket rate in the same seeded
+rate blocks and with the same 30 runs per rate as the common grid, so the support path
+censors bracket rates the same way. The competitive rule and its threshold do not change.
+
+`canonical_runner.py --execute --batch-id ID --scout-batch-id SCOUT` reads
+`manifests/capacity-scout/<host-tag>-SCOUT/scout-complete.json` from the host's results
+root and writes the rates into `batch.json` before the first run, as
+`capacity_brackets`: `scout_batch_id`, `scout_summary` (the volume-relative path),
+`scout_summary_sha256`, `rates_msg_s`, and what the rates add to this batch's schedule,
+`added_measured_leaves` and `added_nominal_hours` (warmup plus measurement time). It also
+copies the summary, byte for byte, to `scout-complete.json` in the batch ledger. A resume
+derives the rates again from that copy and refuses the batch when the scout batch, the
+copy's SHA-256 or the rates differ, including when another `--scout-batch-id` is given.
+Running the scout command again later, which rewrites the scout's own summary, does not
+affect a batch that has started. A final batch refuses to start without a usable scout
+summary for its host: a missing or malformed file, a scout that has not stopped, a
+missing WAFER or eKuiper state, or no delivery-good MQTT-loopback rate. The refusal names
+the scout command to run when the summary is missing or the scout has not stopped. A
+diagnostic `--repetitions` batch may run without one; it then runs the common grid only
+and records `capacity_brackets` as `null`. A batch without E-Perf-10 has no
+`capacity_brackets`. `--dry-run` with `--scout-batch-id` prints the rates and what they
+add. A dry run of a final batch without it prints the common schedule and a `NOTE` that
+`--execute` refuses to start that batch.
+
+The rates need no commit to the repository. `approve-batch` derives them again from the
+ledger copy of the scout summary and refuses the batch when they no longer match
+`batch.json`, and checks `schedule.json` against the schedule with those rates. The copy
+is part of the ledger, so `raw.sha256` lists it, and `eval/final-batches.json` records the
+hash of `raw.sha256`. Canonical analysis expects
+the common grid plus the rates in `batch.json` and rejects an E-Perf-10 batch whose
+`batch.json` records none; the attempts table counts the bracket rates as scheduled units.
+The result verifier checks each capacity leaf against its own rate.
+
+Each bracket rate adds 120 leaves (four systems, 30 runs) and 3.00 nominal hours (90 s
+per run) to a host's final batch; six rates, the maximum, add 720 leaves and 18.00
+nominal hours. `expected_schedule_records` and `expected_measured_leaves` in the matrix
+describe the common schedule, and `batch.json` records what the host's bracket rates add.
 
 ### `startup.json` schema
 

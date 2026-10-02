@@ -1251,6 +1251,14 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         path = Path(tmp) / "capacity-run.json"
         path.write_text(json.dumps(capacity))
         assert CONTRACT.check_capacity_run_result(path) == []
+        bracket = json.loads(json.dumps(capacity))
+        bracket["rate_msg_s"] = 5_700
+        for field in ("intended", "enqueued", "acked", "received_events", "received_unique"):
+            bracket["messages"][field] = 342_000
+        bracket["rates_msg_s"] = {"intended": 5_700.0, "achieved": 5_700.0}
+        bracket["latency_hdr"]["samples"] = 342_000
+        path.write_text(json.dumps(bracket))
+        assert CONTRACT.check_capacity_run_result(path) == []
         path.write_text(json.dumps({**capacity, "system": "wafer-max-inflight-1"}))
         assert "not a capacity-grid system" in " ".join(
             CONTRACT.check_capacity_run_result(path)

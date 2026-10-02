@@ -690,7 +690,7 @@
     },
     "e-perf-10": {
       "research_question": "rq1",
-      "purpose": "Confirm the co-located Raspberry Pi 5 gateway-capacity envelope over the scout-derived common rate grid.",
+      "purpose": "Confirm the co-located Raspberry Pi 5 gateway-capacity envelope over the scout-derived common rate grid plus the bracket rates from the host's capacity scout.",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 30,
@@ -1202,7 +1202,24 @@
         8000,
         15000,
         16000
-      ]
+      ],
+      "bracket_rates": {
+        "purpose": "Per-host E-Perf-10 rates that bracket the WAFER and eKuiper delivery ceilings and place a tested rate at each side of the competitive-ratio threshold",
+        "source": "states of scout-complete.json from the host's capacity-scout batch; batch.json freezes the rates and the summary SHA-256 before the batch's first run, and the batch ledger keeps a copy of the summary",
+        "scout_ceiling": "lower_good_rate_msg_s of a resolved WAFER or eKuiper state; a censored state adds no rate",
+        "ceiling_multipliers": [
+          0.95,
+          1.05
+        ],
+        "decision_points": "the threshold times eKuiper's 1.05x rate, and WAFER's 1.05x rate divided by the threshold, each only when that 1.05x rate is within max_rate",
+        "competitive_threshold": "e-perf-10-competitive-ratio",
+        "step_msg_s": 100,
+        "rounding": "0.95x rounds down and 1.05x up to the step; the threshold-times-eKuiper point rounds up; the WAFER-over-threshold point takes the first step strictly above it",
+        "max_rate": "the highest delivery-good MQTT-loopback rate of the scout; higher candidates are dropped",
+        "max_extra_rates": 6,
+        "selection": "candidates in the order WAFER 0.95x and 1.05x, eKuiper 0.95x and 1.05x, then the two decision points; rates on the common grid, repeated or above max_rate are dropped and the first max_extra_rates remain",
+        "runs_per_rate": "the e-perf-10 repetitions for every e-perf-10 system, MQTT loopback included"
+      }
     },
     "canonical_metering": {
       "policy": "explicit-fuel-and-epoch",

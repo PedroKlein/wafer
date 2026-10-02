@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from wafer_analysis import paths
 from wafer_analysis.host import attempts_table, core_utilisation, cpu_list, item_progress
 
 
@@ -81,6 +82,42 @@ def test_attempts_table_counts_classes_retries_and_missing_units(tmp_path) -> No
         ("e-perf-1", "native", "native"): dict(zip(columns, [3, 1, 1, 0, 0, 0, 2])),
         ("e-perf-1", "wafer", "wafer"): dict(zip(columns, [3, 5, 1, 1, 3, 2, 1])),
         ("e-val-1", "wafer", "delay-50ms"): dict(zip(columns, [1, 1, 0, 0, 1, 0, 1])),
+    }
+
+
+def test_attempts_table_schedules_the_bracket_rates_of_a_capacity_batch(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(paths, "_find_repo_root", lambda: tmp_path)
+    matrix = {
+        "final_campaign": {
+            "attempt_policy": {"infrastructure_retries": 1, "gate_experiments": ["e-val-1"]},
+            "capacity_grid": {
+                "common_rate_points_msg_s": [1_000],
+                "bracket_rates": {"competitive_threshold": "competitive", "max_extra_rates": 2},
+            },
+        },
+        "verdict_rules": {"thresholds": [{"criterion": "competitive", "value": 0.7}]},
+        "experiments": {
+            "e-perf-10": {"systems": ["wafer"], "rate_points_msg_s": [1_000], "repetitions": 2},
+        },
+    }
+    ledger = tmp_path / "eval/results/canonical-batches/rpi5-a"
+    ledger.mkdir(parents=True)
+    (ledger / "batch.json").write_text(json.dumps({"capacity_brackets": {"rates_msg_s": [1_500]}}))
+    batch = tmp_path / "eval/results/e-perf-10/rpi5-a"
+    for rate in ("01000", "01500"):
+        leaf = batch / f"wafer/rate-{rate}/run-01-attempt-01"
+        leaf.mkdir(parents=True)
+        (leaf / "metadata.json").write_text(json.dumps({"system": "wafer"}))
+        (leaf / "canonical-status.json").write_text(json.dumps({"status": "passed"}))
+
+    table = attempts_table({"e-perf-10": batch}, matrix)
+
+    rows = table.set_index("condition")[["units", "passed", "missing"]]
+    assert rows.to_dict("index") == {
+        "wafer/rate-01000": {"units": 2, "passed": 1, "missing": 1},
+        "wafer/rate-01500": {"units": 2, "passed": 1, "missing": 1},
     }
 
 

@@ -47,11 +47,22 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     assert campaign["thesis_evidence"] is True
     assert campaign["expected_schedule_records"] == 2321
     assert campaign["expected_measured_leaves"] == 2091
-    assert campaign["capacity_grid"] == {
+    grid = dict(campaign["capacity_grid"])
+    bracket_rule = grid.pop("bracket_rates")
+    assert grid == {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
         "candidate_sha256": "5f2231ef541c36c4fef3655ed25239ca028fb7ed7cd1387a3dd6644818cbfc3f",
         "common_rate_points_msg_s": [1000, 4000, 8000, 15000, 16000],
+    }
+    assert {
+        field: bracket_rule[field]
+        for field in ("ceiling_multipliers", "competitive_threshold", "step_msg_s", "max_extra_rates")
+    } == {
+        "ceiling_multipliers": [0.95, 1.05],
+        "competitive_threshold": "e-perf-10-competitive-ratio",
+        "step_msg_s": 100,
+        "max_extra_rates": 6,
     }
     assert campaign["canonical_metering"] == {
         "policy": "explicit-fuel-and-epoch",
@@ -244,6 +255,20 @@ def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
         ("e-perf-10 repetitions", lambda value: value["experiments"]["e-perf-10"].update(repetitions=29)),
         ("e-swap-4 repetitions", lambda value: value["experiments"]["e-swap-4"].update(repetitions=29)),
         ("e-perf-10 rate grid", lambda value: value["experiments"]["e-perf-10"].update(rate_points_msg_s=[1000, 4000])),
+        (
+            "capacity bracket rule",
+            lambda value: value["final_campaign"]["capacity_grid"]["bracket_rates"].update(
+                max_extra_rates=7
+            ),
+        ),
+        (
+            "capacity bracket rule",
+            lambda value: value["final_campaign"]["capacity_grid"]["bracket_rates"].pop("rounding"),
+        ),
+        (
+            "capacity bracket rule",
+            lambda value: value["final_campaign"]["capacity_grid"].pop("bracket_rates"),
+        ),
         ("e-swap-4 sample_unit", lambda value: value["experiments"]["e-swap-4"].update(sample_unit="")),
         (
             "e-swap-4 sink tail policy",

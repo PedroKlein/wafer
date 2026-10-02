@@ -4143,18 +4143,25 @@ def test_process_resource_summary_reports_average_cpu_and_peak_rss() -> None:
     }
 
 
-def test_rate_sweep_summary_counts_a_system_outcome_against_its_rate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def write_rate_sweep_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    batch: dict,
+    rates: tuple[int, ...] = runner.RATE_SWEEP_RATES,
+    crashed: tuple[str, int, int] | None = None,
+    loss: Callable[[str, int], float] = lambda system, rate: 0.0,
 ) -> None:
+    """Leave a complete E-Perf-10 batch "test": 30 passed runs per system and rate."""
     volume = tmp_path / "results"
     volume.mkdir()
     layout = runner.ResultsLayout.resolve(tmp_path, volume, mount_check=lambda _: True)
     layout.prepare()
     monkeypatch.setattr(runner, "results_layout", lambda _: layout)
-    layout.manifest_path("canonical-batches", "rpi5-test").mkdir(parents=True)
-    crashed = ("wafer", runner.RATE_SWEEP_RATES[-1], 30)
+    ledger = layout.manifest_path("canonical-batches", "rpi5-test")
+    ledger.mkdir(parents=True)
+    (ledger / "batch.json").write_text(json.dumps(batch))
     for system in runner.RATE_SWEEP_SYSTEMS:
-        for rate in runner.RATE_SWEEP_RATES:
+        for rate in rates:
             for run_index in range(1, 31):
                 leaf = layout.raw_path(
                     "e-perf-10", "rpi5-test", f"{system}/rate-{rate:05d}/run-{run_index:02d}"
@@ -4168,10 +4175,26 @@ def test_rate_sweep_summary_counts_a_system_outcome_against_its_rate(
                     }
                 else:
                     (leaf / "capacity-run.json").write_text(
-                        json.dumps(capacity_run_fixture(system, rate, run_index=run_index))
+                        json.dumps(
+                            capacity_run_fixture(
+                                system,
+                                rate,
+                                run_index=run_index,
+                                loss_ratio=loss(system, rate),
+                                achieved_ratio=1 - loss(system, rate),
+                            )
+                        )
                     )
                     receipt = {"status": "passed"}
                 (leaf / "canonical-status.json").write_text(json.dumps(receipt))
+
+
+def test_rate_sweep_summary_counts_a_system_outcome_against_its_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_rate_sweep_batch(
+        tmp_path, monkeypatch, {}, crashed=("wafer", runner.RATE_SWEEP_RATES[-1], 30)
+    )
 
     summary = json.loads(summarize_rate_sweep(tmp_path, "test").read_text())
 
@@ -4186,6 +4209,28 @@ def test_rate_sweep_summary_counts_a_system_outcome_against_its_rate(
     assert summary["systems"]["mqtt-loopback"]["delivery_ceiling"]["censoring"] == (
         f"right-censored-above-{runner.RATE_SWEEP_RATES[-1]}"
     )
+
+
+def test_rate_sweep_summary_brackets_ceilings_with_the_frozen_bracket_rates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bracket = [5_700, 6_300]
+    write_rate_sweep_batch(
+        tmp_path,
+        monkeypatch,
+        {"capacity_brackets": {"rates_msg_s": bracket}},
+        rates=(*runner.RATE_SWEEP_RATES, *bracket),
+        loss=lambda system, rate: 0.05 if system == "ekuiper" and rate >= 6_300 else 0.0,
+    )
+
+    summary = json.loads(summarize_rate_sweep(tmp_path, "test").read_text())
+
+    assert summary["rate_points_msg_s"] == [1_000, 4_000, 5_700, 6_300, 8_000, 15_000, 16_000]
+    assert summary["bracket_rate_points_msg_s"] == bracket
+    ekuiper = summary["systems"]["ekuiper"]
+    assert [rate["run_count"] for rate in ekuiper["rates"]] == [30] * 7
+    assert ekuiper["delivery_ceiling"] == {"rate_msg_s": 5_700, "censoring": "none"}
+    assert summary["systems"]["mqtt-loopback"]["rates"][2]["classification"] == "good"
 
 
 def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
@@ -5783,6 +5828,30 @@ def test_validation_gate_accepts_hdr_bucket_containing_55_ms() -> None:
 
 
 SOURCE_SHA = "a" * 40
+SCOUT_STATES = {
+    "mqtt-loopback": {"phase": "resolved", "lower_good_rate_msg_s": 15_500, "upper_bad_rate_msg_s": 16_000},
+    "native": {"phase": "resolved", "lower_good_rate_msg_s": 12_000, "upper_bad_rate_msg_s": 13_000},
+    "wafer": {"phase": "resolved", "lower_good_rate_msg_s": 10_000, "upper_bad_rate_msg_s": 11_000},
+    "ekuiper": {"phase": "resolved", "lower_good_rate_msg_s": 6_000, "upper_bad_rate_msg_s": 6_500},
+}
+SCOUT_BRACKET_RATES = [4_500, 5_700, 6_300, 9_500, 10_500, 15_100]
+
+
+def write_scout_summary(volume: Path, scout_id: str = "scout", **states: dict) -> Path:
+    """Leave the scout-complete.json of a finished rpi5 capacity scout."""
+    path = volume / "manifests/capacity-scout" / f"rpi5-{scout_id}" / "scout-complete.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "action": "stop",
+                "reason": "all-suts-resolved-or-support-censored",
+                "states": {**SCOUT_STATES, **states},
+            },
+            indent=2,
+        )
+    )
+    return path
 
 
 def run_main(
@@ -5844,10 +5913,16 @@ def executed_final_batch(tmp_path_factory: pytest.TempPathFactory) -> Path:
         json.dumps({"git_sha": SOURCE_SHA, "git_dirty": False, "git_tags": []})
     )
     (base / "results volume").mkdir()
+    write_scout_summary(base / "results volume")
     with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(io.StringIO()):
         root, _, _ = use_results_volume(patch, base)
         patch.setattr(
-            sys, "argv", ["canonical_runner.py", "--root", str(root), "--execute", "--batch-id", "final"]
+            sys,
+            "argv",
+            [
+                "canonical_runner.py", "--root", str(root), "--execute", "--batch-id", "final",
+                "--scout-batch-id", "scout",
+            ],
         )
         assert runner.main() == 0
     return base
@@ -5884,7 +5959,8 @@ def _exceed_retry_cap(volume: Path) -> None:
 
 
 def test_execute_records_the_batch_source_and_matrix(final_batch: tuple[Path, Path, Path]) -> None:
-    _, _, ledger = final_batch
+    _, volume, ledger = final_batch
+    scout = "manifests/capacity-scout/rpi5-scout/scout-complete.json"
 
     batch = json.loads((ledger / "batch.json").read_text())
 
@@ -5902,7 +5978,18 @@ def test_execute_records_the_batch_source_and_matrix(final_batch: tuple[Path, Pa
         "repetitions": None,
         "thesis_evidence": True,
         "started_at": batch["started_at"],
+        "capacity_brackets": {
+            "scout_batch_id": "scout",
+            "scout_summary": scout,
+            "scout_summary_sha256": hashlib.sha256((volume / scout).read_bytes()).hexdigest(),
+            "rates_msg_s": SCOUT_BRACKET_RATES,
+            "added_measured_leaves": 6 * 4 * 30,
+            "added_nominal_hours": 18.0,
+        },
     }
+    assert (ledger / "scout-complete.json").read_bytes() == (volume / scout).read_bytes()
+    schedule = json.loads((ledger / "schedule.json").read_text())
+    assert len(schedule) == 2_321 + 6 * 4 * 30
 
 
 def test_resume_refuses_another_source_or_matrix(
@@ -6009,8 +6096,9 @@ def test_approve_writes_a_verifiable_manifest_and_the_final_batch_entry(
     assert listed == sorted(
         path.relative_to(volume).as_posix()
         for path in volume.rglob("*")
-        if path.is_file() and path.name != "raw.sha256"
+        if path.is_file() and path.name != "raw.sha256" and "capacity-scout" not in path.parts
     )
+    assert "manifests/canonical-batches/rpi5-final/scout-complete.json" in listed
     assert any(path.startswith("manifests/aliases/e-perf-2/rpi5-final/") for path in listed)
     checker = ["sha256sum"] if shutil.which("sha256sum") else ["shasum", "-a", "256"]
     checked = subprocess.run(
@@ -6089,6 +6177,19 @@ def test_approve_discloses_other_final_batches_of_the_host(
             lambda root, volume, ledger: _exceed_retry_cap(volume),
             "used more attempts than its retry cap allows",
         ),
+        (
+            lambda root, volume, ledger: shutil.copy(
+                write_scout_summary(
+                    volume, "later", wafer={"phase": "support-censored", "censor_above_rate_msg_s": 15_500}
+                ),
+                ledger / "scout-complete.json",
+            ),
+            "no longer follow from manifests/canonical-batches/rpi5-final/scout-complete.json",
+        ),
+        (
+            lambda root, volume, ledger: _set_json(ledger / "batch.json", capacity_brackets=None),
+            "no valid E-Perf-10 bracket rates",
+        ),
     ],
     ids=[
         "incomplete",
@@ -6097,6 +6198,8 @@ def test_approve_discloses_other_final_batches_of_the_host(
         "e-val-1-gate",
         "other-approved",
         "over-retry-cap",
+        "scout-changed",
+        "no-bracket-rates",
     ],
 )
 def test_approve_refuses_a_batch_that_is_not_final_evidence(
@@ -6149,6 +6252,167 @@ def test_approve_refuses_diagnostic_candidate_and_dirty_batches(
     assert "only final batches under canonical-batches" in refusals["candidate"][2]
     assert "dirty source tree" in refusals["final"][2]
     assert not (root / "eval/final-batches.json").exists()
+
+
+
+def test_final_batch_refuses_e_perf_10_without_a_usable_scout_summary(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, volume, ledger = final_batch
+    unfinished = write_scout_summary(volume, "unfinished")
+    _set_json(unfinished, action="launch")
+    write_scout_summary(volume, "unusable", **{"mqtt-loopback": {"phase": "left-censored"}})
+    execute = ("--root", str(root), "--execute", "--batch-id")
+    scout_command = "./eval/scripts/run-rpi5-canonical.sh --execute --host rpi5 --capacity-scout"
+
+    preview = run_main(monkeypatch, capsys, "--root", str(root), "--dry-run", "--batch-id", "fresh")
+    without = run_main(monkeypatch, capsys, *execute, "fresh")
+    missing = run_main(monkeypatch, capsys, *execute, "fresh", "--scout-batch-id", "absent")
+    partial = run_main(monkeypatch, capsys, *execute, "fresh", "--scout-batch-id", "unfinished")
+    unusable = run_main(monkeypatch, capsys, *execute, "fresh", "--scout-batch-id", "unusable")
+
+    assert preview[0] == 0, preview[2]
+    assert "NOTE --execute refuses this batch: final batch rpi5-fresh cannot start" in preview[1]
+    assert "runs the common grid only" not in preview[1]
+    assert without[0] == 2
+    assert "cannot start E-Perf-10 without the rpi5 capacity scout" in without[2]
+    assert f"run {scout_command} --batch-id <scout-id> until" in without[2]
+    for code, _, err in (missing, partial, unusable):
+        assert code == 2
+        assert "no usable capacity scout summary" in err
+    assert "manifests/capacity-scout/rpi5-absent/scout-complete.json" in missing[2]
+    assert "not from a finished scout" in partial[2]
+    for _, _, err in (missing, partial):
+        assert f"run {scout_command} --batch-id " in err
+    assert "no delivery-good MQTT-loopback rate" in unusable[2]
+    assert scout_command not in unusable[2]
+    assert not (ledger.parent / "rpi5-fresh/batch.json").exists()
+    assert not (volume / "raw/e-val-1/rpi5-fresh").exists()
+
+
+def test_a_diagnostic_batch_may_run_the_common_grid_without_a_scout(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _, ledger = final_batch
+    monkeypatch.setenv(runner.DIAGNOSTIC_REPETITIONS_ENV, "unset")
+
+    code, out, err = run_main(
+        monkeypatch, capsys, "--root", str(root), "--execute", "--batch-id", "pilot",
+        "--repetitions", "1", "--experiments", "e-perf-10",
+    )
+
+    assert code == 0, err
+    assert "NOTE e-perf-10 runs the common grid only" in out
+    assert json.loads((ledger.parent / "rpi5-pilot/batch.json").read_text())["capacity_brackets"] is None
+    schedule = json.loads((ledger.parent / "rpi5-pilot/schedule.json").read_text())
+    assert {item["offered_rate_msg_s"] for item in schedule} == set(runner.RATE_SWEEP_RATES)
+
+
+def test_resume_keeps_the_bracket_rates_and_scout_summary_it_started_with(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, volume, _ = final_batch
+    resume = ("--root", str(root), "--execute", "--batch-id", "final")
+    write_scout_summary(
+        volume, "later", ekuiper={"phase": "resolved", "lower_good_rate_msg_s": 7_000, "upper_bad_rate_msg_s": 7_500}
+    )
+
+    same = run_main(monkeypatch, capsys, *resume)
+    named = run_main(monkeypatch, capsys, *resume, "--scout-batch-id", "scout")
+    other = run_main(monkeypatch, capsys, *resume, "--scout-batch-id", "later")
+    frozen = volume / "manifests/canonical-batches/rpi5-final/scout-complete.json"
+    frozen.write_text(frozen.read_text() + "\n")
+    edited = run_main(monkeypatch, capsys, *resume)
+
+    assert same[0] == 0, same[2]
+    assert named[0] == 0, named[2]
+    for code, _, err in (other, edited):
+        assert code == 2
+        assert "keeps the bracket rates it started with" in err
+
+
+def test_a_rewritten_scout_summary_leaves_a_started_batch_alone(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, volume, ledger = final_batch
+    frozen = (ledger / "scout-complete.json").read_bytes()
+    write_scout_summary(
+        volume, ekuiper={"phase": "resolved", "lower_good_rate_msg_s": 7_000, "upper_bad_rate_msg_s": 7_500}
+    )
+
+    resumed = run_main(monkeypatch, capsys, "--root", str(root), "--execute", "--batch-id", "final")
+    approved = run_main(monkeypatch, capsys, "--root", str(root), "--approve", "--batch-id", "final")
+
+    assert resumed[0] == 0, resumed[2]
+    assert approved[0] == 0, approved[2]
+    assert (ledger / "scout-complete.json").read_bytes() == frozen
+    assert f"{hashlib.sha256(frozen).hexdigest()}  manifests/canonical-batches/rpi5-final/scout-complete.json" in (
+        ledger / "raw.sha256"
+    ).read_text()
+
+
+def test_bracket_rates_join_the_common_grid_for_every_e_perf_10_system() -> None:
+    bracket = [5_700, 9_500]
+    common = build_schedule({"e-perf-10"}, seed=1729)
+    schedule = build_schedule({"e-perf-10"}, seed=1729, bracket_rates=bracket)
+    rates = sorted({*runner.RATE_SWEEP_RATES, *bracket})
+
+    assert common == build_schedule({"e-perf-10"}, seed=1729, bracket_rates=())
+    assert len(schedule) == 30 * len(runner.RATE_SWEEP_SYSTEMS) * len(rates)
+    assert len(build_schedule(runner.parse_experiments("all"), 1729, bracket)) == 2_321 + 2 * 120
+    for system in runner.RATE_SWEEP_SYSTEMS:
+        for rate in bracket:
+            cells = [item for item in schedule if (item.system, item.offered_rate_msg_s) == (system, rate)]
+            assert sorted(item.run_index for item in cells) == list(range(1, 31))
+            template = next(
+                item for item in common if item.system == system and item.run_index == 1
+            )
+            assert {(item.config, item.loadgen_profile, item.exclusive_sut) for item in cells} == {
+                (template.config, template.loadgen_profile, True)
+            }
+            assert all(item.total_messages == rate * 60 for item in cells)
+    for rate in rates:
+        positions: dict[int, set[str]] = {}
+        for run_index in range(1, 31):
+            block = [
+                item
+                for item in schedule
+                if item.run_index == run_index and item.offered_rate_msg_s == rate
+            ]
+            for position, item in enumerate(block):
+                positions.setdefault(position, set()).add(item.system)
+        assert all(observed == set(runner.RATE_SWEEP_SYSTEMS) for observed in positions.values())
+
+
+def test_dry_run_states_the_bracket_rates_and_what_they_add(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_scout_summary(tmp_path / "results volume")
+    root, volume, _ = use_results_volume(monkeypatch, tmp_path)
+
+    code, out, err = run_main(
+        monkeypatch, capsys, "--root", str(root), "--dry-run", "--batch-id", "preview",
+        "--scout-batch-id", "scout",
+    )
+
+    assert code == 0, err
+    assert (
+        f"BRACKETS e-perf-10 rates={SCOUT_BRACKET_RATES} "
+        "scout=manifests/capacity-scout/rpi5-scout/scout-complete.json"
+    ) in out
+    assert "added_measured_leaves=720 added_nominal_hours=18.0" in out
+    assert "PLAN e-perf-10 condition=ekuiper/rate-05700 runs=30" in out
+    assert not (volume / "manifests/canonical-batches").exists()
 
 
 if __name__ == "__main__":
