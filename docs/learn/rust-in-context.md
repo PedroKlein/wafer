@@ -86,4 +86,4 @@ RAII ties cleanup to ownership. `SwapGuard` sets the per-node swap-in-progress f
 - **Test:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `fn test_clone_shares_header_via_arc()`, `fn test_clone_shares_payload_bytes()`
 - **Test:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbol: `async fn test_source_loop_messages_flow()`
 - **Test:** [`crates/wafer-config/src/validation.rs`](../../crates/wafer-config/src/validation.rs) | symbol: `fn test_accumulated_errors()`
-- **Test:** [`crates/wafer-core/src/node/state.rs`](../../crates/wafer-core/src/node/state.rs) | symbol: `fn test_processing_guard_clears_on_panic()`
+- **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbol: `async fn replacement_guard_serializes_swap_and_reconfigure()`
