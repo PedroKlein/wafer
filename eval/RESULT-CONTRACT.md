@@ -257,9 +257,6 @@ before reading. The matrix below is authoritative:
 | `containment.json` | E-Iso-1..8 | `canonical_runner.py` | Containment verdict for one attack condition: expected condition, attack node, expected mechanism (the `per_node_metrics.csv` column that must count the attack, see `eval/scripts/lib/containment.py`), its count, unexpected outcomes on the attack node, trap total, runtime-panic flag, healthy-node output count, per-node runtime metrics, and the dead-letter evidence: `dlq_sent_total` (sum over nodes) and `dlq_records` (lines in `dlq.jsonl`, null when the file is absent). The verifier rejects an E-Iso-1..6 leaf whose `dlq.jsonl` exists but holds a different number of records than its nodes sent to the dead-letter queue. An attack counts as contained only when the expected mechanism stopped it at least once and nothing else happened on that node: no other trap kind or guest error, and no message passed on. `contained` is null for conditions without an attack. The runner fails the run when `per_node_metrics.csv` is malformed or lacks the attack node's counters. The analysis never counts a record whose condition differs from the attack, and it counts runs that were not contained or recorded a runtime panic instead of dropping them. `contained: false` is a `containment-escape` outcome, not a rejected leaf, and a run whose runtime exited before it wrote `containment.json` counts as not contained. |
 | `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent post-warmup latency histogram, throughput series, sequence accounting, and measurement window for each branch. Each branch has its own `BenchSource`; root-level fan-out/fan-in measurements are forbidden for branch-impact analysis. |
 | `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local source identity, configured post-warmup target count, actually offered/received post-warmup counts, target shortfall, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
-| `host-load-ladder.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Append-only clean-boot session receipt with the exact eight-phase order, per-phase pass/fail/not-run status, 75 °C stop limit, boot identity, bounded sample counts, diagnostic/final admission decisions, source state, and the PMIC internal-rail boundary. |
-| `host-telemetry.csv` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | One-second phase-labeled temperature, CPU frequency, throttling, PMIC internal-rail proxy, memory availability/pressure, USB throughput, boot ID, wall-clock, and monotonic samples. No per-message data. |
-| `kernel-io.log`, `usb-integrity.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Bounded matching kernel I/O errors and per-USB-phase byte/duration/SHA-256 reconciliation. Any recorded kernel I/O error or hash mismatch stops the ladder and blocks final admission. |
 | `ekuiper-audit.json` | Every eKuiper run: E-Perf-1, E-Perf-2, E-Perf-10, E-Perf-Capacity-Knee, the capacity scout, the E-Swap-3 `ekuiper-restart` arm and E-Compare-eKuiper-Profile | `canonical_runner.py` | Taken before warm-up: the package version and install receipt, the effective `kuiper.service` properties and unit text with its SHA-256, the path and SHA-256 of `/etc/kuiper/mqtt_source.yaml` (which must equal `eval/ekuiper/mqtt-source-default.yaml`) and of `/etc/kuiper/kuiper.yaml`, the process tree with each process's `Cpus_allowed_list`, the active stream and rule, and the seed script's dry run. `metadata.json` names it and its SHA-256 under `comparator_audit`. |
 | `ekuiper-health.json` | Same as `ekuiper-audit.json` | `canonical_runner.py` | The `kuiper` unit and `pipeline_a` before warm-up and after the run; see [eKuiper health](#ekuiper-health). |
 | `ekuiper-runtime-summary.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Diagnostic run identity, interval alignment, latency percentiles, bounded external `/proc` process summary when available, and the Go GC trace summary for the measurement window (`gc_runtime_metrics`) when the profiled run logged one. It never infers GC events from RSS or latency. |
@@ -421,8 +418,7 @@ final experiments. A candidate becomes thesis evidence only by moving it into th
 final `experiments` list before a final batch starts; the batch then records the
 changed matrix hash. Candidate runs, attempts, intervals, and events must not be
 pooled with final batches or with one another as independent replicates. The
-independent sample unit is the host run unless the matrix explicitly declares a
-clean-boot host session. Intervals and events are nested observations.
+independent sample unit is the host run. Intervals and events are nested observations.
 
 The candidate IDs and purposes are:
 
@@ -433,13 +429,12 @@ The candidate IDs and purposes are:
 | `e-perf-depth-extension` | candidate-supplementary | Host run at one depth | Extend latency and RSS observations through depth 50. |
 | `e-swap-independent-sessions` | candidate-supplementary | Host run | Collect five independent swap sessions with 50 nested events each. |
 | `e-swap-rollback-sessions` | candidate-supplementary | Host run | Collect five independent rollback sessions with 50 nested events each. |
-| `e-host-thermal-storage` | diagnostic | Clean-boot host session | Characterize thermal and removable-storage headroom under a stop-on-failure load ladder. |
 | `e-compare-ekuiper-profile` | diagnostic | Host run at one rate and profiler state | Associate bounded eKuiper process and Go GC trace summaries with tail latency using matched unprofiled controls. |
 
 The exact condition grids, required outputs, no-pooling boundaries, and analysis
-consumers are machine-readable in `enhanced_candidate.experiments`. The
-architecture verifier rejects missing IDs, changed grids or sample units,
-undeclared outputs, or candidate promotion before selection.
+consumers are machine-readable in `enhanced_candidate.experiments`. Under
+`--canonical`, the verifier rejects a candidate leaf whose experiment is not
+listed there or that lacks one of its `required_outputs`.
 
 The `e-perf-capacity-knee` N=5 schedule uses MQTT-loopback rates from 4,000
 through 15,000 msg/s in 1,000 msg/s steps plus 15,250, 15,500, 15,750, and
@@ -497,23 +492,6 @@ and neither candidate may reference an E-Swap-1/2/5/6 alias as its measurement
 source. The 10 ms actual-t0 artifacts remain scoped to E-Swap-3/E-Swap-4; these
 multi-event candidates use bounded one-second interval metrics and event timing
 records instead of fabricating a single-event 10 ms series.
-
-`e-host-thermal-storage` is one clean-boot diagnostic session, never a
-performance replicate. The fixed order is idle; one, two, and three SUT-core
-CPU workers; CPU plus memory; USB write; USB read; and combined CPU, memory,
-and USB. Idle lasts 120 seconds and every other phase lasts 300 seconds, with
-one-second telemetry. The runner requires a caller-recorded boot ID, starts
-within ten minutes of that boot with initial `get_throttled=0x0`, writes a new
-append-only leaf under `raw/e-host-thermal-storage/`, and stops on the first
-sample at or above 75 °C, any non-zero throttling value, boot-ID change, kernel
-I/O error, workload/instrumentation failure, or USB SHA-256 mismatch. It never
-intentionally continues in a throttled state. `diagnostic_admission` covers all
-phases through USB read; `final_admission` additionally requires the maximum
-combined-load phase. A failed combined phase therefore keeps N=30 blocked even
-when the preceding diagnostic gate passed. PMIC values remain an internal-rail
-proxy and exclude USB and total input power. Synthetic fixture receipts are
-labeled `execution_mode=fixture-synthetic`, remain admission-ineligible, and
-only report the corresponding evaluated gate decisions.
 
 `e-compare-ekuiper-profile` contains exactly five profiled and five unprofiled
 control runs at each of 1,000, 4,000, and 8,000 msg/s. A pair is the profiled
@@ -622,19 +600,8 @@ use new IDs and do not turn these aliases into additional observations.
 The PMIC internal-rail proxy is not total input power. External total-input
 power and matched x86 execution are future work; E-Perf-5 remains PENDING until
 the matching x86 Linux block exists, and no cross-architecture claim is made.
-The retained 5 V / 4.2 A supply receives
-no waiver from throttle, temperature, reboot, or I/O gates.
-
-#### Single-volume evidence storage
-
-Campaign evidence uses one physical exFAT volume labeled
-`WAF_RESULTS`, an 11-code-unit label that the filesystem can represent. It is
-mounted at `/mnt/wafer-results` on Pi/Jetson and `/Volumes/WAF_RESULTS` on macOS.
-Manifests store volume-root-relative paths.
-The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Raw
-artifacts are append-only, retain failed and interrupted attempts, and are never
-duplicated during host transfer. Analysis opens raw inputs read-only and writes
-only under `derived/` and `reports/`.
+The retained 5 V / 4.2 A supply gets no threshold waiver: every final run must
+record `throttled=0x0`, and `approve-batch` refuses a batch with any other value.
 
 ### Reduced-repetition diagnostic batches
 
