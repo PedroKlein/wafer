@@ -2119,6 +2119,7 @@ def test_target_latency_ratio_verdict_reads_one_sided_bounds_over_run_pairs(fact
     assert (wafer["p95_ratio_verdict"], wafer["verdict"]) == (verdict, verdict)
     assert wafer["p95_ratio_threshold"] == 2.0
     assert wafer["p95_ratio_ci_half_width"] == pytest.approx((high - low) / 2)
+    assert wafer["p95_ratio_estimate"] == wafer["median_ratio_vs_reference"]
     nearer = min((1 + low, 1 + high), key=lambda bound: abs(bound - 2.0))
     assert wafer["p95_ratio_flips_at"] == pytest.approx(
         {"PASS": 1 + high, "INCONCLUSIVE": nearer, "FAIL": 1 + low}[verdict]
@@ -2133,6 +2134,7 @@ def test_target_latency_loss_verdict_resamples_runs(lost: tuple[int, int], verdi
         lambda record: record.update(received_unique=60_000 - lost[record["run_index"] % 2])
     )
     assert wafer["loss_verdict"] == verdict
+    assert wafer["loss_estimate"] == wafer["pooled_loss"]
     assert wafer["delivery_verdict"] == verdict
     assert wafer["verdict"] == verdict
 
@@ -2149,6 +2151,7 @@ def test_target_latency_achieved_ratio_verdict_bounds_the_mean_over_runs(
     )
     low, high = bootstrap_ci(np.asarray([ratios[run % 2] for run in range(1, 31)]), ci=0.9, statistic=np.mean)
     assert wafer["achieved_ratio_verdict"] == verdict
+    assert wafer["achieved_ratio_estimate"] == wafer["mean_achieved_ratio"]
     assert wafer["achieved_ratio_ci_half_width"] == pytest.approx((high - low) / 2)
     assert wafer["delivery_verdict"] == verdict
 
@@ -2171,6 +2174,7 @@ def test_branch_isolation_is_inconclusive_when_the_drop_bounds_straddle_the_thre
     assert attack["throughput_drop_percent"] == pytest.approx(1.0)
     assert (attack["drop_verdict"], attack["verdict"]) == ("INCONCLUSIVE", "INCONCLUSIVE")
     assert attack["drop_threshold"] == 1.0
+    assert attack["drop_estimate"] == attack["throughput_drop_percent"]
     assert attack["drop_flips_at"] - attack["drop_ci_half_width"] < 1.0 < attack["drop_flips_at"]
     assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
     assert pd.isna(table.loc["control", "verdict"]) and pd.isna(table.loc["control", "drop_verdict"])
@@ -2211,6 +2215,7 @@ def test_swap3_dip_verdict_reads_the_one_sided_upper_bound(verdict: str) -> None
     )
     assert (wafer["dip_verdict"], wafer["verdict"]) == (verdict, verdict)
     assert wafer["dip_threshold"] == 5.0
+    assert wafer["dip_estimate"] == wafer["median_dip_percent"]
     assert wafer["dip_flips_at"] in (low, high)
     assert wafer["dip_ci_half_width"] == pytest.approx((high - low) / 2)
     assert table.loc[["wafer-restart", "ekuiper-restart"], "verdict"].isna().all()
@@ -2233,6 +2238,7 @@ def test_swap3_dip_is_pending_when_no_hot_swap_run_kept_running() -> None:
     wafer = swap3_table(runs).set_index("strategy").loc["wafer-hotswap"]
     assert (wafer["dip_verdict"], wafer["verdict"]) == ("PENDING", "FAIL")
     assert pd.isna(wafer["dip_flips_at"]) and pd.isna(wafer["dip_ci_half_width"])
+    assert pd.isna(wafer["dip_estimate"])
 
 
 @pytest.mark.parametrize(
@@ -2251,6 +2257,7 @@ def test_swap4_gap_verdict_bounds_the_across_run_p95(gaps: list[int], verdict: s
     assert (row["p95_gap_verdict"], row["verdict"]) == (verdict, verdict)
     assert row["p95_gap_threshold"] == 100_000_000
     assert row["p95_sink_gap_ns"] == sorted(gaps)[28]
+    assert row["p95_gap_estimate"] == row["p95_sink_gap_ns"]
 
 
 def test_swap4_loss_fails_the_burst_swap_whatever_the_gap() -> None:
@@ -2268,6 +2275,7 @@ def test_payload_reference_is_inconclusive_when_its_bounds_straddle_the_referenc
     row = payload_table(records).set_index("condition").loc["100kb"]
     assert row["boundary_p50_ns"] == pytest.approx(50_000)
     assert row["per_hop_reference_verdict"] == "INCONCLUSIVE"
+    assert row["per_hop_reference_estimate"] == row["boundary_p50_ns"]
     assert row["per_hop_reference_threshold"] == 50_000
     assert row["per_hop_reference_ci_half_width"] == pytest.approx(1_000)
     assert "a reference, not a pass criterion" in row["threshold"]

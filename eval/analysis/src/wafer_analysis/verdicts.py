@@ -33,7 +33,7 @@ _FIELDS = (
     "origin",
     "pilot_data_visible",
 )
-VERDICT_SUFFIXES = ("verdict", "threshold", "flips_at", "ci_half_width")
+VERDICT_SUFFIXES = ("verdict", "estimate", "threshold", "flips_at", "ci_half_width")
 
 
 @dataclass(frozen=True)
@@ -86,18 +86,24 @@ def declared_thresholds(matrix_path: Path | None = None) -> dict[str, Threshold]
 
 
 def bound_verdict(
-    prefix: str, threshold: Threshold, bounds: tuple[float, float] | None
+    prefix: str,
+    threshold: Threshold,
+    bounds: tuple[float, float] | None,
+    *,
+    estimate: float | None,
 ) -> dict:
     """Verdict columns for one criterion from its one-sided lower and upper bounds.
 
-    ``flips_at`` is the bound the threshold would have to cross to change the
-    verdict: the favourable bound for ``PASS``, the other bound for ``FAIL``,
-    and the nearer bound for ``INCONCLUSIVE``. ``ci_half_width`` is half the
-    distance between the two bounds.
+    ``estimate`` is the point estimate of the bounded statistic. ``flips_at``
+    is the bound the threshold would have to cross to change the verdict: the
+    favourable bound for ``PASS``, the other bound for ``FAIL``, and the
+    nearer bound for ``INCONCLUSIVE``. ``ci_half_width`` is half the distance
+    between the two bounds.
     """
     if bounds is None:
         return {
             f"{prefix}_verdict": "PENDING",
+            f"{prefix}_estimate": _number(estimate),
             f"{prefix}_threshold": threshold.value,
             f"{prefix}_flips_at": None,
             f"{prefix}_ci_half_width": None,
@@ -113,10 +119,15 @@ def bound_verdict(
         flips_at = min((low, high), key=lambda bound: abs(bound - threshold.value))
     return {
         f"{prefix}_verdict": verdict,
+        f"{prefix}_estimate": _number(estimate),
         f"{prefix}_threshold": threshold.value,
         f"{prefix}_flips_at": flips_at,
         f"{prefix}_ci_half_width": (high - low) / 2,
     }
+
+
+def _number(value: float | None) -> float | None:
+    return None if value is None else float(value)
 
 
 def count_verdict(threshold: Threshold, violations: int) -> str:

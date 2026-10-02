@@ -52,9 +52,10 @@ def test_declared_thresholds_read_the_canonical_matrix() -> None:
 def test_lower_is_better_passes_on_the_upper_bound_and_fails_on_the_lower(
     bounds: tuple[float, float], verdict: str, flips_at: float
 ) -> None:
-    columns = bound_verdict("gap", threshold(5.0, "<"), bounds)
+    columns = bound_verdict("gap", threshold(5.0, "<"), bounds, estimate=sum(bounds) / 2)
     assert columns == {
         "gap_verdict": verdict,
+        "gap_estimate": sum(bounds) / 2,
         "gap_threshold": 5.0,
         "gap_flips_at": flips_at,
         "gap_ci_half_width": (bounds[1] - bounds[0]) / 2,
@@ -72,21 +73,25 @@ def test_lower_is_better_passes_on_the_upper_bound_and_fails_on_the_lower(
 def test_higher_is_better_passes_on_the_lower_bound_and_fails_on_the_upper(
     bounds: tuple[float, float], verdict: str, flips_at: float
 ) -> None:
-    columns = bound_verdict("achieved", threshold(0.99, ">="), bounds)
+    columns = bound_verdict("achieved", threshold(0.99, ">="), bounds, estimate=bounds[0])
     assert columns["achieved_verdict"] == verdict
     assert columns["achieved_flips_at"] == flips_at
 
 
 def test_a_bound_on_the_threshold_respects_the_declared_strictness() -> None:
-    assert bound_verdict("x", threshold(5.0, "<"), (4.0, 5.0))["x_verdict"] == "INCONCLUSIVE"
-    assert bound_verdict("x", threshold(5.0, "<="), (4.0, 5.0))["x_verdict"] == "PASS"
-    assert bound_verdict("x", threshold(5.0, "<"), (5.0, 6.0))["x_verdict"] == "FAIL"
-    assert bound_verdict("x", threshold(5.0, "<="), (5.0, 6.0))["x_verdict"] == "INCONCLUSIVE"
+    def verdict(direction: str, bounds: tuple[float, float]) -> str:
+        return bound_verdict("x", threshold(5.0, direction), bounds, estimate=5.0)["x_verdict"]
+
+    assert verdict("<", (4.0, 5.0)) == "INCONCLUSIVE"
+    assert verdict("<=", (4.0, 5.0)) == "PASS"
+    assert verdict("<", (5.0, 6.0)) == "FAIL"
+    assert verdict("<=", (5.0, 6.0)) == "INCONCLUSIVE"
 
 
 def test_a_criterion_without_a_population_is_pending() -> None:
-    assert bound_verdict("dip", threshold(5.0, "<"), None) == {
+    assert bound_verdict("dip", threshold(5.0, "<"), None, estimate=None) == {
         "dip_verdict": "PENDING",
+        "dip_estimate": None,
         "dip_threshold": 5.0,
         "dip_flips_at": None,
         "dip_ci_half_width": None,

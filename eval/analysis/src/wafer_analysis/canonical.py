@@ -127,11 +127,17 @@ def target_latency_table(records: list[dict], *, canonical: bool = True) -> pd.D
         mean_achieved_ratio = float(np.mean(achieved_ratios))
         total_duplicates = sum(int(run["duplicates"]) for run in condition_runs)
         delivery = {
-            **bound_verdict("loss", loss_rule, pooled_ratio_ci(lost, offered, ci=loss_rule.interval)),
+            **bound_verdict(
+                "loss",
+                loss_rule,
+                pooled_ratio_ci(lost, offered, ci=loss_rule.interval),
+                estimate=pooled_loss,
+            ),
             **bound_verdict(
                 "achieved_ratio",
                 achieved_rule,
                 bootstrap_ci(achieved_ratios, ci=achieved_rule.interval, statistic=np.mean),
+                estimate=mean_achieved_ratio,
             ),
         }
         delivery["delivery_verdict"] = combined_verdict(
@@ -143,7 +149,9 @@ def target_latency_table(records: list[dict], *, canonical: bool = True) -> pd.D
             _, ratio_low, ratio_high = median_shift_ci(
                 paired, paired_reference, relative=True, paired=True, ci=ratio_rule.interval
             )
-            ratio = bound_verdict("p95_ratio", ratio_rule, (1 + ratio_low, 1 + ratio_high))
+            ratio = bound_verdict(
+                "p95_ratio", ratio_rule, (1 + ratio_low, 1 + ratio_high), estimate=1 + shift
+            )
             verdict = combined_verdict(ratio["p95_ratio_verdict"], delivery["delivery_verdict"])
         else:
             ratio, verdict = no_verdict("p95_ratio"), None
@@ -372,7 +380,7 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     **(
                         no_verdict("drop")
                         if condition == "control"
-                        else bound_verdict("drop", drop_rule, None)
+                        else bound_verdict("drop", drop_rule, None, estimate=None)
                     ),
                     "verdict": None if condition == "control" else "FAIL",
                     "reference_condition": "control",
@@ -422,7 +430,7 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
             **no_verdict("drop"),
         }
         if condition != "control" and not len(control_throughput):
-            row.update(bound_verdict("drop", drop_rule, None))
+            row.update(bound_verdict("drop", drop_rule, None, estimate=None))
             row["verdict"] = combined_verdict(
                 row["drop_verdict"], count_verdict(stopped_rule, stopped)
             )
@@ -446,7 +454,9 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     "cliffs_delta_ci95_low": delta_low,
                     "cliffs_delta_ci95_high": delta_high,
                     "effect_magnitude": magnitude,
-                    **bound_verdict("drop", drop_rule, (-100 * bound_high, -100 * bound_low)),
+                    **bound_verdict(
+                        "drop", drop_rule, (-100 * bound_high, -100 * bound_low), estimate=-100 * drop
+                    ),
                 }
             )
             row["verdict"] = combined_verdict(
@@ -642,6 +652,7 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
                     "per_hop_reference",
                     reference,
                     bootstrap_ci(boundary_p50, ci=reference.interval),
+                    estimate=float(np.median(boundary_p50)),
                 ),
             }
         )
@@ -1821,6 +1832,7 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
                 "dip",
                 dip_rule,
                 bootstrap_ci(np.asarray(dips), ci=dip_rule.interval) if dips else None,
+                estimate=_median(dips),
             )
             verdict = combined_verdict(
                 dip["dip_verdict"], count_verdict(lossless_rule, len(admitted) - lossless_runs)
@@ -2244,6 +2256,7 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
         bootstrap_ci(np.asarray(gaps), ci=gap_rule.interval, statistic=_nearest_rank_p95)
         if gaps
         else None,
+        estimate=_nearest_rank_p95(gaps) if gaps else None,
     )
     return pd.DataFrame(
         [
