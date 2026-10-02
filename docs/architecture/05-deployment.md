@@ -18,7 +18,7 @@ SSD. Network: Gigabit Ethernet. Canonical runs use Raspberry Pi OS Lite
 
 **Role in the evaluation:**
 
-- **RQ1 primary hardware.** Per-hop latency, matched 1,000 msg/s delivery and latency, and the common-grid gateway-capacity envelope are measured here. The MQTT loopback condition bounds support-path claims; SUT-only ceilings are not inferred beyond that boundary.
+- **RQ1 primary hardware.** Per-hop latency, matched 1,000 msg/s delivery and latency, and the gateway-capacity envelope over the common grid and this host's bracket rates are measured here. The MQTT loopback condition bounds support-path claims; SUT-only ceilings are not inferred beyond that boundary.
 - **RQ2 measurement.** All six attack scenarios (`buffer-overflow`,
   `cross-read`, `fs-access`, `infinite-loop`, `memory-exhaust`, `panic`)
   are exercised here. Before any campaign, `mise run mandatory-attack-evidence`
