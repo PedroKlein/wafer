@@ -590,8 +590,8 @@ use new IDs and do not turn these aliases into additional observations.
 The PMIC internal-rail proxy is not total input power. External total-input
 power and matched x86 execution are future work; E-Perf-5 remains PENDING until
 the matching x86 Linux block exists, and no cross-architecture claim is made.
-The retained 5 V / 4.2 A supply receives
-no waiver from throttle, temperature, reboot, or I/O gates.
+The retained 5 V / 4.2 A supply gets no threshold waiver: every final run must
+record `throttled=0x0`, and `approve-batch` refuses a batch with any other value.
 
 ### Reduced-repetition diagnostic batches
 

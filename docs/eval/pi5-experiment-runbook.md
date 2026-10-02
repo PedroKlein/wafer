@@ -10,7 +10,7 @@ Launching the final batch is a human decision, taken after the diagnostic batch 
 |---|---|---|
 | `canonical-primary` | Execute an already frozen primary estimand in the final batch | yes, once the batch passes every gate and is approved |
 | `candidate-supplementary` | Rehearse a proposed v5 experiment or additive bounded view | no; selection is pending |
-| `diagnostic` | Check deployment, host admission, storage, profiling, or a changed path | no |
+| `diagnostic` | Check deployment, host admission, profiling, or a changed path | no |
 | `future-work` | Record evidence that is outside the current Raspberry Pi 5 campaign | no |
 
 A directory name does not determine evidence class. Canonical-primary evidence requires one clean source commit for the whole batch, an entry for the batch in `eval/final-batches.json`, no throttling, complete matrix N, valid artifacts, and fail-closed canonical analysis. Candidate-supplementary and diagnostic runs remain separate from canonical-primary results and prior rehearsals. Candidates are not automatically admitted to N=30; a candidate enters the final campaign only by moving it into the matrix's final `experiments` list before a final batch starts.
@@ -277,6 +277,6 @@ Canonical analysis reads the host entry in `eval/final-batches.json`. It rejects
 - E-Swap-4 has one source-driven burst and one stateless swap per independent run; primary `[0,120s)` and drain `[120s,130s)` sink evidence remain separate and strictly reconciled, with zero after-drain arrivals and no right censoring.
 - E-Perf-2 remains an alias view of E-Perf-1, E-Perf-8 of E-Perf-6, and E-Swap-2/E-Swap-6 of E-Swap-1. Aliases never add independent samples.
 - PMIC remains an internal-rail proxy, not total input power. External USB-C input-power capture is `future-work`.
-- Admission with the retained 5 V / 4.2 A supply is empirical. It receives no threshold waiver for throttling, temperature, reboot, or I/O failure.
+- The retained 5 V / 4.2 A supply gets no threshold waiver: every final run must record `throttled=0x0`, and `approve-batch` refuses a batch with any other value.
 - Diagnostic scout, v11-v17, diagnostic-batch, laptop, synthetic, and candidate-supplementary data are not pooled with canonical-primary results.
 - The capacity scout's `wafer-max-inflight-1` arm runs WAFER with one MQTT publish in flight. It only tests whether eKuiper's one-at-a-time QoS 1 sink explains a capacity gap; it never feeds the E-Perf-10 grid or decision.
