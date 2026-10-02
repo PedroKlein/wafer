@@ -199,15 +199,7 @@ if [ $# -ne 2 ]; then
 fi
 name=$1
 version=$2
-case "$name" in
-  pass-through)    wasm_file="pass_through_transform.wasm" ;;
-  uppercase)       wasm_file="uppercase_transform.wasm" ;;
-  filter)          wasm_file="filter_transform.wasm" ;;
-  json-parse)      wasm_file="json_parse_transform.wasm" ;;
-  tensor-prep)     wasm_file="tensor_prep.wasm" ;;
-  result-format)   wasm_file="result_format.wasm" ;;
-  *)               wasm_file="${name}_transform.wasm" ;;
-esac
+wasm_file="wafer_${name//-/_}.wasm"
 wasm_path="$name/target/wasm32-wasip2/release/$wasm_file"
 if [ ! -f "$wasm_path" ]; then
   echo "Error: WASM not found at $wasm_path" >&2
@@ -237,15 +229,7 @@ username=$1
 token=$2
 name=$3
 version=$4
-case "$name" in
-  pass-through)    wasm_file="pass_through_transform.wasm" ;;
-  uppercase)       wasm_file="uppercase_transform.wasm" ;;
-  filter)          wasm_file="filter_transform.wasm" ;;
-  json-parse)      wasm_file="json_parse_transform.wasm" ;;
-  tensor-prep)     wasm_file="tensor_prep.wasm" ;;
-  result-format)   wasm_file="result_format.wasm" ;;
-  *)               wasm_file="${name}_transform.wasm" ;;
-esac
+wasm_file="wafer_${name//-/_}.wasm"
 wasm_path="$name/target/wasm32-wasip2/release/$wasm_file"
 if [ ! -f "$wasm_path" ]; then
   echo "Error: WASM not found at $wasm_path" >&2
@@ -271,7 +255,7 @@ if [ $# -ne 1 ]; then
   exit 2
 fi
 version=$1
-plugins=(pass-through uppercase filter json-parse tensor-prep result-format)
+plugins=(pass-through uppercase threshold-filter json-parse tensor-prep result-format)
 registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
 for name in "${plugins[@]}"; do
   wasm_dir="$name/target/wasm32-wasip2/release"
