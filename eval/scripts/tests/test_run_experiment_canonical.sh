@@ -326,7 +326,7 @@ def note(text):
 note(" ".join(sys.argv[1:]))
 if sys.argv[1] == "publish":
     if "--summary-file" in sys.argv:
-        time.sleep(1)
+        time.sleep(1.3)
         note(f"publisher-exit {time.time()}")
     sys.exit(0)
 
@@ -358,6 +358,7 @@ ORDER_LOG="$tmp/mqtt-order.log" LOADGEN_LOG="$tmp/loadgen.log" FAKE_RUNTIME_SERV
 [ $((SECONDS - started)) -lt 7 ] \
   || { echo 'subscriber was not stopped by the drain grace' >&2; cat "$tmp/loadgen.log" >&2; exit 1; }
 python3 - "$tmp/loadgen.log" "$tmp/mqtt-result" <<'PY'
+import json
 import sys
 
 lines = open(sys.argv[1]).read().splitlines()
@@ -377,7 +378,9 @@ for flag, value in (
 stops = [line.split() for line in lines if line.startswith(("SIGINT", "SIGTERM"))]
 assert [stop[0] for stop in stops] == ["SIGINT"], lines
 exited = float(next(line.split()[1] for line in lines if line.startswith("publisher-exit")))
-assert 1.0 <= float(stops[0][1]) - exited <= 2.5, lines
+assert abs(float(stops[0][1]) - exited - 1.0) <= 0.2, lines
+window = json.load(open(f"{output}/measurement-window.json"))
+assert abs(window["finished_ns"] / 1e9 - exited) <= 0.2, (window, exited)
 PY
 
 echo 'canonical run-experiment tests: PASS'

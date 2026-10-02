@@ -1804,11 +1804,11 @@ def test_swap3_stops_subscriber_after_the_drain_grace(
         )
         return publisher
 
-    observed_timeouts: list[int] = []
+    drain_anchors: list[int] = []
 
-    def stop_after_observation(process: object, timeout: int = 30) -> int:
+    def stop_after_observation(process: object, publisher_finished_ns: int) -> int:
         assert process is subscriber
-        observed_timeouts.append(timeout)
+        drain_anchors.append(publisher_finished_ns)
         return subscriber.returncode
 
     def fake_audit(root: Path, destination: Path, cpus: str) -> Path:
@@ -1830,7 +1830,7 @@ def test_swap3_stops_subscriber_after_the_drain_grace(
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(runner, "wait_for_ekuiper_rule_ready", lambda rule: None)
-    monkeypatch.setattr(runner, "wait_for_subscriber", stop_after_observation)
+    monkeypatch.setattr(runner, "drain_subscriber", stop_after_observation)
     monkeypatch.setattr(runner.time, "time_ns", lambda: next(times))
     monkeypatch.setattr(runner.time, "sleep", lambda seconds: None)
 
@@ -1840,7 +1840,7 @@ def test_swap3_stops_subscriber_after_the_drain_grace(
         runner.AttemptSelection(path=output, skip=False),
     )
 
-    assert observed_timeouts == [runner.MQTT_DRAIN_GRACE_SECS]
+    assert drain_anchors == [event_ns + 2_000_000]
     assert ekuiper_states == [True, False]
     assert commands[0] == (
         "publish",
@@ -1888,7 +1888,7 @@ def test_ekuiper_profile_stops_subscriber_after_the_drain_grace(
         returncode = 1
 
     subscriber = Process()
-    observed_timeouts: list[int] = []
+    drain_anchors: list[int] = []
     ekuiper_states: list[tuple[bool, bool]] = []
     audited_gctrace: list[bool] = []
 
@@ -1904,9 +1904,9 @@ def test_ekuiper_profile_stops_subscriber_after_the_drain_grace(
         path.write_text('{"process_snapshot":{"processes":[]}}\n')
         return path
 
-    def stop_after_observation(process: object, timeout: int = 30) -> int:
+    def stop_after_observation(process: object, publisher_finished_ns: int) -> int:
         assert process is subscriber
-        observed_timeouts.append(timeout)
+        drain_anchors.append(publisher_finished_ns)
         return subscriber.returncode
 
     monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
@@ -1921,7 +1921,7 @@ def test_ekuiper_profile_stops_subscriber_after_the_drain_grace(
     monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     monkeypatch.setattr(runner.subprocess, "Popen", lambda *args, **kwargs: subscriber)
-    monkeypatch.setattr(runner, "wait_for_subscriber", stop_after_observation)
+    monkeypatch.setattr(runner, "drain_subscriber", stop_after_observation)
     monkeypatch.setattr(runner.time, "sleep", lambda seconds: None)
 
     assert not runner.run_ekuiper_item(
@@ -1930,7 +1930,7 @@ def test_ekuiper_profile_stops_subscriber_after_the_drain_grace(
         runner.AttemptSelection(path=output, skip=False),
     )
 
-    assert observed_timeouts == [runner.MQTT_DRAIN_GRACE_SECS]
+    assert len(drain_anchors) == 1
     assert ekuiper_states == [(True, gctrace), (False, False)]
     assert audited_gctrace == [gctrace]
 
@@ -5350,25 +5350,62 @@ def test_ekuiper_failure_during_a_capacity_run_is_an_admitted_outcome(
 
 
 def record_mqtt_run_end(monkeypatch: pytest.MonkeyPatch) -> tuple[list, list]:
-    """Record the load generator calls and how long the subscriber may drain."""
+    """Record the load generator calls and the publisher exit each subscriber drains from."""
     commands: list[tuple[str, dict]] = []
-    timeouts: list[int] = []
+    anchors: list[int] = []
     monkeypatch.setattr(
         runner,
         "loadgen_command",
         lambda root, candidate, action, **kwargs: commands.append((action, kwargs)) or [action],
     )
     monkeypatch.setattr(
-        runner, "wait_for_subscriber", lambda process, timeout=30: timeouts.append(timeout) or 0
+        runner,
+        "drain_subscriber",
+        lambda process, publisher_finished_ns: anchors.append(publisher_finished_ns) or 0,
     )
-    return commands, timeouts
+    return commands, anchors
+
+
+def window_end(leaf: Path) -> int:
+    return json.loads((leaf / "measurement-window.json").read_text())["finished_ns"]
+
+
+def test_drain_subscriber_sends_sigint_at_the_grace_after_the_publisher_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner, "MQTT_DRAIN_GRACE_SECS", 1)
+    ready, stopped = tmp_path / "ready", tmp_path / "stopped"
+    subscriber = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import pathlib, signal, sys, time\n"
+            "def stop(*_):\n"
+            "    pathlib.Path(sys.argv[2]).write_text(str(time.time_ns()))\n"
+            "    sys.exit(0)\n"
+            "signal.signal(signal.SIGINT, stop)\n"
+            "pathlib.Path(sys.argv[1]).touch()\n"
+            "while True:\n"
+            "    time.sleep(0.01)\n",
+            str(ready),
+            str(stopped),
+        ]
+    )
+    while not ready.exists():
+        assert subscriber.poll() is None
+    publisher_finished_ns = runner.time.time_ns() - 400_000_000
+
+    assert runner.drain_subscriber(subscriber, publisher_finished_ns) == 0
+
+    grace_ns = int(stopped.read_text()) - publisher_finished_ns
+    assert abs(grace_ns - 1_000_000_000) <= 100_000_000
 
 
 def test_ekuiper_target_load_run_offsets_warm_up_and_drains_before_sigint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
 ) -> None:
     stub_ekuiper_run(monkeypatch, ekuiper)
-    commands, timeouts = record_mqtt_run_end(monkeypatch)
+    commands, anchors = record_mqtt_run_end(monkeypatch)
     item = ekuiper_item("e-perf-1", "ekuiper")
     output = tmp_path / "ekuiper/run-01-attempt-01"
 
@@ -5379,7 +5416,7 @@ def test_ekuiper_target_load_run_offsets_warm_up_and_drains_before_sigint(
         ("subscribe", {"output": output}),
         ("publish", {"summary_file": output / "publisher-summary.json"}),
     ]
-    assert timeouts == [5]
+    assert anchors == [window_end(output)]
 
 
 def test_capacity_run_drains_before_sigint(
@@ -5387,14 +5424,14 @@ def test_capacity_run_drains_before_sigint(
 ) -> None:
     stub_ekuiper_run(monkeypatch, ekuiper)
     monkeypatch.setattr(runner, "_running_sut_processes", lambda: [])
-    _, timeouts = record_mqtt_run_end(monkeypatch)
+    _, anchors = record_mqtt_run_end(monkeypatch)
     output = tmp_path / "ekuiper/rate-04000/run-01-attempt-01"
 
     runner.run_rate_sweep_item(
         ROOT, ekuiper_item("e-perf-10", "ekuiper/rate-04000"), runner.AttemptSelection(output, False)
     )
 
-    assert timeouts == [5]
+    assert anchors == [window_end(output)]
 
 
 @pytest.mark.parametrize(

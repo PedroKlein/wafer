@@ -4158,12 +4158,18 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
     return finish_attempt(output, item)
 
 
-def wait_for_subscriber(process: subprocess.Popen, timeout: int = 30) -> int:
+def wait_for_subscriber(process: subprocess.Popen, timeout: float = 30) -> int:
     try:
         return process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         process.send_signal(signal.SIGINT)
         return process.wait(timeout=10)
+
+
+def drain_subscriber(process: subprocess.Popen, publisher_finished_ns: int) -> int:
+    """Stop the subscriber at the matrix drain grace after the publisher exited."""
+    deadline_ns = publisher_finished_ns + MQTT_DRAIN_GRACE_SECS * 1_000_000_000
+    return wait_for_subscriber(process, timeout=max(0, deadline_ns - time.time_ns()) / 1e9)
 
 
 def write_json_atomic(path: Path, value: dict) -> None:
@@ -4424,7 +4430,7 @@ def run_restart_item(
                 )
             publisher_code = publisher.wait(timeout=item.measurement_secs + 30)
             measurement_finished_ns = time.time_ns()
-            subscriber_code = wait_for_subscriber(subscriber, timeout=MQTT_DRAIN_GRACE_SECS)
+            subscriber_code = drain_subscriber(subscriber, measurement_finished_ns)
             if publisher_code != 0 or subscriber_code != 0:
                 raise RuntimeError(
                     f"loadgen failed: publisher={publisher_code}, subscriber={subscriber_code}"
@@ -4827,7 +4833,7 @@ def run_ekuiper_item(
             if process_sampler is not None:
                 process_sampler.stop()
                 process_sampler = None
-            subscriber_code = wait_for_subscriber(subscriber, timeout=MQTT_DRAIN_GRACE_SECS)
+            subscriber_code = drain_subscriber(subscriber, measurement_finished_ns)
         ekuiper_health = write_ekuiper_health(output, ekuiper_before)
         if publisher.returncode != 0 or subscriber_code != 0:
             raise RuntimeError(
@@ -5507,7 +5513,7 @@ def run_rate_sweep_item(
             measurement_finished_ns = time.time_ns()
             sampler.stop()
             sampler = None
-            subscriber_code = wait_for_subscriber(subscriber, timeout=MQTT_DRAIN_GRACE_SECS)
+            subscriber_code = drain_subscriber(subscriber, measurement_finished_ns)
         if ekuiper_before is not None:
             ekuiper_health = write_ekuiper_health(output, ekuiper_before)
         if publisher_code != 0 or subscriber_code != 0:

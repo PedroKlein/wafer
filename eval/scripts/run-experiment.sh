@@ -580,8 +580,28 @@ fi
 #   (d) wafer-runtime dies unexpectedly.
 # ============================================================================
 
+_now_ns() {
+    if [ -n "${EPOCHREALTIME:-}" ]; then
+        printf '%s000\n' "${EPOCHREALTIME/[.,]/}"
+    else
+        python3 -c 'import time; print(time.time_ns())'
+    fi
+}
+
+# Return when process $1 exits or after $2 seconds, whichever comes first.
+_wait_or_timeout() {
+    sleep "$2" &
+    local tick=$!
+    if ! wait -n "$1" "$tick" 2>/dev/null && kill -0 "$1" 2>/dev/null; then
+        wait "$tick" 2>/dev/null || true
+    fi
+    kill "$tick" 2>/dev/null || true
+    wait "$tick" 2>/dev/null || true
+}
+
 deadline=$(( $(date +%s) + duration ))
 publisher_finished=0
+publisher_exit_ns=""
 
 if [ -n "$RUNTIME_PID" ]; then
     while true; do
@@ -608,11 +628,16 @@ if [ -n "$RUNTIME_PID" ]; then
             publisher_finished=1
             break
         fi
-        sleep 1
+        if [ "$pub_running" -eq 1 ]; then
+            _wait_or_timeout "$LOADGEN_PUB_PID" 1
+            kill -0 "$LOADGEN_PUB_PID" 2>/dev/null || publisher_exit_ns=$(_now_ns)
+        else
+            sleep 1
+        fi
     done
 fi
 
-measurement_finished_ns=$(python3 -c 'import time; print(time.time_ns())')
+measurement_finished_ns=${publisher_exit_ns:-$(_now_ns)}
 if [ "$has_bench_sink" -eq 0 ]; then
     printf '{"started_ns":%s,"finished_ns":%s}\n' \
         "$measurement_started_ns" "$measurement_finished_ns" > "$OUT_DIR/measurement-window.json"
@@ -620,9 +645,12 @@ fi
 
 if [ "$publisher_finished" -eq 1 ]; then
     _log "publisher finished; subscriber may drain for ${drain_grace_secs}s"
-    for _ in $(seq 1 $(( drain_grace_secs * 10 ))); do
-        kill -0 "$LOADGEN_SUB_PID" 2>/dev/null || break
-        sleep 0.1
+    grace_deadline_ns=$(( measurement_finished_ns + drain_grace_secs * 1000000000 ))
+    while kill -0 "$LOADGEN_SUB_PID" 2>/dev/null; do
+        grace_left_ns=$(( grace_deadline_ns - $(_now_ns) ))
+        [ "$grace_left_ns" -gt 0 ] || break
+        _wait_or_timeout "$LOADGEN_SUB_PID" \
+            "$(( grace_left_ns / 1000000000 )).$(printf '%09d' $(( grace_left_ns % 1000000000 )))"
     done
     if kill -0 "$LOADGEN_SUB_PID" 2>/dev/null; then
         _log "drain grace elapsed; sending SIGINT to the subscriber"
