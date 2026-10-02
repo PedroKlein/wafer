@@ -5,10 +5,10 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 ## Current status
 
 - Final matrix: frozen before execution, seed 1729.
-- Schedule: 2,321 records; 2,091 executed or static leaves. Shared-result aliases contribute zero independent N and point directly to one admitted final source.
+- Schedule: 2,351 records; 2,121 executed or static leaves. Shared-result aliases contribute zero independent N and point directly to one admitted final source.
 - Capacity grid: `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper, with 30 runs per system/rate.
 - Metering: ordinary WAFER leaves explicitly use fuel plus epoch; runtime defaults remain unmetered.
-- E-Swap-3: actual-t0-aligned event series implemented; `disruption-timeline.json` is the only final action timeline, while `publisher-timing.json` is transient and legacy `swap_timeline.json` is rejected.
+- E-Swap-3: actual-t0-aligned event series implemented for four arms: WAFER hot-swap to `threshold-filter-v2`, WAFER restart, eKuiper rule update (stop and start), and eKuiper make-before-break replacement. `disruption-timeline.json` is the only final action timeline, while `publisher-timing.json` is transient and legacy `swap_timeline.json` is rejected. Every arm reports a placebo dip beside its dip as a noise floor without a verdict.
 - E-Swap-4: true source-driven burst and one swap/run implemented; source-origin primary/drain sink accounting is pending the `--repetitions 3` diagnostic batch on the Pi.
 - E-Swap-5: final leaves require request, rollback, sequence, and `post-rollback-continuity.json`; a successful-v2 sink timeline is forbidden after rollback.
 - E-Backpressure: separate `slow`, `drop`, and `dead-letter` conditions with policy-specific accounting are implemented; final evidence remains pending.
@@ -27,9 +27,9 @@ No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, an
 2. Render and review the pre-final analysis preview.
 3. Verify one clean commit locally and deploy it.
 4. Reinstall eKuiper 2.1.5 on each host with `eval/ekuiper/install-native.sh` and run the comparator re-check from the runbook.
-5. Run the `--repetitions 3` diagnostic batch and verify additive retrieval.
+5. Run the E-Swap-3 smoke run (`mise run smoke-swap3`), then the `--repetitions 3` diagnostic batch, and verify additive retrieval.
 6. Obtain all-PASS independent readiness review.
-7. Launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
+7. Repeat the E-Swap-3 smoke run, then launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
 
 ## Current claim boundaries
 

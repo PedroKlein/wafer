@@ -196,6 +196,10 @@ text. See [`../interfaces/http-api.md`](../interfaces/http-api.md).
 
 - E-Swap-3 retains `disruption-timeline.json` as its sole final action timeline;
   `publisher-timing.json` is transient and legacy `swap_timeline.json` is rejected.
+  Its four arms are the WAFER hot-swap to `threshold-filter-v2`, the WAFER restart,
+  the eKuiper rule update (stop and start), and the eKuiper make-before-break
+  replacement, which records its REST calls in `rule-replacement.json`. Each run
+  reports a placebo dip 6 s before the action beside the dip.
 - E-Swap-4 uses one swap per independent run and source-origin primary/drain accounting.
 - E-Swap-5 requires request, rollback, sequence, and
   `post-rollback-continuity.json`; it rejects a fabricated successful-v2 timeline.

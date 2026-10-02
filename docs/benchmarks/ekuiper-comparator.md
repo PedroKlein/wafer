@@ -2,7 +2,7 @@
 
 **Version pin.** Native eKuiper `2.1.5` Linux package (ARM64, or amd64 on the x86 host), the last patch release of the 2.1 line. The evaluation hosts (Raspberry Pi 5, Jetson and x86) run it natively; no evaluation path uses Docker.
 
-**Role.** eKuiper is the reference stream-processing engine for E-Perf-1 target-load delivery/latency, E-Perf-10 gateway capacity, and E-Swap-3 rule-restart disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
+**Role.** eKuiper is the reference stream-processing engine for E-Perf-1 target-load delivery/latency, E-Perf-10 gateway capacity, and E-Swap-3 rule-change disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
 
 ## Raspberry Pi 5 setup
 
@@ -43,7 +43,7 @@ What the harness depends on did not change between 2.1.0 and 2.1.5:
 
 Three things did change. 2.1.0 opened an idle MQTT control-channel client to the local broker at startup, and 2.1.5 does not. The packaged `connections/connection.yaml` no longer defines sample connections, which Pipeline A never referenced. 2.1.5 also presizes some per-message maps in the projection path, so its numbers are not interchangeable with earlier 2.1.0 diagnostics.
 
-Results describe eKuiper 2.1.5 with this configuration, not a later release line or a tuned deployment. Before each host's final batch, the [runbook](../eval/pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch) re-runs the smoke test and a short series of rule restarts under load on that host.
+Results describe eKuiper 2.1.5 with this configuration, not a later release line or a tuned deployment. Before each host's final batch, the [runbook](../eval/pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch) re-runs the smoke test and a short series of each E-Swap-3 arm under load on that host.
 
 ## Historical macOS setup
 
@@ -69,12 +69,24 @@ For every paired WAFER/eKuiper run:
 
 1. Confirm Mosquitto is active and assigned to CPU 0.
 2. Assign the active SUT to CPUs 1–3. Run only one SUT at a time.
-3. Seed eKuiper before its run. The harness waits up to 10 seconds for `pipeline_a` to report `running` with an empty `message` before warmup, and fails the attempt as infrastructure if it does not.
+3. Seed eKuiper before its run; the seed script also deletes the E-Swap-3 replacement rule `pipeline_a_v2`, because eKuiper keeps rules across restarts. The harness waits up to 10 seconds for `pipeline_a` to report `running` with an empty `message` before warmup, checks that it is the only rule, and fails the attempt as infrastructure otherwise.
 4. Use the same `wafer-loadgen` profile, payload, topics, warmup, and measurement window for WAFER and eKuiper.
 5. Use the common subscriber to write `latency.hdr` and sequence accounting; the harness derives the E2E `throughput.csv` from the subscriber's metadata. Every system's run ends the same way: warmup messages are numbered from the measured count up, the subscriber declares the measured range, and after the publisher exits it has the matrix's 5-second drain grace before it gets SIGINT. Messages that never arrived are the run's loss, recorded and never a reason to reject or retry the run. See "Final amended contract" in `eval/RESULT-CONTRACT.md`.
 6. Record the eKuiper package version and SHA256 in run metadata.
 7. Save `ekuiper-audit.json` before warmup. It contains the active rule and stream, effective systemd settings, the SHA-256 of `/etc/kuiper/mqtt_source.yaml` and `/etc/kuiper/kuiper.yaml`, process tree, per-process `Cpus_allowed_list`, and an explicit concurrent-SUT check. The unit environment must not set `GODEBUG`; only the profiled arm of the [tail-profiling diagnostic](ekuiper-profile-diagnostic.md) traces Go GC, and the runner removes its drop-in before any other eKuiper start.
-8. Save `ekuiper-health.json`: `systemctl show kuiper -p NRestarts,ExecMainStatus,MainPID` and the `pipeline_a` status from the REST API, once before warmup and once after the run. If the unit restarted or lost its main process, the run is a `runtime-exit` outcome, as a WAFER crash is. If the rule is not `running` at the end or its status carries a `message`, which eKuiper sets while it retries a failed rule, the run is a `rule-error` outcome. Either outcome stops the run early: it is admitted, not retried, and counts against the experiment's criterion. The capacity scout has its own stop rules, so there either one fails the attempt as infrastructure. `exit_codes.ekuiper` in `metadata.json` records what the snapshots show. The rule restart in E-Swap-3 is the arm's own action and is not counted; the rule's `lastStartTimestamp` must move there and nowhere else. Per-operator `exceptions_total` counters are not judged. See "eKuiper health" in `eval/RESULT-CONTRACT.md`.
+8. Save `ekuiper-health.json`: `systemctl show kuiper -p NRestarts,ExecMainStatus,MainPID` and the `pipeline_a` status from the REST API, once before warmup and once after the run. If the unit restarted or lost its main process, the run is a `runtime-exit` outcome, as a WAFER crash is. If the rule is not `running` at the end or its status carries a `message`, which eKuiper sets while it retries a failed rule, the run is a `rule-error` outcome. Either outcome stops the run early: it is admitted, not retried, and counts against the experiment's criterion. The capacity scout has its own stop rules, so there either one fails the attempt as infrastructure. `exit_codes.ekuiper` in `metadata.json` records what the snapshots show. The E-Swap-3 rule update (stop and start) is the `ekuiper-restart` arm's own action and is not counted; the rule's `lastStartTimestamp` must move there and nowhere else. The `ekuiper-make-before-break` arm ends with `pipeline_a_v2` in place of `pipeline_a`, so its snapshot after the run reads that rule, which must have started during the run. Per-operator `exceptions_total` counters are not judged. See "eKuiper health" in `eval/RESULT-CONTRACT.md`.
+
+## E-Swap-3 rule changes
+
+E-Swap-3 has two eKuiper arms. `ekuiper-restart` is the eKuiper rule update (stop and start): it stops `pipeline_a` and starts it again through the REST API. `ekuiper-make-before-break` changes the rule without stopping it first:
+
+1. `POST /rules` creates `pipeline_a_v2`, the rule that `seed-pipeline-a.sh --dry-run` prints as `replacement_rule_payload`: Pipeline A with `temperature >= 60` in place of `temperature >= 50`, the change `threshold-filter-v2` makes on WAFER. The workload's constant 72.5 passes both rules.
+2. The harness reads `GET /rules/pipeline_a_v2/status` every 10 ms until `sink_mqtt_0_0_records_out_total` is above 0, for up to 10 seconds.
+3. `DELETE /rules/pipeline_a` retires the old rule.
+
+The emission check reads the replacement's own sink counter because nothing else tells the two rules apart: both read the one `wafer_telemetry` subscription, so the source counters are shared; eKuiper reports `running` before the new rule has received a message; and both rules publish identical payloads to the same topic. While both rules run, a message can be published twice, so the arm can show duplicates; like its loss, they are reported data. Deleting `pipeline_a` only after `pipeline_a_v2` carries data keeps the stream's MQTT subscription open, because eKuiper closes it when the last rule on the stream goes. A local check against eKuiper 2.1.5 confirmed that the source client keeps its subscription through the replacement, while a stop and start unsubscribes and reconnects it.
+
+`rule-replacement.json` keeps the three calls with their HTTP status, body and timings. The seed script deletes `pipeline_a_v2` before every eKuiper run, so each run starts from `pipeline_a` alone.
 
 ## Diagnostic finding
 

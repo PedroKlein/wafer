@@ -93,9 +93,12 @@ E-Perf-5 remains `PENDING` until matching Raspberry Pi 5 and x86 Linux batches e
 
 Each strategy has 30 runs and one disruption at measured t=60 seconds:
 
-- WAFER stateless hot-swap;
+- WAFER stateless hot-swap of the threshold filter to `threshold-filter-v2`;
 - WAFER process restart;
-- eKuiper rule restart.
+- eKuiper rule update (stop and start) of `pipeline_a`;
+- eKuiper make-before-break replacement: create `pipeline_a_v2` on the shared stream, wait until its own sink counts output, then delete `pipeline_a`.
+
+The replacement plugin and the replacement rule make the same change, raising the lower temperature bound from 50 to 60; the workload's constant 72.5 passes both versions.
 
 The subscriber retains bounded observations and writes exactly 200 contiguous 100 ms buckets over `[-10 s,+10 s)` around the actual action-start timestamp. `disruption-timeline.json` is the sole retained final action timeline. `publisher-timing.json` is transient and removed after finalization; legacy `swap_timeline.json` rejects the final leaf. The scheduled t=60 boundary and actual alignment error are recorded; an error over 10 ms invalidates the leaf.
 
@@ -107,9 +110,10 @@ The run-level estimators are:
 - contiguous below-95-percent interruption containing t0;
 - action duration from a monotonic clock;
 - recovery to five consecutive buckets at or above 95 percent of baseline after action end, right-censored at +10 seconds;
-- full-run loss, duplication, and latency summary.
+- full-run loss, duplication, and latency summary;
+- placebo dip: the same dip estimator with the event window moved to `[-8,-4)`, inside the baseline window, reported as a descriptive noise floor without a verdict.
 
-The restart comparators are measured rather than assigned a synthetic 100 percent dip.
+The comparators are measured rather than assigned a synthetic 100 percent dip, and no arm passes or fails against another.
 
 ### E-Swap-4 true burst
 

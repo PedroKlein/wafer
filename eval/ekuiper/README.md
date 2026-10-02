@@ -32,6 +32,8 @@ Pipeline A implements the comparator path:
 MQTT wafer/telemetry → JSON decode → 50 ≤ temperature ≤ 99999 → MQTT wafer/telemetry/hot
 ```
 
+The script first deletes any existing stream, `pipeline_a`, and `pipeline_a_v2`, the replacement rule that the E-Swap-3 `ekuiper-make-before-break` arm creates during its run. eKuiper keeps rules across restarts, so this returns every run to `pipeline_a` alone. `--dry-run` also prints that replacement as `replacement_rule_payload`: Pipeline A with the lower bound raised to 60, the change `threshold-filter-v2` makes on WAFER. See "E-Swap-3 rule changes" in `docs/benchmarks/ekuiper-comparator.md`.
+
 ## Diagnostic tail profiling
 
 The optional `e-compare-ekuiper-profile` batch is isolated from canonical comparisons. It schedules five profiled and five unprofiled-control host runs at each of 1,000, 4,000, and 8,000 messages per second. Paired runs share the same rate, run index, Pipeline A config, QoS 1 transport, operator concurrency 1, 30-second warmup, and 60-second measurement.
