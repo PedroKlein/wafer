@@ -190,7 +190,8 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         serde_json::from_str(&std::fs::read_to_string(output_dir.join("interval-latency.json"))?)?;
     assert_eq!(intervals["interval_clock"], "monotonic-elapsed");
     assert_eq!(intervals["alignment_clock"], "unix-epoch");
-    assert_eq!(intervals["maximum_rows"], 4);
+    assert_eq!(intervals["publisher_drain_ns"], 6_000_000_000_u64);
+    assert_eq!(intervals["maximum_rows"], 10);
     assert_eq!(
         intervals["rows"]
             .as_array()
