@@ -59,6 +59,8 @@ VERDICT_THRESHOLD_FIELDS = {
 VERDICT_RULES = {"one-sided-bound", "exact-count", "every-run", "per-rate-cell", "tested-rate-bracket"}
 VERDICT_ROLES = {"criterion", "reference", "gate"}
 VERDICT_DIRECTIONS = {"<", "<=", ">", ">="}
+
+
 def load_object(path: Path) -> dict:
     try:
         value = json.loads(path.read_text())
