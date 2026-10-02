@@ -139,6 +139,9 @@ RATE_SWEEP_SYSTEMS = ("mqtt-loopback", "native", "wafer", "ekuiper")
 CANONICAL_MATRIX_PATH = EVAL_ROOT / "canonical-matrix.json"
 FINAL_EXPERIMENTS = frozenset(json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"])
 RATE_SWEEP_DEFINITION = json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"]["e-perf-10"]
+MQTT_DRAIN_GRACE_SECS = int(
+    json.loads(CANONICAL_MATRIX_PATH.read_text())["final_campaign"]["mqtt_drain_grace_secs"]
+)
 RATE_SWEEP_RATES = tuple(RATE_SWEEP_DEFINITION["rate_points_msg_s"])
 RATE_SWEEP_REPETITIONS = int(RATE_SWEEP_DEFINITION["repetitions"])
 RATE_SWEEP_WARMUP_SECS = int(RATE_SWEEP_DEFINITION["warmup_secs"])
@@ -3458,18 +3461,19 @@ def write_ekuiper_profile_artifacts(
     interval_end_ns = interval_start_ns + interval_duration_ns
     interval_rows = intervals.get("rows", [])
     interval_row_count = intervals.get("row_count")
+    maximum_rows = intervals.get("maximum_rows")
     if (
-        not measurement_start_ns <= interval_start_ns < measurement_end_ns
+        not measurement_start_ns
+        <= interval_start_ns
+        < measurement_end_ns + MQTT_DRAIN_GRACE_SECS * 1_000_000_000
         or interval_duration_ns != CANDIDATE_MEASUREMENT_SECS * 1_000_000_000
-        or interval_end_ns > measurement_end_ns + 1_000_000_000
         or interval_row_count != len(interval_rows)
-        or not CANDIDATE_MEASUREMENT_SECS
-        <= interval_row_count
-        <= CANDIDATE_MEASUREMENT_SECS + 2
+        or type(maximum_rows) is not int
+        or not 1 <= interval_row_count <= maximum_rows
     ):
         raise ValueError("eKuiper profile intervals do not align to the measurement window")
     process_metrics = _ekuiper_profile_process_summary(
-        output, context, interval_start_ns, interval_end_ns
+        output, context, measurement_start_ns, measurement_end_ns
     )
     gc_runtime_metrics = _ekuiper_gctrace_summary(
         output, context, interval_start_ns, interval_end_ns
@@ -3497,6 +3501,7 @@ def write_ekuiper_profile_artifacts(
             "measurement_start_ns": interval_start_ns,
             "measurement_end_ns": interval_end_ns,
             "row_count": intervals["row_count"],
+            "maximum_rows": maximum_rows,
             "path": "interval-metrics.json",
             "sha256": hashlib.sha256((output / "interval-metrics.json").read_bytes()).hexdigest(),
         },
@@ -4155,12 +4160,18 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
     return finish_attempt(output, item)
 
 
-def wait_for_subscriber(process: subprocess.Popen, timeout: int = 30) -> int:
+def wait_for_subscriber(process: subprocess.Popen, timeout: float = 30) -> int:
     try:
         return process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         process.send_signal(signal.SIGINT)
         return process.wait(timeout=10)
+
+
+def drain_subscriber(process: subprocess.Popen, publisher_finished_ns: int) -> int:
+    """Stop the subscriber at the matrix drain grace after the publisher exited."""
+    deadline_ns = publisher_finished_ns + MQTT_DRAIN_GRACE_SECS * 1_000_000_000
+    return wait_for_subscriber(process, timeout=max(0, deadline_ns - time.time_ns()) / 1e9)
 
 
 def write_json_atomic(path: Path, value: dict) -> None:
@@ -4188,12 +4199,12 @@ def loadgen_command(
             "--topic", topic or "wafer/telemetry/hot", "--output-dir", str(output),
             "--total-messages", str(item.total_messages or 0),
             "--measurement-secs", str(item.measurement_secs),
+            "--drain-grace-secs", str(MQTT_DRAIN_GRACE_SECS),
             "--host-tag", HOST.tag,
+            "--sequence-example-limit", "1024",
         ]
-        if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT} and item.total_messages is not None:
+        if item.total_messages is not None:
             command.extend(["--sequence-end-exclusive", str(item.total_messages)])
-        if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT, "e-swap-3"}:
-            command.extend(["--sequence-example-limit", "1024"])
         if item.experiment == "e-swap-3" and event_aligned:
             command.extend([
                 "--publisher-timing-receipt", str(output / "publisher-timing.json"),
@@ -4304,7 +4315,12 @@ def run_restart_item(
 
             subprocess.run(
                 loadgen_command(
-                    root, item, "publish", duration=item.warmup_secs, event_aligned=False
+                    root,
+                    item,
+                    "publish",
+                    duration=item.warmup_secs,
+                    sequence_start=item.total_messages,
+                    event_aligned=False,
                 ),
                 cwd=root,
                 env=environment,
@@ -4415,12 +4431,12 @@ def run_restart_item(
                     "actual E-Swap-3 action start missed measured t=60 by more than 10 ms"
                 )
             publisher_code = publisher.wait(timeout=item.measurement_secs + 30)
-            subscriber_code = wait_for_subscriber(subscriber, timeout=0)
+            measurement_finished_ns = time.time_ns()
+            subscriber_code = drain_subscriber(subscriber, measurement_finished_ns)
             if publisher_code != 0 or subscriber_code != 0:
                 raise RuntimeError(
                     f"loadgen failed: publisher={publisher_code}, subscriber={subscriber_code}"
                 )
-            measurement_finished_ns = time.time_ns()
             if ekuiper_before is not None:
                 # The rule stop and start above leave the unit's main process alone, so only
                 # a crash or a failed rule shows in this snapshot.
@@ -4775,7 +4791,13 @@ def run_ekuiper_item(
         ekuiper_before = ekuiper_run_start()
         with (output / "stdout.log").open("ab") as log:
             subprocess.run(
-                loadgen_command(root, item, "publish", duration=item.warmup_secs),
+                loadgen_command(
+                    root,
+                    item,
+                    "publish",
+                    duration=item.warmup_secs,
+                    sequence_start=item.total_messages,
+                ),
                 cwd=root,
                 env=environment,
                 stdout=log,
@@ -4800,18 +4822,20 @@ def run_ekuiper_item(
             )
             time.sleep(0.5)
             publisher = subprocess.run(
-                loadgen_command(root, item, "publish"),
+                loadgen_command(
+                    root, item, "publish", summary_file=output / "publisher-summary.json"
+                ),
                 cwd=root,
                 env=environment,
                 stdout=log,
                 stderr=log,
                 check=False,
             )
-            subscriber_code = wait_for_subscriber(subscriber, timeout=0)
             measurement_finished_ns = time.time_ns()
             if process_sampler is not None:
                 process_sampler.stop()
                 process_sampler = None
+            subscriber_code = drain_subscriber(subscriber, measurement_finished_ns)
         ekuiper_health = write_ekuiper_health(output, ekuiper_before)
         if publisher.returncode != 0 or subscriber_code != 0:
             raise RuntimeError(
@@ -5489,11 +5513,9 @@ def run_rate_sweep_item(
             )
             publisher_code = publisher.wait(timeout=item.measurement_secs + 30)
             measurement_finished_ns = time.time_ns()
-            if subscriber.poll() is None:
-                subscriber.send_signal(signal.SIGINT)
-            subscriber_code = subscriber.wait(timeout=10)
-        sampler.stop()
-        sampler = None
+            sampler.stop()
+            sampler = None
+            subscriber_code = drain_subscriber(subscriber, measurement_finished_ns)
         if ekuiper_before is not None:
             ekuiper_health = write_ekuiper_health(output, ekuiper_before)
         if publisher_code != 0 or subscriber_code != 0:

@@ -47,7 +47,7 @@ Each of 30 independent runs contains one stateless swap and contributes one sink
 
 ### External MQTT path
 
-`wafer-loadgen publish` and `wafer-loadgen subscribe` drive E-Perf-1, E-Perf-2, E-Perf-10, and E-Swap-3 through the same native Mosquitto broker. The publisher stamps each payload with its scheduled send time, reports how late messages left as `source_lag_ns`, and distinguishes intended offers, client-queue rejection, and successful enqueue. The subscriber records bounded sequence and HDR summaries. Final capacity runs do not require per-message CSV traces.
+`wafer-loadgen publish` and `wafer-loadgen subscribe` drive E-Perf-1, E-Perf-2, E-Perf-10, and E-Swap-3 through the same native Mosquitto broker. The publisher stamps each payload with its scheduled send time, reports how late messages left as `source_lag_ns`, and distinguishes intended offers, client-queue rejection, and successful enqueue. The subscriber records bounded sequence and HDR summaries. Every MQTT run declares its measured sequence range, numbers warmup messages above it, and gives the subscriber one drain grace from the canonical matrix after the publisher exits before stopping it with SIGINT, so tail loss is recorded the same way for every system. Final capacity runs do not require per-message CSV traces.
 
 ## Canonical metering
 

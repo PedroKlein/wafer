@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -626,6 +626,95 @@ def write_ekuiper_health(
     (result / "ekuiper-health.json").write_text(json.dumps(health))
 
 
+def write_target_load_summaries(
+    result: Path, received_unique: int = 60_000, sequence_end: int | None = 60_000
+) -> None:
+    """A clean 60,000-message publisher and a subscriber that missed the rest at the tail."""
+    publisher = {
+        "schema_version": 1,
+        "intended": 60_000,
+        "rejected": 0,
+        "enqueued": 60_000,
+        "acked": 60_000,
+        "unacked_at_exit": 0,
+        "connects": 1,
+        "measurement_duration_ns": 60_000_000_000,
+        "deadline_misses": 0,
+        "exit_reason": "duration",
+    }
+    gaps = 60_000 - received_unique
+    subscriber = {
+        "started_at_ns": 1,
+        "ended_at_ns": 2,
+        "exit_reason": "sigint" if gaps else "total-messages",
+        "status": "complete",
+        "git_sha": "1" * 40,
+        "host_tag": "rpi5",
+        "sequence_end_exclusive": sequence_end,
+        "ignored_sequence_count": 12,
+        "total_recorded": received_unique,
+        "total_messages": received_unique,
+        "parse_errors": 0,
+        "negative_latency_count": 0,
+        "above_highest_latency_count": 0,
+        "clock_steps": 0,
+        "latency_p50_ns": 1,
+        "latency_p95_ns": 2,
+        "latency_p99_ns": 3,
+        "histogram_lowest_ns": 1_000,
+        "histogram_highest_ns": 3_600_000_000_000,
+        "histogram_sig_digits": 3,
+        "sequence": {
+            "expected": 60_000 if sequence_end else received_unique,
+            "total_received": received_unique,
+            "received_unique": received_unique,
+            "total_gaps": gaps if sequence_end else 0,
+            "total_duplicates": 0,
+            "out_of_range": 0,
+            "gap_ranges": [[received_unique, 59_999]] if gaps and sequence_end else [],
+            "duplicate_seqs": [],
+            "examples_truncated": False,
+        },
+    }
+    (result / "publisher-summary.json").write_text(json.dumps(publisher))
+    (result / "subscriber-metadata.json").write_text(json.dumps(subscriber))
+    for name in ("interval-latency.json", "interval-metrics.json"):
+        intervals = json.loads((result / name).read_text())
+        intervals["aggregate_latency_count"] = received_unique
+        intervals["rows"][0].update(
+            latency_count=received_unique,
+            received_events=received_unique,
+            throughput_messages=received_unique,
+        )
+        (result / name).write_text(json.dumps(intervals))
+    declare_mqtt_run_end(result)
+
+
+def declare_mqtt_run_end(leaf: Path, drain_grace_ns: int = 5_000_000_000) -> None:
+    """Give the interval files the subscriber's publisher drain and the matrix drain grace."""
+    for name in ("interval-latency.json", "interval-metrics.json"):
+        intervals = json.loads((leaf / name).read_text())
+        intervals.update(
+            publisher_drain_ns=6_000_000_000,
+            drain_grace_ns=drain_grace_ns,
+            maximum_rows=1 + 6 + -(-drain_grace_ns // 1_000_000_000) + 2,
+        )
+        (leaf / name).write_text(json.dumps(intervals))
+
+
+def make_target_load_result(root: Path, experiment: str, condition: str) -> Path:
+    source = make_result(root)
+    result = root / experiment / "rpi5-2026-08-30T00-00-00Z" / condition / "run-01"
+    result.parent.mkdir(parents=True)
+    source.rename(result)
+    metadata_path = result / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(experiment=experiment, condition=condition, system="wafer")
+    metadata_path.write_text(json.dumps(metadata))
+    write_target_load_summaries(result)
+    return result
+
+
 def make_ekuiper_result(root: Path, exit_code: int | None = 0) -> Path:
     source = make_result(root)
     result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
@@ -645,6 +734,7 @@ def make_ekuiper_result(root: Path, exit_code: int | None = 0) -> Path:
     audit = {"service": {"properties": {"MainPID": "4242", "Environment": "HOME=/var/lib/kuiper"}}}
     (result / "ekuiper-audit.json").write_text(json.dumps(audit))
     write_ekuiper_health(result)
+    write_target_load_summaries(result)
     return result
 
 
@@ -663,6 +753,77 @@ def test_final_ekuiper_result_rejects_a_service_that_inherited_gctrace(tmp_path:
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert traced.returncode != 0
     assert "GODEBUG" in traced.stdout + traced.stderr
+
+
+def test_target_load_tail_loss_is_admitted_data(tmp_path: Path) -> None:
+    result = make_ekuiper_result(tmp_path)
+    write_target_load_summaries(result, received_unique=59_000)
+
+    completed = run(result)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("missing", "violation"),
+    [
+        ("publisher-summary.json", "missing required canonical artefact for e-perf-1: publisher-summary.json"),
+        (None, "subscriber-metadata.json does not declare the publisher's measured sequence range"),
+    ],
+)
+def test_target_load_result_requires_bounded_summaries_and_a_declared_range(
+    tmp_path: Path, missing: str | None, violation: str
+) -> None:
+    result = make_ekuiper_result(tmp_path)
+    write_target_load_summaries(result, received_unique=59_000, sequence_end=None)
+    if missing:
+        (result / missing).unlink()
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert violation in completed.stdout
+
+
+@pytest.mark.parametrize(("experiment", "condition"), [("e-perf-1", "wafer"), ("e-perf-3", "depth-3")])
+def test_wafer_target_load_result_admits_tail_loss_and_requires_the_declared_range(
+    tmp_path: Path, experiment: str, condition: str
+) -> None:
+    result = make_target_load_result(tmp_path, experiment, condition)
+    write_target_load_summaries(result, received_unique=59_000)
+    assert run(result).returncode == 0
+
+    write_target_load_summaries(result, received_unique=59_000, sequence_end=None)
+    completed = run(result)
+    assert completed.returncode == 1
+    assert "does not declare the publisher's measured sequence range" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("mutate", "violation"),
+    [
+        (
+            lambda leaf: declare_mqtt_run_end(leaf, drain_grace_ns=0),
+            "drain_grace_ns is 0, must be the matrix MQTT drain grace 5000000000",
+        ),
+        (
+            lambda leaf: (leaf / "measurement-window.json").write_text(
+                json.dumps({"started_ns": 1, "finished_ns": 2 - 5_500_000_001})
+            ),
+            "subscriber stopped later than the MQTT drain grace after the publisher exit",
+        ),
+    ],
+)
+def test_target_load_result_must_end_at_the_matrix_drain_grace(
+    tmp_path: Path, mutate: Callable[[Path], None], violation: str
+) -> None:
+    result = make_target_load_result(tmp_path, "e-perf-1", "native")
+    mutate(result)
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert violation in completed.stdout
 
 
 def test_canonical_ekuiper_result_requires_its_health_snapshots(tmp_path: Path) -> None:
@@ -944,7 +1105,9 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
         "histogram_highest_ns": 3_600_000_000_000,
         "histogram_sig_digits": 3,
         "sequence": {
+            "expected": 120_000,
             "total_received": 120_000,
+            "received_unique": 120_000,
             "total_gaps": 0,
             "total_duplicates": 0,
             "out_of_range": 0,
@@ -972,6 +1135,7 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
     interval_metrics["rows"][0]["throughput_messages"] = 120_000
     interval_metrics["rows"][0]["throughput_messages_per_second"] = 1_000.0
     (leaf / "interval-metrics.json").write_text(json.dumps(interval_metrics))
+    declare_mqtt_run_end(leaf)
     return leaf
 
 
@@ -1612,6 +1776,21 @@ def test_final_swap3_leaf_accepts_all_declared_strategies_and_rejects_legacy_tim
             ),
             "disruption-analysis.json strategy is invalid",
         ),
+        (
+            lambda leaf: (leaf / "subscriber-metadata.json").write_text(
+                json.dumps(
+                    {
+                        **json.loads((leaf / "subscriber-metadata.json").read_text()),
+                        "sequence_end_exclusive": None,
+                    }
+                )
+            ),
+            "subscriber-metadata.json does not declare the publisher's measured sequence range",
+        ),
+        (
+            lambda leaf: declare_mqtt_run_end(leaf, drain_grace_ns=6_000_000_000),
+            "must be the matrix MQTT drain grace 5000000000",
+        ),
     ],
 )
 def test_final_swap3_contract_fails_missing_or_malformed_required_artifacts(
@@ -2002,7 +2181,7 @@ def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, 
     leaf = tmp_path / state
     leaf.mkdir(parents=True)
     interval = leaf / "interval-metrics.json"
-    interval.write_text('{"aggregate_latency_count":240000}\n')
+    interval.write_text('{"aggregate_latency_count":240000,"maximum_rows":73}\n')
     metadata = {
         "experiment": "e-compare-ekuiper-profile",
         "system": "ekuiper",
@@ -2075,6 +2254,7 @@ def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, 
             "measurement_start_ns": 10_000_000_000,
             "measurement_end_ns": 70_000_000_000,
             "row_count": 60,
+            "maximum_rows": 73,
             "path": interval.name,
             "sha256": hashlib.sha256(interval.read_bytes()).hexdigest(),
         },
@@ -2123,17 +2303,16 @@ def test_ekuiper_profile_verifier_enforces_diagnostic_pairing_and_limitations(
     )
     runtime_path = leaf / "ekuiper-runtime-summary.json"
     runtime = json.loads(runtime_path.read_text())
-    runtime["interval_alignment"]["row_count"] = 61
-    runtime_path.write_text(json.dumps(runtime))
-    assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
-    runtime["interval_alignment"]["row_count"] = 62
-    runtime_path.write_text(json.dumps(runtime))
-    assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
-    runtime["interval_alignment"]["row_count"] = 63
-    runtime_path.write_text(json.dumps(runtime))
-    assert "interval alignment" in " ".join(
-        CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
-    )
+    for row_count in (1, 58, 61, 73):
+        runtime["interval_alignment"]["row_count"] = row_count
+        runtime_path.write_text(json.dumps(runtime))
+        assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
+    for row_count, maximum_rows in ((0, 73), (74, 73), (74, 74)):
+        runtime["interval_alignment"].update(row_count=row_count, maximum_rows=maximum_rows)
+        runtime_path.write_text(json.dumps(runtime))
+        assert "interval alignment" in " ".join(
+            CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
+        )
 
     leaf, metadata = ekuiper_profile_contract_fixture(tmp_path / "invalid", "profiled")
     runtime_path = leaf / "ekuiper-runtime-summary.json"

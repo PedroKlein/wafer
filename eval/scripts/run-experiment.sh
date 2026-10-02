@@ -14,7 +14,8 @@
 #      If it has an MQTT sink, spawn `wafer-loadgen subscribe` (writes
 #      latency.hdr into the result dir).
 #   5. Wait for the loadgen driver(s) or for --duration seconds, whichever
-#      finishes first.
+#      finishes first. Once the publisher exits, the subscriber has the
+#      matrix's MQTT drain grace to reach its count before it gets SIGINT.
 #   6. Send SIGTERM to wafer-runtime; wait for it to exit; collect artefacts
 #      from WAFER_BENCH_OUTPUT_DIR into the result dir.
 #   7. Scrape Prometheus /metrics into per_node_metrics.csv (best-effort).
@@ -49,7 +50,9 @@ Common options:
                              when config uses an MQTT source.
   --subscribe-topic <topic>  Topic for wafer-loadgen subscribe. Auto-detected
                              from config when config has one mqtt sink.
-  --total-messages <N>       Subscriber completion count. Defaults to run-until-signal.
+  --total-messages <N>       Measured sequence range [0, N): the subscriber's completion
+                             count and declared range; warmup publishes from N.
+                             Defaults to run-until-signal.
   --warmup-secs <secs>       MQTT warmup publisher duration before measurement.
   --duration <secs>          Hard cap on measured runtime duration. Default: 300.
   --measurement-secs <secs>  Declared post-warmup measurement window. Defaults to --duration.
@@ -498,6 +501,7 @@ if [ "$runtime_died" -eq 0 ] && [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_p
         --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
         --topic "$mqtt_source_topic" --profile-file "$loadgen_profile" \
         --duration-secs "$warmup_secs")
+    [ -n "$total_messages" ] && warmup_cmd+=(--sequence-start "$total_messages")
     if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
         warmup_cmd=(taskset -c "$WAFER_LOADGEN_CPUSET" "${warmup_cmd[@]}")
     fi
@@ -530,10 +534,16 @@ _stop_loadgen() {
 
 if [ "$runtime_died" -eq 0 ] && [ "$has_mqtt_sink" -eq 1 ] && [ -n "$subscribe_topic" ]; then
     _log "launching wafer-loadgen subscribe topic=$subscribe_topic"
+    drain_grace_secs="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["final_campaign"]["mqtt_drain_grace_secs"])' \
+        "$REPO_ROOT/eval/canonical-matrix.json")"
     sub_args=(subscribe --broker "$broker" --topic "$subscribe_topic" \
               --output-dir "$OUT_DIR" --host-tag "$host" \
-              --measurement-secs "$measurement_secs")
-    [ -n "$total_messages" ] && sub_args+=(--total-messages "$total_messages")
+              --measurement-secs "$measurement_secs" \
+              --drain-grace-secs "$drain_grace_secs" \
+              --sequence-example-limit 1024)
+    if [ -n "$total_messages" ]; then
+        sub_args+=(--total-messages "$total_messages" --sequence-end-exclusive "$total_messages")
+    fi
     loadgen_cmd=("$WAFER_LOADGEN_BIN" "${sub_args[@]}")
     if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
         command -v taskset >/dev/null 2>&1 || { _log "taskset is required for WAFER_LOADGEN_CPUSET"; exit 4; }
@@ -549,7 +559,8 @@ if [ "$runtime_died" -eq 0 ] && [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_p
     _log "launching wafer-loadgen publish profile=$loadgen_profile"
     pub_args=(publish --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
               --topic "$mqtt_source_topic" --profile-file "$loadgen_profile" \
-              --hotswap-result-path "$OUT_DIR/swap_timeline.json")
+              --hotswap-result-path "$OUT_DIR/swap_timeline.json" \
+              --summary-file "$OUT_DIR/publisher-summary.json")
     loadgen_cmd=("$WAFER_LOADGEN_BIN" "${pub_args[@]}")
     if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
         command -v taskset >/dev/null 2>&1 || { _log "taskset is required for WAFER_LOADGEN_CPUSET"; exit 4; }
@@ -564,11 +575,33 @@ fi
 # ============================================================================
 # Terminate when:
 #   (a) both loadgen processes exit cleanly (source-driven experiment), OR
-#   (b) --duration timer elapses (open-ended experiment), OR
-#   (c) wafer-runtime dies unexpectedly.
+#   (b) the publisher exits while the subscriber runs (then drain, below), OR
+#   (c) --duration timer elapses (open-ended experiment), OR
+#   (d) wafer-runtime dies unexpectedly.
 # ============================================================================
 
+_now_ns() {
+    if [ -n "${EPOCHREALTIME:-}" ]; then
+        printf '%s000\n' "${EPOCHREALTIME/[.,]/}"
+    else
+        python3 -c 'import time; print(time.time_ns())'
+    fi
+}
+
+# Return when process $1 exits or after $2 seconds, whichever comes first.
+_wait_or_timeout() {
+    sleep "$2" &
+    local tick=$!
+    if ! wait -n "$1" "$tick" 2>/dev/null && kill -0 "$1" 2>/dev/null; then
+        wait "$tick" 2>/dev/null || true
+    fi
+    kill "$tick" 2>/dev/null || true
+    wait "$tick" 2>/dev/null || true
+}
+
 deadline=$(( $(date +%s) + duration ))
+publisher_finished=0
+publisher_exit_ns=""
 
 if [ -n "$RUNTIME_PID" ]; then
     while true; do
@@ -591,15 +624,40 @@ if [ -n "$RUNTIME_PID" ]; then
         elif [ "$pub_running" -eq 0 ] && [ "$sub_running" -eq 0 ]; then
             _log "loadgen processes finished"
             break
+        elif [ -n "$LOADGEN_PUB_PID" ] && [ "$pub_running" -eq 0 ]; then
+            publisher_finished=1
+            break
         fi
-        sleep 1
+        if [ "$pub_running" -eq 1 ]; then
+            _wait_or_timeout "$LOADGEN_PUB_PID" 1
+            kill -0 "$LOADGEN_PUB_PID" 2>/dev/null || publisher_exit_ns=$(_now_ns)
+        else
+            sleep 1
+        fi
     done
 fi
 
-measurement_finished_ns=$(python3 -c 'import time; print(time.time_ns())')
+measurement_finished_ns=${publisher_exit_ns:-$(_now_ns)}
 if [ "$has_bench_sink" -eq 0 ]; then
     printf '{"started_ns":%s,"finished_ns":%s}\n' \
         "$measurement_started_ns" "$measurement_finished_ns" > "$OUT_DIR/measurement-window.json"
+fi
+
+if [ "$publisher_finished" -eq 1 ]; then
+    _log "publisher finished; subscriber may drain for ${drain_grace_secs}s"
+    grace_deadline_ns=$(( measurement_finished_ns + drain_grace_secs * 1000000000 ))
+    while kill -0 "$LOADGEN_SUB_PID" 2>/dev/null; do
+        grace_left_ns=$(( grace_deadline_ns - $(_now_ns) ))
+        [ "$grace_left_ns" -gt 0 ] || break
+        _wait_or_timeout "$LOADGEN_SUB_PID" \
+            "$(( grace_left_ns / 1000000000 )).$(printf '%09d' $(( grace_left_ns % 1000000000 )))"
+    done
+    if kill -0 "$LOADGEN_SUB_PID" 2>/dev/null; then
+        _log "drain grace elapsed; sending SIGINT to the subscriber"
+        kill -INT "$LOADGEN_SUB_PID" 2>/dev/null || true
+    fi
+    wait "$LOADGEN_SUB_PID" 2>/dev/null || true
+    LOADGEN_SUB_PID=""
 fi
 
 if [ -n "$RUNTIME_PID" ] && kill -0 "$RUNTIME_PID" 2>/dev/null; then

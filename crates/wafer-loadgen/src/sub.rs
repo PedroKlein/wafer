@@ -8,7 +8,7 @@
 //!
 //! Cancel model: two exit signals compete. Whichever fires first wins.
 //! 1. SIGTERM or SIGINT, handled from the start of the run.
-//! 2. `--total-messages` reached (or its default).
+//! 2. `--total-messages` distinct sequence numbers recorded (or its default).
 //!
 //! Both paths flush artifacts before returning. When a bounded side artifact
 //! overflows, recording continues and the run is written as `partial`.
@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::MAX_PACKET_BYTES;
+use crate::publish::EXIT_DRAIN_SECS;
 use crate::recorder::{
     ActionTimingReceipt, EventBucketRecorder, LatencyRecorder, PublisherTimingReceipt,
     RecordOutcome, SequenceReport, SubscriberMetadata, now_ns,
@@ -46,8 +47,8 @@ pub struct SubscribeArgs {
     #[arg(long)]
     pub output_dir: PathBuf,
 
-    /// Exit gracefully after this many messages have been *observed* (parsed
-    /// or not). Set to 0 to run until SIGINT.
+    /// Exit gracefully after this many distinct sequence numbers have been
+    /// recorded; duplicates do not count. Set to 0 to run until SIGINT.
     #[arg(long, default_value_t = 0)]
     pub total_messages: u64,
 
@@ -81,6 +82,12 @@ pub struct SubscribeArgs {
     /// Declared measured window used to bound one-second interval output.
     #[arg(long, default_value_t = 300)]
     pub measurement_secs: u64,
+
+    /// Seconds the harness may keep listening after the publisher exited;
+    /// widens the interval row bound, with the publisher's own exit drain,
+    /// without changing the declared window.
+    #[arg(long, default_value_t = 0)]
+    pub drain_grace_secs: u64,
 
     /// Publisher timing receipt used to bound disruption timestamp capture.
     #[arg(long)]
@@ -189,7 +196,12 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
 
     let mut recorder = LatencyRecorder::with_sequence_example_limit(args.sequence_example_limit)
         .with_sequence_end(args.sequence_end_exclusive);
-    recorder.enable_intervals(measurement_start_unix_epoch_ns, args.measurement_secs)?;
+    recorder.enable_intervals(
+        measurement_start_unix_epoch_ns,
+        args.measurement_secs,
+        EXIT_DRAIN_SECS,
+        args.drain_grace_secs,
+    )?;
     recorder.anchor_clock(measurement_start_unix_epoch_ns);
     let mut event_buckets = match &args.publisher_timing_receipt {
         Some(path) => {
@@ -237,10 +249,12 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
                             trace.as_mut(),
                             (receive_ns, elapsed_ns, &payload),
                         )?;
-                        if args.total_messages > 0 && recorder.total_messages() >= args.total_messages {
+                        if args.total_messages > 0
+                            && recorder.sequence().received_unique() >= args.total_messages
+                        {
                             exit_reason = "total-messages";
                             info!(
-                                total = recorder.total_messages(),
+                                unique = recorder.sequence().received_unique(),
                                 "Reached --total-messages; flushing artifacts"
                             );
                             break;
@@ -446,6 +460,7 @@ mod tests {
             sequence_example_limit: None,
             sequence_end_exclusive: None,
             measurement_secs: 0,
+            drain_grace_secs: 0,
             publisher_timing_receipt: None,
             action_timing_receipt: None,
         };

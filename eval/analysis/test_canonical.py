@@ -887,6 +887,7 @@ def ekuiper_profile_summary() -> dict:
                             "measurement_start_ns": 10_000_000_000,
                             "measurement_end_ns": 70_000_000_000,
                             "row_count": 60,
+                            "maximum_rows": 73,
                             "path": "interval-metrics.json",
                             "sha256": "b" * 64,
                         },
@@ -1015,8 +1016,8 @@ def test_canonical_ekuiper_profile_remains_single_release_only() -> None:
         ekuiper_profile_tables(summary)
 
 
-def test_ekuiper_profile_tables_accept_bounded_terminal_partial_intervals() -> None:
-    for row_count in (61, 62):
+def test_ekuiper_profile_tables_accept_rows_up_to_the_declared_bound() -> None:
+    for row_count in (1, 58, 61, 65, 73):
         summary = ekuiper_profile_summary()
         summary["records"][0]["interval_alignment"]["row_count"] = row_count
 
@@ -1025,7 +1026,7 @@ def test_ekuiper_profile_tables_accept_bounded_terminal_partial_intervals() -> N
         assert len(runs) == 30
         assert len(pairs) == 15
 
-    summary["records"][0]["interval_alignment"]["row_count"] = 63
+    summary["records"][0]["interval_alignment"]["row_count"] = 74
     with pytest.raises(ValueError, match="interval alignment"):
         ekuiper_profile_tables(summary)
 
@@ -1049,7 +1050,7 @@ def test_ekuiper_profile_tables_reject_missing_pairs_aliases_and_causal_claims()
         ekuiper_profile_tables(summary)
 
     summary = ekuiper_profile_summary()
-    summary["records"][0]["interval_alignment"]["row_count"] = 59
+    summary["records"][0]["interval_alignment"]["row_count"] = 0
     with pytest.raises(ValueError, match="interval alignment"):
         ekuiper_profile_tables(summary)
 

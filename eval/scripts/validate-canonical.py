@@ -357,6 +357,8 @@ def validate_matrix(matrix: dict) -> list[str]:
             "final_campaign attempt policy must allow one in-place infrastructure retry "
             "and none for the E-Val-1 gate"
         )
+    if campaign.get("mqtt_drain_grace_secs") != 5:
+        errors.append("final_campaign MQTT drain grace must be 5 seconds")
 
     expected_metering_exceptions = {
         "e-perf-5": {

@@ -110,10 +110,10 @@ def target_load_rows(
     intended = rate_msg_s * measurement_secs
     for path, values in admitted_artifacts(batch, "percentiles.json"):
         throughput_path = path.parent / "throughput.csv"
-        sequence_path = path.parent / "sequence.csv"
-        if not throughput_path.is_file() or not sequence_path.is_file():
+        subscriber_path = path.parent / "subscriber-metadata.json"
+        if not throughput_path.is_file() or not subscriber_path.is_file():
             raise ValueError(
-                f"target-load leaf lacks throughput or sequence evidence: {path.parent}"
+                f"target-load leaf lacks throughput or subscriber evidence: {path.parent}"
             )
         with throughput_path.open(newline="") as stream:
             throughput_rows = list(csv.DictReader(stream))
@@ -122,22 +122,24 @@ def target_load_rows(
                 f"target-load throughput must contain one run summary: {throughput_path}"
             )
         throughput = throughput_rows[0]
-        with sequence_path.open(newline="") as stream:
-            sequence_rows = list(csv.DictReader(stream))
-        gaps = sum(
-            int(row["count"]) for row in sequence_rows if row["event_type"] == "gap"
-        )
-        duplicates = sum(
-            int(row["count"])
-            for row in sequence_rows
-            if row["event_type"] == "duplicate"
-        )
+        subscriber = json.loads(subscriber_path.read_text())
+        sequence = subscriber["sequence"]
+        if (
+            subscriber.get("sequence_end_exclusive") != intended
+            or int(sequence["expected"]) != intended
+        ):
+            raise ValueError(
+                f"target-load leaf does not declare its measured sequence range: {path.parent}"
+            )
+        gaps = int(sequence["total_gaps"])
+        duplicates = int(sequence["total_duplicates"])
         received_events = int(throughput["messages_received"])
-        received_unique = received_events - duplicates
+        received_unique = int(sequence["received_unique"])
         duration_ns = int(throughput["duration_ns"])
         if (
             received_unique < 0
             or received_unique > intended
+            or received_events != received_unique + duplicates
             or duration_ns <= 0
             or int(values["total_count"]) != received_events
         ):
@@ -165,3 +167,28 @@ def target_load_rows(
             }
         )
     return pd.DataFrame(rows)
+
+
+def depth_run_records(batch: Path, *, canonical: bool) -> list[dict]:
+    """One record per admitted MQTT depth run; a canonical run adds its declared-range loss."""
+    if not canonical:
+        return [
+            {
+                "condition": path.relative_to(batch).parts[0],
+                "run_index": run_index(path.parent),
+                "p50_ns": values["p50_ns"],
+                "p95_ns": values["p95_ns"],
+            }
+            for path, values in admitted_artifacts(batch, "percentiles.json")
+        ]
+    return [
+        {
+            "condition": row["condition"],
+            "run_index": run_index(Path(row["run"])),
+            "p50_ns": row["p50_ns"],
+            "p95_ns": row["p95_ns"],
+            "received_unique": row["received_unique"],
+            "loss_fraction": row["loss_fraction"],
+        }
+        for row in target_load_rows(batch).to_dict("records")
+    ]
