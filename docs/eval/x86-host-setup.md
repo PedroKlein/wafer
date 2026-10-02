@@ -15,6 +15,7 @@ Read-only preflight: `mise run preflight-x86` or `./eval/scripts/preflight-x86.s
 | Governor | `performance` on every CPU | `sudo cpupower frequency-set -g performance` |
 | Clocks | `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 | follows from the governor and turbo settings |
 | Temperature | `x86_pkg_temp` thermal zone (Intel) or `k10temp`/`coretemp` hwmon | kernel modules `coretemp` or `k10temp` |
+| Power | RAPL package `energy_uj` readable by the user that runs the batch; without it every run fails its power check | `sudo chmod a+r /sys/class/powercap/intel-rapl:*/energy_uj`, again after each reboot |
 | Binaries | built on this host | `mise run build-release-x86` |
 | Services | Mosquitto and native eKuiper 2.1.5 | `eval/ekuiper/install-native.sh` picks the `amd64` package |
 

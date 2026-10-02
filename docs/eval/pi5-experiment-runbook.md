@@ -309,7 +309,7 @@ Canonical analysis reads the host entry in `eval/final-batches.json`. It rejects
 - E-Perf-10 is the gateway envelope over the common grid plus the host's bracket rates, with MQTT support censoring. Delivery-good remains pooled loss at or below 1 percent, mean achieved/offered ratio at least 0.99, and zero duplicates. Each delivery ceiling is bracketed by tested rates, and a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - E-Perf-7 disables mechanisms by TOML omission.
 - E-Perf-9 is Linux filesystem page-cache evidence with disk compiled-component cache disabled.
-- E-Perf-5 remains `PENDING` until the matched x86 Linux block exists; x86 execution and any cross-architecture conclusion are `future-work`.
+- E-Perf-5 remains `PENDING` until an approved x86 batch exists; the Pi and x86 contrasts are then descriptive and carry no cross-architecture verdict.
 - E-Swap-3 uses actual-t0-aligned 100 ms output buckets.
 - E-Swap-1 and E-Swap-5 have ten independent process runs with 50 nested swap or rollback events each. Analysis summarises each run first and reports the first-use (compiling) event of each run apart from the cached events.
 - E-Swap-4 has one source-driven burst and one stateless swap per independent run; primary `[0,120s)` and drain `[120s,130s)` sink evidence remain separate and strictly reconciled, with zero after-drain arrivals and no right censoring.

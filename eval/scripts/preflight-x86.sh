@@ -3,7 +3,8 @@ set -u
 
 # Read-only preflight for an x86_64 Linux evaluation host. Expected setup:
 # SMT off, turbo off, systemd and IRQs on CPU 0, performance governor, a package
-# temperature sensor, Mosquitto and native eKuiper installed.
+# temperature sensor, readable RAPL package energy, Mosquitto and native eKuiper
+# installed.
 
 # shellcheck source=lib/preflight-common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/preflight-common.sh"
@@ -49,6 +50,20 @@ elif ls "$SYSROOT"/sys/class/hwmon/hwmon*/name >/dev/null 2>&1 && grep -qs -x -e
     pass "CPU temperature sensor: $(grep -s -x -h -e k10temp -e coretemp "$SYSROOT"/sys/class/hwmon/hwmon*/name | head -n 1)"
 else
     fail "CPU temperature sensor" "no x86_pkg_temp zone and no k10temp/coretemp hwmon"
+fi
+
+rapl=""
+for domain in "$SYSROOT"/sys/class/powercap/intel-rapl:[0-9]*; do
+    case "${domain##*intel-rapl:}" in *:*) continue ;; esac
+    if [ -r "$domain/energy_uj" ] && read -r _ <"$domain/energy_uj" 2>/dev/null; then
+        rapl="$domain"
+        break
+    fi
+done
+if [ -n "$rapl" ]; then
+    pass "RAPL package energy readable: ${rapl#"$SYSROOT"}/energy_uj"
+else
+    fail "RAPL package energy readable" "the telemetry sampler runs as $(id -un) and every run needs RAPL power; run: sudo chmod a+r /sys/class/powercap/intel-rapl:*/energy_uj (again after each reboot)"
 fi
 
 check_tools_and_services
