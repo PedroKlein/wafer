@@ -46,8 +46,28 @@ def test_measurement_window_excludes_warmup_energy() -> None:
     assert summary["mean_proxy_watts"] == 2.0
     assert summary["proxy_energy_j"] == 20.0
     assert summary["proxy_energy_per_message_j"] == 0.02
-    with pytest.raises(ValueError, match="does not overlap"):
+    with pytest.raises(ValueError, match="does not cover"):
         clip_to_window(samples, 30_000_000_000, 40_000_000_000)
+
+
+def test_telemetry_that_stops_early_is_rejected() -> None:
+    samples = [
+        {
+            "timestamp_ns": timestamp * 1_000_000_000,
+            "temperature_millicelsius": 50_000,
+            "cpu_frequency_hz": 2_400_000_000,
+            "governor": "performance",
+            "throttled": "0x0",
+            "rail_proxy_watts": 2.0,
+        }
+        for timestamp in range(0, 16)
+    ]
+    with pytest.raises(ValueError, match="does not cover"):
+        clip_to_window(samples, 10_000_000_000, 60_000_000_000)
+    with pytest.raises(ValueError, match="does not cover"):
+        clip_to_window(samples[8:], 5_000_000_000, 15_000_000_000)
+    measured = clip_to_window(samples, 10_000_000_000, 16_500_000_000)
+    assert summarize_power(measured)["duration_s"] == 6.5
 
 
 def test_measurement_window_is_required(tmp_path: pathlib.Path) -> None:
