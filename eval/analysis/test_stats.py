@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from wafer_analysis.stats import (
+    bootstrap_ci,
     clopper_pearson,
     cliffs_delta_ci,
     hodges_lehmann,
@@ -48,6 +49,13 @@ def test_pooled_loss_interval_treats_a_burst_as_one_run() -> None:
 def test_pooled_loss_interval_is_exact_when_every_run_agrees() -> None:
     low, high = pooled_ratio_ci(np.full(30, 60), np.full(30, 60_000))
     assert (low, high) == pytest.approx((0.001, 0.001))
+
+
+def test_bootstrap_interval_takes_another_one_sample_statistic() -> None:
+    values = np.array([0.0] * 29 + [30.0])
+    assert bootstrap_ci(values) == (0.0, 0.0)
+    low, high = bootstrap_ci(values, statistic=np.mean)
+    assert low < 1.0 < high
 
 
 def test_estimators_reject_empty_input() -> None:
