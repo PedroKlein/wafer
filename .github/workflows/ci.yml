@@ -93,7 +93,8 @@ jobs:
           cache-dependency-glob: eval/analysis/uv.lock
 
       - name: Check notebook normalization
-        run: uv run --directory eval/analysis --frozen nbstripout --keep-id --verify notebooks/*.ipynb
+        working-directory: eval/analysis
+        run: uv run --frozen nbstripout --keep-id --verify notebooks/*.ipynb
 
       - name: Evaluation harness tests
         # Mirrors `mise run test-eval`. The deploy test needs the plugin
