@@ -223,8 +223,11 @@ def _wafer_native_contrast(
     claim_boundary: str,
 ) -> pd.DataFrame:
     grouped = _group_runs(records, conditions, canonical=canonical)
-    wafer_runs = {int(run["run_index"]): run for run in grouped["wafer"]}
-    native_runs = {int(run["run_index"]): run for run in grouped["native"]}
+    arms = [grouped["wafer"], grouped["native"]]
+    stopped = sum(_stopped_early(run) for runs in arms for run in runs)
+    wafer_runs, native_runs = (
+        {int(run["run_index"]): run for run in runs if not _stopped_early(run)} for runs in arms
+    )
     pairs = sorted(wafer_runs.keys() & native_runs.keys())
     if not pairs:
         return pd.DataFrame()
@@ -242,6 +245,7 @@ def _wafer_native_contrast(
                 "condition": "wafer",
                 "reference_condition": "native",
                 "N_pairs": len(pairs),
+                "runs_stopped_early": stopped,
                 "wafer_median_ns": float(np.median(wafer)),
                 "native_median_ns": float(np.median(native)),
                 "median_ratio": 1 + shift,
@@ -255,7 +259,8 @@ def _wafer_native_contrast(
                 "mdd_ns": None if paired_sd is None else _MDD_Z * paired_sd / math.sqrt(len(pairs)),
                 "units": "nanoseconds, ratio, run pairs",
                 "estimator": (
-                    f"WAFER and native run {percentile} paired by run index within the randomised block; "
+                    f"WAFER and native run {percentile} paired by run index within the randomised block, "
+                    "leaving out runs the system under test stopped early and their partners; "
                     "median over pairs of WAFER minus native with a bootstrap 95% CI over pairs and its half-width; "
                     "median WAFER over median native with a bootstrap 95% CI over pairs; "
                     "minimum detectable difference (z(0.975) + z(0.80)) x paired SD / sqrt(N pairs), "

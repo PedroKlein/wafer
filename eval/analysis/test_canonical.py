@@ -194,6 +194,20 @@ def test_contrasts_need_complete_canonical_runs_but_pair_what_a_diagnostic_batch
     assert overhead_contrast_table(runs[:2], canonical=False).empty
 
 
+def test_contrasts_leave_out_a_run_the_system_stopped_early_and_its_partner() -> None:
+    runs = contrast_runs(("wafer", "native"), lambda run: 0)
+    runs[16] = {"condition": "wafer", "run_index": 17, "sut_outcome_reasons": ["runtime-exit"]}
+
+    row = overhead_contrast_table(runs).iloc[0]
+
+    assert (row["N_pairs"], row["runs_stopped_early"], row["thesis_evidence"]) == (29, 1, True)
+    assert row["median_ratio"] == pytest.approx(1.2)
+    assert "stopped early" in row["estimator"]
+    assert target_contrast_table(contrast_runs(("wafer", "native", "ekuiper"), lambda run: 0))[
+        "runs_stopped_early"
+    ].eq(0).all()
+
+
 def test_replication_concordance_reads_per_host_target_load_tables() -> None:
     pi = target_latency_table(percentile_runs(("wafer", "native", "ekuiper")))
     slower = percentile_runs(("wafer", "native", "ekuiper"))

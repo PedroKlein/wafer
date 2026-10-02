@@ -352,7 +352,8 @@ The MDD is a normal approximation for a mean paired shift: it says how large a W
 |---|---|
 | `statistic` | Run-level latency percentile compared: `p95` or `p50` |
 | `condition`, `reference_condition` | `wafer` and `native` |
-| `N_pairs` | Run indices with both a WAFER and a native run |
+| `N_pairs` | Run indices with both a WAFER and a native run that the system under test did not stop early |
+| `runs_stopped_early` | WAFER and native runs the system under test stopped early; each is left out together with its partner run |
 | `wafer_median_ns`, `native_median_ns` | Median of the statistic over the paired runs of each arm |
 | `median_ratio`, `ratio_ci95_low`, `ratio_ci95_high` | WAFER median over native median with a bootstrap 95% CI over run pairs |
 | `difference_ns`, `difference_ci95_low_ns`, `difference_ci95_high_ns` | Median over pairs of WAFER minus native with a bootstrap 95% CI over run pairs |
