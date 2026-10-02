@@ -40,6 +40,16 @@ REQUIRED_FIELDS = {
     "evidence_class",
 }
 FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
+FINAL_CAPACITY_BRACKET_RULE = {
+    "ceiling_multipliers": [0.95, 1.05],
+    "competitive_threshold": "e-perf-10-competitive-ratio",
+    "step_msg_s": 100,
+    "max_extra_rates": 6,
+}
+CAPACITY_BRACKET_RULE_TEXT = {
+    "purpose", "source", "scout_ceiling", "decision_points", "rounding", "max_rate",
+    "selection", "runs_per_rate",
+}
 FINAL_SCHEDULE_RECORDS = 2_351
 FINAL_MEASURED_LEAVES = 2_121
 PAYLOAD_SIZES = ("120b", "1kb", "10kb", "100kb")
@@ -89,6 +99,38 @@ FROZEN_VERDICT_THRESHOLDS = {
     "e-swap-4-p95-gap": (["e-swap-4"], 100_000_000, "ns", "<", "one-sided-bound", "criterion"),
     "e-swap-4-lossless": (["e-swap-4"], 0, "runs", "<=", "exact-count", "criterion"),
     "e-swap-5-rollback": (["e-swap-5"], 0, "runs", "<=", "exact-count", "criterion"),
+}
+FROZEN_REPLICATION_CONCORDANCE = {
+    "schema_version": 1,
+    "canonical_host": "rpi5",
+    "replication_hosts": ["jetson", "x86"],
+    "criteria_rules": ["one-sided-bound", "exact-count"],
+    "direction": (
+        "the side of the declared threshold on which a host's point estimate falls, "
+        "the count itself for an exact count: it meets the threshold or misses it"
+    ),
+    "classes": [
+        {
+            "class": "not-estimable",
+            "rule": "either host lacks the criterion, reports it PENDING or has no point estimate",
+        },
+        {
+            "class": "same-verdict",
+            "rule": "both hosts report the same PASS, FAIL or INCONCLUSIVE verdict",
+        },
+        {
+            "class": "same-direction",
+            "rule": "the verdicts differ and both point estimates fall on the same side of the threshold",
+        },
+        {
+            "class": "opposite-direction",
+            "rule": "the verdicts differ and the point estimates fall on opposite sides of the threshold",
+        },
+    ],
+    "precedence": "the first class in the listed order whose rule holds",
+    "canonical_verdict": (
+        "unchanged: replication reports agreement with the canonical host and never alters its verdict"
+    ),
 }
 
 
@@ -329,7 +371,8 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("final_campaign seed must be 1729")
     if campaign.get("thesis_evidence") is not True:
         errors.append("final_campaign thesis_evidence must be true")
-    grid = campaign.get("capacity_grid", {})
+    grid = dict(campaign.get("capacity_grid", {}))
+    bracket_rule = grid.pop("bracket_rates", None)
     if grid != {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -337,6 +380,16 @@ def validate_matrix(matrix: dict) -> list[str]:
         "common_rate_points_msg_s": FINAL_CAPACITY_RATES,
     }:
         errors.append("final_campaign capacity grid differs from the frozen scout-derived grid")
+    if (
+        not isinstance(bracket_rule, dict)
+        or set(bracket_rule) != FINAL_CAPACITY_BRACKET_RULE.keys() | CAPACITY_BRACKET_RULE_TEXT
+        or any(bracket_rule[field] != value for field, value in FINAL_CAPACITY_BRACKET_RULE.items())
+        or any(
+            not isinstance(bracket_rule[field], str) or not bracket_rule[field]
+            for field in CAPACITY_BRACKET_RULE_TEXT
+        )
+    ):
+        errors.append("final_campaign capacity bracket rule differs from the frozen per-host rule")
     metering = campaign.get("canonical_metering", {})
     if metering != {
         "policy": "explicit-fuel-and-epoch",
@@ -549,6 +602,7 @@ def validate_matrix(matrix: dict) -> list[str]:
 
     errors.extend(validate_payload_arms(experiments.get("e-perf-4", {}), campaign))
     errors.extend(validate_verdict_rules(matrix))
+    errors.extend(validate_replication_concordance(matrix))
 
     if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
@@ -650,6 +704,23 @@ def validate_verdict_rules(matrix: dict) -> list[str]:
     for name, value in restated.items():
         if name in declared and declared[name][1] != value:
             errors.append(f"verdict threshold {name} disagrees with the value the experiment declares")
+    return errors
+
+
+def validate_replication_concordance(matrix: dict) -> list[str]:
+    rule = matrix.get("replication_concordance")
+    if not isinstance(rule, dict):
+        return ["replication_concordance must be an object declaring how replication hosts agree"]
+    errors = []
+    if rule != FROZEN_REPLICATION_CONCORDANCE:
+        errors.append("replication_concordance differs from the frozen rule")
+    hosts = matrix.get("hosts", {})
+    if rule.get("canonical_host") != matrix.get("canonical_host"):
+        errors.append("replication_concordance canonical_host must be the matrix canonical_host")
+    if rule.get("replication_hosts") != [
+        name for name, host in hosts.items() if isinstance(host, dict) and host.get("role") == "replication"
+    ]:
+        errors.append("replication_concordance replication_hosts must list every replication host")
     return errors
 
 

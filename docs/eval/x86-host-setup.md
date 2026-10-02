@@ -56,14 +56,21 @@ describes, with `--host x86`.
 
 The host profile lives in the `hosts` map of `eval/canonical-matrix.json`.
 Pass it to the runner and the validator; results land under
-`x86-<batch-id>` directories and are checked against this profile only:
+`x86-<batch-id>` directories and are checked against this profile only.
+E-Perf-10 adds this host's bracket rates, so run the host's
+[capacity scout](pi5-experiment-runbook.md#run-the-hosts-capacity-scout) first:
+repeat `mise run run-campaign -- --host x86 --capacity-scout --batch-id <scout-id>`
+until it prints `"action": "stop"`. Then:
 
 ```sh
 python3 eval/scripts/validate-canonical.py host --host x86 --require-ekuiper
-python3 eval/scripts/lib/canonical_runner.py --host x86 --batch-id <batch-id> --dry-run
+python3 eval/scripts/lib/canonical_runner.py --host x86 --batch-id <batch-id> \
+  --scout-batch-id <scout-id> --dry-run
 ```
 
-`mise run plan-campaign -- --host x86` prints the same schedule, and
-`mise run run-campaign -- --host x86 --batch-id <batch-id>` runs or resumes it.
+`mise run plan-campaign -- --host x86 --batch-id <batch-id> --scout-batch-id <scout-id>`
+prints the same schedule, and
+`mise run run-campaign -- --host x86 --batch-id <batch-id> --scout-batch-id <scout-id>`
+runs or resumes it. A final batch without `--scout-batch-id` refuses to start E-Perf-10.
 When it has finished, `mise run approve-batch -- --host x86 --batch-id <batch-id>`
 on the analysis machine records it as the x86 entry of `eval/final-batches.json`.

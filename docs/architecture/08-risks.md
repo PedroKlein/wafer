@@ -8,7 +8,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Impact:** High. A delivery-bad MQTT loopback point prevents attribution of loss or achieved-rate collapse to WAFER, Native, or eKuiper.
 
-**Mitigation:** E-Perf-10 runs MQTT loopback at every common rate and reports delivery-ceiling brackets and normalized p99 knee separately. All systems use the same five rates and support-process allocation.
+**Mitigation:** E-Perf-10 runs MQTT loopback at every tested rate, the common grid plus the host's bracket rates, and reports delivery-ceiling brackets and normalized p99 knee separately. All systems on a host use the same rates and support-process allocation.
 
 **Residual:** Native, WAFER, and eKuiper may remain right-censored above the highest support-uncensored rate. The thesis must not report an exact SUT ceiling in that region.
 

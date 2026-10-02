@@ -17,6 +17,7 @@ from .attempts import (
     sut_outcome_reasons,
 )
 from .backpressure import validate_backpressure_result
+from .capacity_brackets import frozen_bracket_rates
 from .results_layout import CANONICAL_ALIASES, ResultsLayout, resolve_alias_receipt
 from .rollback import validate_swap5_artifacts
 
@@ -89,6 +90,73 @@ def find_canonical_batch(
     if experiment_id in CANONICAL_ALIASES:
         return _resolve_alias_batch(layout, experiment_id, name)
     raise FileNotFoundError(f"Canonical batch does not exist: {path}")
+
+
+def batch_bracket_rates(
+    batch: pathlib.Path, matrix: Mapping, results_root: pathlib.Path | str | None = None
+) -> list[int]:
+    """The E-Perf-10 bracket rates that the batch's batch.json froze; none without a record."""
+    layout = ResultsLayout.resolve(_find_repo_root(), results_root)
+    path = layout.manifest_path("canonical-batches", batch.name, "batch.json")
+    record = _read_object(path, "batch.json") if path.is_file() else {}
+    if record.get("capacity_brackets") is None:
+        return []
+    return frozen_bracket_rates(record, matrix)
+
+
+def approved_host_batches(
+    experiment_id: str, results_root: pathlib.Path | str | None = None
+) -> dict[str, pathlib.Path]:
+    """Each host's approved batch of one experiment, by host tag, from eval/final-batches.json.
+
+    Every batch is validated against its own host's entry. A host without an
+    entry is absent, so a replication that has not been approved is missing,
+    never another host's batch.
+    """
+    repo = _find_repo_root()
+    path = repo / "eval/final-batches.json"
+    document = _read_object(path, "eval/final-batches.json") if path.is_file() else {}
+    batches = document.get("batches", {})
+    if not isinstance(batches, dict):
+        raise ValueError(f"malformed {path}: batches must be an object")
+    approved = {}
+    for host in HOST_TAGS:
+        if host in batches:
+            entry = _final_batch(repo, host, "<batch-id>")
+            approved[host] = find_canonical_batch(
+                experiment_id, f"{host}-{entry['batch_id']}", results_root
+            )
+    return approved
+
+
+def resolve_host_batches(
+    experiment_id: str,
+    diagnostic_paths: Mapping[str, str | None],
+    results_root: pathlib.Path | str | None = None,
+) -> tuple[dict[str, pathlib.Path], bool]:
+    """Each host's batch of one experiment, by host tag, and whether canonical gates apply.
+
+    Explicit diagnostic paths, keyed by host tag, select diagnostic mode for every
+    host. Otherwise ``WAFER_EVAL_BATCH_ID`` selects canonical mode: the named batch
+    must be approved, and each host's batch is the one its own entry approves, so a
+    batch is never reported under another host's tag.
+    """
+    unknown = set(diagnostic_paths) - set(HOST_TAGS)
+    if unknown:
+        raise ValueError(f"unknown host tags: {sorted(unknown)}")
+    explicit = {host: path for host, path in diagnostic_paths.items() if path}
+    if explicit:
+        return {
+            host: resolve_result_batch(
+                experiment_id, diagnostic_path=path, results_root=results_root
+            )
+            for host, path in explicit.items()
+        }, False
+    batch_id = os.environ.get("WAFER_EVAL_BATCH_ID")
+    if not batch_id:
+        return {}, False
+    find_canonical_batch(experiment_id, batch_id, results_root)
+    return approved_host_batches(experiment_id, results_root), True
 
 
 def find_canonical_ledger(
@@ -254,7 +322,10 @@ def _final_batch(repo: pathlib.Path, host: str, batch_id: str) -> dict:
     return entry
 
 
-def _expected_units(definition: Mapping[str, object]) -> set[tuple[str, int]]:
+def _expected_units(
+    definition: Mapping[str, object], bracket_rates: list[int] | None = None
+) -> set[tuple[str, int]]:
+    """Scheduled (condition, run) units; ``bracket_rates`` join a capacity design's common grid."""
     repetitions = int(definition.get("repetitions", 0))
     if repetitions <= 0:
         raise ValueError("canonical matrix declares an invalid repetition count")
@@ -266,7 +337,7 @@ def _expected_units(definition: Mapping[str, object]) -> set[tuple[str, int]]:
         return {
             (f"{system}/rate-{int(rate):05d}", run)
             for system in systems
-            for rate in rates
+            for rate in [*rates, *(bracket_rates or [])]
             for run in range(1, repetitions + 1)
         }
     conditions = definition.get("conditions")
@@ -415,7 +486,13 @@ def validate_canonical_batch(
     if not isinstance(definition, dict):
         raise TypeError(f"canonical matrix experiment {experiment} is malformed")
 
-    expected = _expected_units(definition)
+    try:
+        bracket_rates = (
+            frozen_bracket_rates(batch, matrix) if experiment == "e-perf-10" else None
+        )
+    except (KeyError, StopIteration, TypeError) as error:
+        raise ValueError(f"canonical matrix lacks the capacity bracket rule: {error}") from error
+    expected = _expected_units(definition, bracket_rates)
     status_paths = sorted(path.rglob("canonical-status.json"))
     if not status_paths:
         raise ValueError(f"canonical batch has no completion receipts: {path}")

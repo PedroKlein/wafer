@@ -47,11 +47,22 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     assert campaign["thesis_evidence"] is True
     assert campaign["expected_schedule_records"] == 2351
     assert campaign["expected_measured_leaves"] == 2121
-    assert campaign["capacity_grid"] == {
+    grid = dict(campaign["capacity_grid"])
+    bracket_rule = grid.pop("bracket_rates")
+    assert grid == {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
         "candidate_sha256": "5f2231ef541c36c4fef3655ed25239ca028fb7ed7cd1387a3dd6644818cbfc3f",
         "common_rate_points_msg_s": [1000, 4000, 8000, 15000, 16000],
+    }
+    assert {
+        field: bracket_rule[field]
+        for field in ("ceiling_multipliers", "competitive_threshold", "step_msg_s", "max_extra_rates")
+    } == {
+        "ceiling_multipliers": [0.95, 1.05],
+        "competitive_threshold": "e-perf-10-competitive-ratio",
+        "step_msg_s": 100,
+        "max_extra_rates": 6,
     }
     assert campaign["canonical_metering"] == {
         "policy": "explicit-fuel-and-epoch",
@@ -245,6 +256,20 @@ def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
         ("e-perf-10 repetitions", lambda value: value["experiments"]["e-perf-10"].update(repetitions=29)),
         ("e-swap-4 repetitions", lambda value: value["experiments"]["e-swap-4"].update(repetitions=29)),
         ("e-perf-10 rate grid", lambda value: value["experiments"]["e-perf-10"].update(rate_points_msg_s=[1000, 4000])),
+        (
+            "capacity bracket rule",
+            lambda value: value["final_campaign"]["capacity_grid"]["bracket_rates"].update(
+                max_extra_rates=7
+            ),
+        ),
+        (
+            "capacity bracket rule",
+            lambda value: value["final_campaign"]["capacity_grid"]["bracket_rates"].pop("rounding"),
+        ),
+        (
+            "capacity bracket rule",
+            lambda value: value["final_campaign"]["capacity_grid"].pop("bracket_rates"),
+        ),
         ("e-swap-4 sample_unit", lambda value: value["experiments"]["e-swap-4"].update(sample_unit="")),
         (
             "e-swap-4 sink tail policy",
@@ -543,6 +568,51 @@ def test_final_matrix_rejects_a_moved_or_missing_placebo_offset(offset: int | No
     ],
 )
 def test_matrix_rejects_a_missing_malformed_or_drifted_threshold_table(mutate, message: str) -> None:
+    matrix = json.loads(MATRIX.read_text())
+    mutate(matrix)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
+def test_matrix_declares_how_replication_hosts_agree_with_the_canonical_host() -> None:
+    rule = json.loads(MATRIX.read_text())["replication_concordance"]
+    assert (rule["canonical_host"], rule["replication_hosts"]) == ("rpi5", ["jetson", "x86"])
+    assert rule["criteria_rules"] == ["one-sided-bound", "exact-count"]
+    assert [row["class"] for row in rule["classes"]] == [
+        "not-estimable",
+        "same-verdict",
+        "same-direction",
+        "opposite-direction",
+    ]
+    assert rule["canonical_verdict"].startswith("unchanged")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda matrix: matrix.pop("replication_concordance"),
+            "replication_concordance must be an object",
+        ),
+        (
+            lambda matrix: matrix["replication_concordance"]["classes"].reverse(),
+            "replication_concordance differs from the frozen rule",
+        ),
+        (
+            lambda matrix: matrix["replication_concordance"]["criteria_rules"].append("every-run"),
+            "replication_concordance differs from the frozen rule",
+        ),
+        (
+            lambda matrix: matrix["hosts"]["jetson"].update(role="canonical"),
+            "replication_hosts must list every replication host",
+        ),
+    ],
+)
+def test_matrix_rejects_a_missing_or_drifted_replication_rule(mutate, message: str) -> None:
     matrix = json.loads(MATRIX.read_text())
     mutate(matrix)
     with tempfile.TemporaryDirectory() as tmp:
