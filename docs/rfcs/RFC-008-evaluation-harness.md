@@ -97,7 +97,7 @@ Each strategy has 30 runs and one disruption at measured t=60 seconds:
 
 - WAFER stateless hot-swap of the threshold filter to `threshold-filter-v2`;
 - WAFER process restart;
-- eKuiper rule update (PUT /rules/pipeline_a): replace `pipeline_a` in place with the raised bound, then wait until its sink counts output;
+- eKuiper rule update (PUT with `triggered` false, then start): save `pipeline_a` in place with the raised bound and start it, then wait until its sink counts output;
 - eKuiper make-before-break replacement: create `pipeline_a_v2` on the shared stream, wait until its own sink counts output, then delete `pipeline_a`.
 
 The replacement plugin and the replacement rule make the same change, raising the lower temperature bound from 50 to 60; the workload's constant 72.5 passes both versions.
