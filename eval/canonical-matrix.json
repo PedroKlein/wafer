@@ -1216,6 +1216,7 @@
         "e-val-1"
       ]
     },
+    "mqtt_drain_grace_secs": 5,
     "wafer_config_catalog": [
       {
         "experiment": "e-backpressure",

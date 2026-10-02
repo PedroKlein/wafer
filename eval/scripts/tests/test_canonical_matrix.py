@@ -64,6 +64,7 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "infrastructure_retries": 1,
         "gate_experiments": ["e-val-1"],
     }
+    assert campaign["mqtt_drain_grace_secs"] == 5
     assert len(campaign["wafer_config_catalog"]) == 55
     assert all(set(entry) == {"experiment", "condition", "config"} for entry in campaign["wafer_config_catalog"])
     assert matrix["experiments"]["e-iso-4"]["metering_exceptions"]["infinite-loop"]["epoch_deadline"] == 1
@@ -297,6 +298,18 @@ def test_final_matrix_rejects_attempt_policy_drift(policy: dict | None) -> None:
         result = run_validator("matrix", str(path))
     assert result.returncode == 1
     assert "attempt policy" in result.stderr
+
+
+@pytest.mark.parametrize("grace", [0, 60, "5", None])
+def test_final_matrix_rejects_mqtt_drain_grace_drift(grace: object) -> None:
+    matrix = json.loads(MATRIX.read_text())
+    matrix["final_campaign"]["mqtt_drain_grace_secs"] = grace
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert "MQTT drain grace" in result.stderr
 
 
 def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
