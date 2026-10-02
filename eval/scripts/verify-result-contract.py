@@ -106,6 +106,7 @@ SWAP3_STRATEGIES = {
     "ekuiper-make-before-break",
 }
 SWAP3_REPLACEMENT_PLUGIN = "wafer_threshold_filter_v2.wasm"
+SWAP3_PLACEBO_OFFSET_NS = -6_000_000_000
 PASS_THROUGH_PLUGIN = (
     "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
 )
@@ -975,6 +976,7 @@ def check_disruption_analysis(path: Path) -> list[str]:
         return violations
     required = {
         "strategy", "baseline_rate_msg_s", "event_min_rate_msg_s", "dip_percent",
+        "placebo_offset_ns", "placebo_event_min_rate_msg_s", "placebo_dip_percent",
         "interruption_ns", "recovery_ns", "recovery_right_censored",
         "action_duration_ns", "loss", "duplicates", "messages", "latency_ns",
     }
@@ -982,9 +984,17 @@ def check_disruption_analysis(path: Path) -> list[str]:
         violations.append("disruption-analysis.json is missing estimator fields")
     if value.get("strategy") not in SWAP3_STRATEGIES:
         violations.append("disruption-analysis.json strategy is invalid")
-    for field in ("baseline_rate_msg_s", "event_min_rate_msg_s", "dip_percent"):
+    for field in (
+        "baseline_rate_msg_s",
+        "event_min_rate_msg_s",
+        "dip_percent",
+        "placebo_event_min_rate_msg_s",
+        "placebo_dip_percent",
+    ):
         if not isinstance(value.get(field), (int, float)) or value[field] < 0:
             violations.append(f"disruption-analysis.json {field} is invalid")
+    if value.get("placebo_offset_ns") != SWAP3_PLACEBO_OFFSET_NS:
+        violations.append("disruption-analysis.json placebo instant differs from the declared offset")
     for field in ("interruption_ns", "recovery_ns", "action_duration_ns", "loss", "duplicates"):
         if not isinstance(value.get(field), int) or value[field] < 0:
             violations.append(f"disruption-analysis.json {field} is invalid")

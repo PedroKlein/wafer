@@ -268,6 +268,8 @@ SWAP3_EVENT_OFFSET_NS = 60_000_000_000
 SWAP3_BUCKET_WIDTH_NS = 100_000_000
 SWAP3_COVERAGE_START_NS = -10_000_000_000
 SWAP3_COVERAGE_END_NS = 10_000_000_000
+# The event window moved to this instant lies inside the baseline window, away from the action.
+SWAP3_PLACEBO_OFFSET_NS = -6_000_000_000
 SWAP3_ALIGNMENT_TOLERANCE_NS = 10_000_000
 SWAP4_ALIGNMENT_TOLERANCE_NS = 10_000_000
 SWAP4_PHASES = (
@@ -1856,6 +1858,8 @@ def analyze_swap3_disruption(
     if baseline <= 0:
         raise ValueError("E-Swap-3 baseline rate must be positive")
     event_min = min(rates[80:120])
+    placebo_center = (SWAP3_PLACEBO_OFFSET_NS - SWAP3_COVERAGE_START_NS) // SWAP3_BUCKET_WIDTH_NS
+    placebo_min = min(rates[placebo_center - 20 : placebo_center + 20])
     threshold = 0.95 * baseline
     below = [rate < threshold for rate in rates]
     interruption_start = 100
@@ -1894,6 +1898,9 @@ def analyze_swap3_disruption(
         "baseline_rate_msg_s": baseline,
         "event_min_rate_msg_s": event_min,
         "dip_percent": 100.0 * max(0.0, baseline - event_min) / baseline,
+        "placebo_offset_ns": SWAP3_PLACEBO_OFFSET_NS,
+        "placebo_event_min_rate_msg_s": placebo_min,
+        "placebo_dip_percent": 100.0 * max(0.0, baseline - placebo_min) / baseline,
         "interruption_ns": interruption_buckets * SWAP3_BUCKET_WIDTH_NS,
         "recovery_ns": max(0, recovery_end_ns - action_end_offset_ns),
         "recovery_right_censored": censored,

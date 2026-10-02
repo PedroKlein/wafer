@@ -1254,6 +1254,9 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
         "baseline_rate_msg_s": 1_000,
         "event_min_rate_msg_s": 980,
         "dip_percent": 2.0,
+        "placebo_offset_ns": -6_000_000_000,
+        "placebo_event_min_rate_msg_s": 990,
+        "placebo_dip_percent": 1.0,
         "interruption_ns": 100_000_000,
         "recovery_ns": 200_000_000,
         "recovery_right_censored": False,
@@ -1958,6 +1961,12 @@ def test_final_swap3_leaf_accepts_all_declared_strategies_and_rejects_legacy_tim
     assert "final E-Swap-3 must not retain publisher-timing.json" in violations
 
 
+def rewrite_json(path: Path, mutate: Callable[[dict], object]) -> None:
+    value = json.loads(path.read_text())
+    mutate(value)
+    path.write_text(json.dumps(value))
+
+
 @pytest.mark.parametrize(
     ("mutate", "expected"),
     [
@@ -1989,6 +1998,26 @@ def test_final_swap3_leaf_accepts_all_declared_strategies_and_rejects_legacy_tim
         (
             lambda leaf: declare_mqtt_run_end(leaf, drain_grace_ns=6_000_000_000),
             "must be the matrix MQTT drain grace 5000000000",
+        ),
+        (
+            lambda leaf: rewrite_json(
+                leaf / "disruption-analysis.json", lambda value: value.pop("placebo_dip_percent")
+            ),
+            "disruption-analysis.json is missing estimator fields",
+        ),
+        (
+            lambda leaf: rewrite_json(
+                leaf / "disruption-analysis.json",
+                lambda value: value.update(placebo_event_min_rate_msg_s=-1),
+            ),
+            "disruption-analysis.json placebo_event_min_rate_msg_s is invalid",
+        ),
+        (
+            lambda leaf: rewrite_json(
+                leaf / "disruption-analysis.json",
+                lambda value: value.update(placebo_offset_ns=-2_000_000_000),
+            ),
+            "disruption-analysis.json placebo instant differs from the declared offset",
         ),
     ],
 )
@@ -2794,3 +2823,10 @@ def test_host_named_single_run_leaf_is_checked_against_that_host(tmp_path: Path)
     shutil.copytree(source, leaf)
     completed = run(leaf, canonical=False)
     assert "jetson metadata: host tag must be 'jetson', got 'rpi5'" in completed.stdout
+
+
+def test_verifier_placebo_instant_matches_the_declared_offset() -> None:
+    alignment = json.loads((ROOT / "eval/canonical-matrix.json").read_text())["experiments"][
+        "e-swap-3"
+    ]["event_alignment"]
+    assert alignment["placebo_offset_secs"] * 1_000_000_000 == CONTRACT.SWAP3_PLACEBO_OFFSET_NS

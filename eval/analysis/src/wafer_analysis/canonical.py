@@ -1789,10 +1789,12 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
             raise ValueError(f"{strategy} requires 30 independent runs")
         values = [run for run in admitted if not _stopped_early(run)]
         dips = [float(run["dip_percent"]) for run in values]
+        placebo_dips = [float(run["placebo_dip_percent"]) for run in values]
         interruptions = [float(run["interruption_ns"]) for run in values]
         actions = [float(run["action_duration_ns"]) for run in values]
         recoveries = [float(run["recovery_ns"]) for run in values]
         dip_low, dip_high = _ci(dips) if values else (None, None)
+        placebo_low, placebo_high = _ci(placebo_dips) if values else (None, None)
         interruption_low, interruption_high = _ci(interruptions) if values else (None, None)
         action_low, action_high = _ci(actions) if values else (None, None)
         recovery_low, recovery_high = _ci(recoveries) if values else (None, None)
@@ -1817,6 +1819,9 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
                 "median_dip_percent": _median(dips),
                 "dip_ci95_low_percent": dip_low,
                 "dip_ci95_high_percent": dip_high,
+                "median_placebo_dip_percent": _median(placebo_dips),
+                "placebo_dip_ci95_low_percent": placebo_low,
+                "placebo_dip_ci95_high_percent": placebo_high,
                 "median_interruption_ns": _median(interruptions),
                 "interruption_ci95_low_ns": interruption_low,
                 "interruption_ci95_high_ns": interruption_high,
@@ -1837,7 +1842,7 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
                 **dip,
                 "verdict": verdict,
                 "units": "percent, nanoseconds, messages",
-                "estimator": "run-level median with bootstrap 95% CI over runs that kept running; lossless runs out of all admitted runs; dip verdict from the one-sided 95% upper bound over runs",
+                "estimator": "run-level median with bootstrap 95% CI over runs that kept running; lossless runs out of all admitted runs; dip verdict from the one-sided 95% upper bound over runs; placebo dip is the same estimator 6 s before the action, a descriptive noise floor with no verdict",
                 "threshold": (
                     f"one-sided 95% upper bound of the median dip < {dip_rule.value:g} percent; zero loss; zero duplication"
                     if strategy == "wafer-hotswap"

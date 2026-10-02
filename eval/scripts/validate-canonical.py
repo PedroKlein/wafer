@@ -465,6 +465,7 @@ def validate_matrix(matrix: dict) -> list[str]:
         "series_end_secs": 10,
         "baseline_window_secs": [-10, -2],
         "event_window_secs": [-2, 2],
+        "placebo_offset_secs": -6,
         "recovery_window_secs": [2, 10],
         "recovery_fraction": 0.95,
         "recovery_consecutive_buckets": 5,

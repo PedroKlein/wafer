@@ -316,6 +316,9 @@ def build_complete_fixture(root: Path) -> None:
                 "baseline_rate_msg_s": 1_000,
                 "event_min_rate_msg_s": 980,
                 "dip_percent": 2.0,
+                "placebo_offset_ns": -6_000_000_000,
+                "placebo_event_min_rate_msg_s": 990.0,
+                "placebo_dip_percent": 1.0,
                 "interruption_ns": 100_000_000,
                 "recovery_ns": 200_000_000,
                 "recovery_right_censored": False,
@@ -554,6 +557,7 @@ def test_all_notebooks_execute_against_complete_fixture(
     hotswap_output = output_by_name["05-hotswap-timeline.ipynb"]
     assert "N=5" in hotswap_output
     assert "median_dip_percent" in hotswap_output
+    assert "median_placebo_dip_percent" in hotswap_output
     assert "e-swap-1" in hotswap_output
     assert "e-swap-2" not in hotswap_output
     assert "e-swap-4" in hotswap_output

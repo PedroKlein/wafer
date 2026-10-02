@@ -466,6 +466,36 @@ def test_runner_validation_band_matches_the_declared_thresholds(
     )
 
 
+def test_runner_placebo_instant_matches_the_declared_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(ROOT / "eval/scripts/lib"))
+    import canonical_runner
+
+    alignment = json.loads(MATRIX.read_text())["experiments"]["e-swap-3"]["event_alignment"]
+    assert alignment["placebo_offset_secs"] * 1_000_000_000 == canonical_runner.SWAP3_PLACEBO_OFFSET_NS
+    low, high = alignment["event_window_secs"]
+    baseline_low, baseline_high = alignment["baseline_window_secs"]
+    assert baseline_low <= alignment["placebo_offset_secs"] + low
+    assert alignment["placebo_offset_secs"] + high <= baseline_high
+
+
+@pytest.mark.parametrize("offset", [None, -2, 0])
+def test_final_matrix_rejects_a_moved_or_missing_placebo_offset(offset: int | None) -> None:
+    matrix = json.loads(MATRIX.read_text())
+    alignment = matrix["experiments"]["e-swap-3"]["event_alignment"]
+    if offset is None:
+        alignment.pop("placebo_offset_secs")
+    else:
+        alignment["placebo_offset_secs"] = offset
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert "e-swap-3 event alignment differs from the frozen estimator" in result.stderr
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [

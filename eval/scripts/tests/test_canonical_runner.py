@@ -1620,6 +1620,22 @@ def test_swap3_analysis_covers_no_partial_full_and_delayed_recovery() -> None:
     assert censored["recovery_right_censored"] is True
 
 
+def test_swap3_analysis_reports_the_same_dip_at_a_placebo_instant_before_the_action() -> None:
+    quiet = analyze_swap3_disruption(*swap3_fixture())
+    assert quiet["placebo_offset_ns"] == -6_000_000_000
+    assert quiet["placebo_dip_percent"] == 0
+
+    rates = [1_000.0] * 200
+    rates[100:103] = [0.0] * 3
+    rates[39:41] = [800.0] * 2
+    rates[19] = rates[60] = 0.0
+    analysis = analyze_swap3_disruption(*swap3_fixture(rates))
+    assert analysis["baseline_rate_msg_s"] == 1_000
+    assert analysis["dip_percent"] == 100
+    assert analysis["placebo_event_min_rate_msg_s"] == 800
+    assert analysis["placebo_dip_percent"] == 20
+
+
 def test_swap3_analysis_reports_loss_and_validator_rejects_drift() -> None:
     throughput, timeline, publisher, subscriber = swap3_fixture(received=119_990)
     analysis = analyze_swap3_disruption(throughput, timeline, publisher, subscriber)
