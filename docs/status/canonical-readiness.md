@@ -17,7 +17,7 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 - E-Density-1: release component sizes beside a measured `FROM scratch` container floor. The floor files `eval/container-floor/linux-arm64.json` (Pi 5 and Jetson) and `linux-amd64.json` (x86) are not measured yet; they must be measured and committed before deployment.
 - E-Perf-5: `PENDING` until matched x86 Linux evidence exists.
 - Analysis: canonical approval/provenance/completeness gates implemented; complete and missing fixture execution passes.
-- Final campaign: not approved and not started (`campaign_started=false`).
+- Final campaign: not started; `mise run approve-batch` has recorded no batch in `eval/final-batches.json` yet.
 
 No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, and diagnostic-batch results are diagnostic and are not pooled with the final N=30 batch. The laptop shakedown scripts (`run-e-*-shakedown.sh`, `run-e-iso-7-8.sh`) the Docker eKuiper stack and the shakedown-only configs under `eval/configs/e-perf-4/` and `eval/configs/e-perf-6/` named in the archived per-experiment log no longer exist; every experiment runs through `eval/scripts/run-rpi5-canonical.sh` with the configs listed in `eval/canonical-matrix.json`.
 

@@ -27,7 +27,7 @@ flowchart TD
     I -->|future admitted campaign| K[final N equals 30]
 ```
 
-1. `eval/canonical-matrix.json` defines experiment IDs, condition grids, repetitions, sample units, required outputs, ordering, metering, evidence class, and admission flags. The `enhanced_candidate` block fixes N=5 candidate and diagnostic work with `thesis_evidence=false` and `n30_admitted=false`.
+1. `eval/canonical-matrix.json` defines experiment IDs, condition grids, repetitions, sample units, required outputs, ordering, metering, evidence class, and admission flags. Each experiment in the `enhanced_candidate` block is N=5 candidate or diagnostic work and sets `thesis_evidence=false` and `n30_admitted=false`.
 2. `eval/scripts/lib/canonical_runner.py` turns definitions into deterministic `RunItem` schedules. It dispatches the appropriate execution path, writes progress and summaries, post-processes outputs, and calls `verify_result` for each physical leaf.
 3. `eval/scripts/run-experiment.sh` handles one run: configuration, runtime and load-generator processes, bounded collection, shutdown, metadata, and result placement. It delegates fresh local result-directory creation to `eval/scripts/collect-results.sh`, which never overwrites an existing directory.
 4. `eval/RESULT-CONTRACT.md` assigns each artifact to its producer and states which experiments require it. `verify-result-contract.py` and experiment-specific checks reject missing, malformed, inconsistent, or wrongly classified evidence.
@@ -60,8 +60,8 @@ Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final 
 
 ## Evidence
 
-- **Source:** [`eval/canonical-matrix.json`](../../eval/canonical-matrix.json) | symbols: `"enhanced_candidate"`, `"thesis_evidence": false`, `"e_perf_5_claim_status": "PENDING"`
-- **Source:** [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md) | symbols: `The expanded N=5 rehearsal is diagnostic`, `Intervals and events are nested observations`, `E-Perf-5 remains PENDING`
+- **Source:** [`eval/canonical-matrix.json`](../../eval/canonical-matrix.json) | symbols: `"enhanced_candidate"`, `"thesis_evidence": false`
+- **Source:** [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md) | symbols: `Intervals and events are nested observations`, `E-Perf-5 remains PENDING`
 - **Source:** [`eval/scripts/run-experiment.sh`](../../eval/scripts/run-experiment.sh) | symbols: `Usage: run-experiment.sh`, `eval/RESULT-CONTRACT.md`, `eval/scripts/collect-results.sh`
 - **Source:** [`eval/scripts/collect-results.sh`](../../eval/scripts/collect-results.sh) | symbols: `never overwrites an existing directory`, `mkdir -p "$target"`
 - **Source:** [`eval/scripts/lib/canonical_runner.py`](../../eval/scripts/lib/canonical_runner.py) | symbols: `class RunItem`, `def build_schedule`, `def verify_result`, `def summarize_capacity_knee`
