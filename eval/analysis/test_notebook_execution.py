@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import nbformat
+import pandas as pd
 from nbclient import NotebookClient
 
 from wafer_analysis.rollback import SWAP5_PLUGIN, build_post_rollback_continuity, build_swap5_rollback
@@ -179,6 +180,11 @@ def build_complete_fixture(root: Path) -> None:
             (leaf / "sequence.csv").write_text(
                 "total_expected,total_received,received_unique,gap_msgs,duplicates_count\n60000,60000,60000,0,0\n"
             )
+            if experiment == "e-perf-1":
+                (leaf / "sequence.csv").write_text("event_type,seq_start,seq_end,count\n")
+                (leaf / "throughput.csv").write_text(
+                    "timestamp_ns,messages_received,throughput_msg_s,duration_ns\n1,60000,1000.0,60000000000\n"
+                )
             if experiment == "e-perf-4":
                 (leaf / "service-percentiles.json").write_text(
                     json.dumps(
@@ -477,6 +483,8 @@ def execute_notebooks(monkeypatch, fixture: Path, notebooks: list[Path] = NOTEBO
     experiment_paths = {
         "E_VAL_1_DIR": "e-val-1",
         "E_PERF_1_DIR": "e-perf-1",
+        "E_PERF_1_JETSON_DIR": "e-perf-1",
+        "E_PERF_1_X86_DIR": "e-perf-1",
         "E_PERF_2_DIR": "e-perf-2",
         "E_PERF_3_DIR": "e-perf-3",
         "E_PERF_4_DIR": "e-perf-4",
@@ -590,6 +598,18 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert (rendered / "rq2/recovery.pdf").stat().st_size > 1_000
     assert (rendered / "rq2-recovery.csv").is_file()
     assert (rendered / "e-perf-1-target-load.csv").is_file()
+    contrast = pd.read_csv(rendered / "e-perf-1-wafer-native-contrast.csv")
+    assert contrast[["statistic", "N_pairs", "difference_ns"]].values.tolist() == [
+        ["p95", 1, 20_000],
+        ["p50", 1, 20_000],
+    ]
+    concordance = pd.read_csv(rendered / "e-perf-1-replication-concordance.csv")
+    assert set(concordance.host) == {"jetson", "x86"}
+    assert concordance.concordance.eq("same-verdict").all()
+    assert concordance.canonical_verdict.eq("PASS").all()
+    overhead = pd.read_csv(rendered / "e-perf-5-wafer-native-contrast.csv")
+    assert overhead.host.tolist() == ["arm64-rpi5", "x86-linux"]
+    assert overhead.median_ratio.eq(1.2).all()
     assert (rendered / "e-perf-10-rate-estimates.csv").is_file()
     assert (rendered / "e-swap-4-burst.tex").is_file()
     assert (rendered / "rq3/swap-phases.pdf").stat().st_size > 1_000
