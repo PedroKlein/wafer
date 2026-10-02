@@ -117,7 +117,7 @@ system resources) then exceeding with latency histograms:
 | Nop sink for throughput isolation | eKuiper pattern | Sink that counts + drops messages |
 | Multiple pipeline depths | WAFER-specific | 1-node, 3-node, 5-node, 10-node chains |
 | Hardware spec documentation | Standard | Exact model, kernel version, governor (performance) |
-| N≥30 repetitions | Thesis stats requirement | Mann-Whitney U, Bootstrap CI95 |
+| N≥30 repetitions | Thesis stats requirement | Bootstrap CI95 |
 
 The RQ1 criteria (matched-load p95 ratio, delivery-ceiling ratio, the 50 µs per-hop reference) are defined in `tcc-doc/research/analysis/thesis-statement-v3.md`; do not restate them from memory.
 

@@ -41,7 +41,7 @@ alwaysLoaded: true
 |-----------|------------------|-----------------|
 | Writing thesis prose | Scope Qualifiers → Comparators | Terms MUST use qualifiers |
 | Reviewing code | Architectural Invariants #1–10 | NEVER violate any invariant |
-| Designing experiments | RQ pass criteria + method | N≥30, open-loop, Mann-Whitney U |
+| Designing experiments | RQ pass criteria + method | N≥30, open-loop, one-sided bootstrap bounds |
 | Hot-swap implementation | Invariant #8 + "NOT stateful" | Watch-channel swap is stateless — state is lost |
 | Benchmarking | RQ1 pass criteria + hardware | Paired baselines: native + eKuiper |
 | Adding features | "What WAFER Is NOT" + Invariants | Don't add windowing, exactly-once, etc. |
@@ -81,7 +81,7 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 
 **Hardware**: Raspberry Pi 5 4 GB (primary), Jetson Orin (optional inference validation), x86 (cross-validation).
 **Canonical allocation**: CPU 0 runs OS, native Mosquitto, `wafer-loadgen` and telemetry (systemd `CPUAffinity=0`, `irqaffinity=0`, no `isolcpus`); CPUs 1–3 run one active SUT. eKuiper 2.1.5 runs natively. ESP32 is excluded from measured experiments.
-**Method**: N≥30 repetitions, open-loop load gen, Mann-Whitney U, HdrHistogram, Bootstrap CI95.
+**Method**: N≥30 repetitions, open-loop load gen, HdrHistogram, Bootstrap CI95; verdicts compare one-sided bootstrap bounds with the thresholds in `verdict_rules` of `eval/canonical-matrix.json`.
 
 ---
 

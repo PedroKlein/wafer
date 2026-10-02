@@ -184,7 +184,7 @@ The following text is the earlier decision or diagnostic record. It is preserved
 
 ## Abstract
 
-This RFC designs the measurement infrastructure for WAFER's thesis evaluation: 22+ experiments across three research questions (performance overhead, fault containment, hot-swap disruption). The harness uses the real runtime as the system under test — special `BenchSource`/`BenchSink` adapters provide open-loop load generation with HdrHistogram recording, coordinated-omission-resistant timing (intended-publish-time stamps), and sequence tracking for loss/duplication detection. A native Rust baseline shares the same orchestrator and channels (eliminating confounders). Python UV-managed Jupyter notebooks handle statistical analysis (Mann-Whitney U, Bootstrap CI, Cliff's Delta). The design achieves <0.1% observer effect, full reproducibility via pinned environments and automated scripts, and a direct mapping from each experiment to the thesis figure it produces.
+This RFC designs the measurement infrastructure for WAFER's thesis evaluation: 22+ experiments across three research questions (performance overhead, fault containment, hot-swap disruption). The harness uses the real runtime as the system under test: special `BenchSource`/`BenchSink` adapters provide open-loop load generation with HdrHistogram recording, coordinated-omission-resistant timing (intended-publish-time stamps), and sequence tracking for loss/duplication detection. A native Rust baseline shares the same orchestrator and channels (eliminating confounders). Python UV-managed Jupyter notebooks handle statistical analysis (bootstrap CIs, one-sided bootstrap bounds for verdicts, Cliff's delta). The design achieves <0.1% observer effect, full reproducibility via pinned environments and automated scripts, and a direct mapping from each experiment to the thesis figure it produces.
 
 ## Context
 
@@ -258,7 +258,7 @@ E-Iso-1 to E-Iso-6 are automated correctness tests using `TestPipeline` (pass/fa
 
 ### Decision 9: Statistical Analysis — UV-Managed Python Notebooks
 
-Rust handles recording (HdrHistogram + CSV). Python via UV-managed Jupyter notebooks handles analysis and figure generation. Statistical method per notebook: normality test (Shapiro-Wilk), Mann-Whitney U (non-normal) or t-test (normal), effect size via Cliff's Delta, Bootstrap 95% CI (10,000 resamples). Report: median, IQR, p95, p99.
+Rust handles recording (HdrHistogram + CSV). Python via UV-managed Jupyter notebooks handles analysis and figure generation. Statistical method per notebook: percentile bootstrap 95% CIs over runs (10,000 resamples) and effect size via Cliff's delta. A criterion with a threshold passes or fails on its one-sided 95% bootstrap bound against the value declared in `verdict_rules` in `eval/canonical-matrix.json`, and is inconclusive when the bounds straddle it; `eval/RESULT-CONTRACT.md` lists the rules. No normality, rank or t-test is run. Report: median, IQR, p95, p99.
 
 Recording output per experiment run: `config.toml`, `metadata.json`, `latency.hdr`, `throughput.csv`, `per_node_metrics.csv`, `memory.csv`, `swap_timeline.json`, `sequence.csv`.
 
