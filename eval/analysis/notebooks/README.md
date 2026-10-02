@@ -24,31 +24,7 @@ Tables remain inline. Final figures are also written as PDF and PNG, and final t
 
 Missing and failed diagnostic conditions remain `PENDING` with a null value. They are not converted to zero or omitted. Canonical mode is different: wrong-host, dirty, mixed-SHA, throttled, failed, malformed, incomplete, or unapproved input raises an error instead of rendering a partial result.
 
-## Final visual manifest
-
-`wafer_analysis.canonical.FINAL_VISUAL_MANIFEST` is the machine-readable manifest. It keeps these metric groups separate:
-
-- E-Perf-1/2 run-level target-load latency;
-- E-Perf-7 metering effect;
-- E-Perf-10 offered versus achieved rate, pooled loss, p99 latency, delivery-ceiling brackets with the WAFER/eKuiper ratio interval, normalized p99 knee, and MQTT support-path limitation;
-- E-Swap internal phases and sink-observed gaps, with E-Swap-1 and E-Swap-5 summarised per run before they are summarised over their 10 runs, and the first-use swap of each run kept apart from the cached swaps;
-- E-Swap-3 event-aligned dip, action duration, recovery, and sequence integrity;
-- E-Swap-4 one event from each independent burst run, plus separately reported source-origin `[0,120s)` primary and `[120s,130s)` drain completion evidence.
-
 Percentile summaries are never presented as an empirical CDF.
-
-## Visual review checklist
-
-The complete and missing-leaf synthetic executions are reviewed for these properties:
-
-- [x] READY tables show N, units, evidence status, and descriptive uncertainty.
-- [x] Missing and failed leaves show `PENDING` with null values.
-- [x] Target-load and saturation labels remain distinct.
-- [x] Branch-A measurements do not include branch-B populations.
-- [x] HTTP duration and sink-observed hot-swap gaps use separate columns.
-- [x] Startup output distinguishes filesystem state from compiled-cache state.
-- [x] Queue output separates offered, accepted, processed, and drained rates.
-- [x] Power wording says PMIC internal-rail proxy, not total-board power.
 
 `test_notebook_execution.py` executes every notebook against both fixture states; `test_focused.py` checks labels.
 

@@ -98,7 +98,6 @@ repository-local result trees remain unchanged.
 
 - `shakedown-macos` — MacBook laptop shakedown.
 - `rpi5` — Raspberry Pi 5 4 GB canonical run.
-- `rpi4` — retained for existing Raspberry Pi 4 result directories; not the active canonical target.
 - `jetson` — Jetson Orin Nano inference validation.
 - `x86` — x86 workstation cross-architecture validation.
 
@@ -182,9 +181,7 @@ interrupted attempt fails the gate, and a new gate needs a new batch.
 
 The result-directory contract is split into **core artefacts**
 (mandatory on every run) and **per-experiment optional artefacts**
-(present only when the experiment's semantics require them). See
-`docs/decisions/eval-result-contract-scope.md` for the option A vs B
-rationale.
+(present only when the experiment's semantics require them).
 
 ### Core artefacts (mandatory)
 
@@ -249,7 +246,6 @@ before reading. The matrix below is authoritative:
 | `containment.json` | E-Iso-1..8 | `canonical_runner.py` | Containment verdict for one attack condition: expected condition, attack node, expected mechanism (the `per_node_metrics.csv` column that must count the attack, see `eval/scripts/lib/containment.py`), its count, unexpected outcomes on the attack node, trap total, runtime-panic flag, healthy-node output count, per-node runtime metrics, and the dead-letter evidence: `dlq_sent_total` (sum over nodes) and `dlq_records` (lines in `dlq.jsonl`, null when the file is absent). The verifier rejects an E-Iso-1..6 leaf whose `dlq.jsonl` exists but holds a different number of records than its nodes sent to the dead-letter queue. An attack counts as contained only when the expected mechanism stopped it at least once and nothing else happened on that node: no other trap kind or guest error, and no message passed on. `contained` is null for conditions without an attack. The runner fails the run when `per_node_metrics.csv` is malformed or lacks the attack node's counters. The analysis never counts a record whose condition differs from the attack, and it counts runs that were not contained or recorded a runtime panic instead of dropping them. `contained: false` is a `containment-escape` outcome, not a rejected leaf, and a run whose runtime exited before it wrote `containment.json` counts as not contained. |
 | `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent post-warmup latency histogram, throughput series, sequence accounting, and measurement window for each branch. Each branch has its own `BenchSource`; root-level fan-out/fan-in measurements are forbidden for branch-impact analysis. |
 | `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local source identity, configured post-warmup target count, actually offered/received post-warmup counts, target shortfall, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
-| `branch-isolation-summary.json` | E-Iso-7 batch ledger | `canonical_runner.py` | Separate branch-A throughput-drop and p95-latency-increase rows for panic and epoch-loop attacks, including run counts and units. |
 | `host-load-ladder.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Append-only clean-boot session receipt with the exact eight-phase order, per-phase pass/fail/not-run status, 75 °C stop limit, boot identity, bounded sample counts, diagnostic/final admission decisions, source state, and the PMIC internal-rail boundary. |
 | `host-telemetry.csv` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | One-second phase-labeled temperature, CPU frequency, throttling, PMIC internal-rail proxy, memory availability/pressure, USB throughput, boot ID, wall-clock, and monotonic samples. No per-message data. |
 | `kernel-io.log`, `usb-integrity.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Bounded matching kernel I/O errors and per-USB-phase byte/duration/SHA-256 reconciliation. Any recorded kernel I/O error or hash mismatch stops the ladder and blocks final admission. |
@@ -289,7 +285,7 @@ before reading. The matrix below is authoritative:
   and `burst-timeline.json`, E-Backpressure `backpressure.json`,
   E-Swap `swap_requests.json` and `hotswap-analysis.json`, final E-Swap-5
   `rollback.json` and `post-rollback-continuity.json`, plus E-Iso-7
-  `branch-isolation.json` and the batch-level branch-A impact summary.
+  `branch-isolation.json`.
 - `run-experiment.sh` owns
   `metadata.json`, `config.toml`, `stdout.log`, the E2E `throughput.csv`, and E-Perf-9
   `startup-preparation.json`.

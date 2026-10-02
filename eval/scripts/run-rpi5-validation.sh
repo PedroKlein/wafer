@@ -69,6 +69,7 @@ print(
 PY
 
 python3 "$ROOT/eval/scripts/verify-result-contract.py" "$result"
+[ -s "$result/throughput.csv" ] || { echo "error: validation wrote no throughput.csv" >&2; exit 1; }
 [ "$(vcgencmd get_throttled)" = "throttled=0x0" ] || {
     echo "error: throttling occurred during methodology validation" >&2
     exit 1
