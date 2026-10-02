@@ -595,55 +595,194 @@ def test_e_perf_5_accepts_transform_only_fuel_for_transform_only_pipeline() -> N
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        source = make_result(root)
-        result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
-        result.parent.mkdir(parents=True)
-        source.rename(result)
-        (result / "runtime-provenance.json").unlink()
-        metadata_path = result / "metadata.json"
-        metadata = json.loads(metadata_path.read_text())
-        metadata.update(
-            experiment="e-perf-1",
-            condition="ekuiper",
-            system="ekuiper",
-            ekuiper_version="2.1.5",
-            exit_codes={"ekuiper": 0},
-        )
-        metadata_path.write_text(json.dumps(metadata))
-        completed = run(result)
+EKUIPER_RULE = {
+    "status": "running",
+    "message": "",
+    "lastStartTimestamp": 1_000,
+    "lastStopTimestamp": 0,
+}
+
+
+def ekuiper_snapshot(captured_at_ns: int, rule: dict | None = None, **service: int) -> dict:
+    return {
+        "captured_at_ns": captured_at_ns,
+        "service": {"NRestarts": 0, "ExecMainStatus": 0, "MainPID": 4242, **service},
+        "rule_status": {**EKUIPER_RULE, **(rule or {})},
+        "rule_status_error": None,
+    }
+
+
+def write_ekuiper_health(
+    result: Path, after: dict | None = None, before: dict | None = None
+) -> None:
+    """Snapshots taken before warm-up and after the run, around the window 100..200."""
+    health = {
+        "schema_version": 1,
+        "unit": "kuiper.service",
+        "rule": "pipeline_a",
+        "before": before or ekuiper_snapshot(50),
+        "after": after or ekuiper_snapshot(250),
+    }
+    (result / "ekuiper-health.json").write_text(json.dumps(health))
+
+
+def make_ekuiper_result(root: Path, exit_code: int | None = 0) -> Path:
+    source = make_result(root)
+    result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
+    result.parent.mkdir(parents=True)
+    source.rename(result)
+    (result / "runtime-provenance.json").unlink()
+    metadata_path = result / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(
+        experiment="e-perf-1",
+        condition="ekuiper",
+        system="ekuiper",
+        ekuiper_version="2.1.5",
+        exit_codes={"ekuiper": exit_code},
+    )
+    metadata_path.write_text(json.dumps(metadata))
+    audit = {"service": {"properties": {"MainPID": "4242", "Environment": "HOME=/var/lib/kuiper"}}}
+    (result / "ekuiper-audit.json").write_text(json.dumps(audit))
+    write_ekuiper_health(result)
+    return result
+
+
+def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance(tmp_path: Path) -> None:
+    completed = run(make_ekuiper_result(tmp_path))
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_final_ekuiper_result_rejects_a_service_that_inherited_gctrace() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        source = make_result(root)
-        result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
-        result.parent.mkdir(parents=True)
-        source.rename(result)
-        (result / "runtime-provenance.json").unlink()
-        metadata_path = result / "metadata.json"
-        metadata = json.loads(metadata_path.read_text())
-        metadata.update(
-            experiment="e-perf-1",
-            condition="ekuiper",
-            system="ekuiper",
-            ekuiper_version="2.1.5",
-            exit_codes={"ekuiper": 0},
-        )
-        metadata_path.write_text(json.dumps(metadata))
-        audit = {"service": {"properties": {"Environment": "HOME=/var/lib/kuiper"}}}
-        (result / "ekuiper-audit.json").write_text(json.dumps(audit))
-        clean = run(result)
-        audit["service"]["properties"]["Environment"] += " GODEBUG=gctrace=1"
-        (result / "ekuiper-audit.json").write_text(json.dumps(audit))
-        traced = run(result)
+def test_final_ekuiper_result_rejects_a_service_that_inherited_gctrace(tmp_path: Path) -> None:
+    result = make_ekuiper_result(tmp_path)
+    clean = run(result)
+    audit = json.loads((result / "ekuiper-audit.json").read_text())
+    audit["service"]["properties"]["Environment"] += " GODEBUG=gctrace=1"
+    (result / "ekuiper-audit.json").write_text(json.dumps(audit))
+    traced = run(result)
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert traced.returncode != 0
     assert "GODEBUG" in traced.stdout + traced.stderr
+
+
+def test_canonical_ekuiper_result_requires_its_health_snapshots(tmp_path: Path) -> None:
+    result = make_ekuiper_result(tmp_path)
+    (result / "ekuiper-health.json").unlink()
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert "missing canonical eKuiper health artefact: ekuiper-health.json" in completed.stdout
+
+
+def remove_measured_outputs(result: Path) -> None:
+    for name in (
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "percentiles.json",
+        "interval-latency.json",
+        "interval-metrics.json",
+    ):
+        (result / name).unlink()
+
+
+@pytest.mark.parametrize(
+    ("after", "exit_code", "reason"),
+    [
+        (ekuiper_snapshot(250, NRestarts=1, MainPID=4343), None, "runtime-exit"),
+        (ekuiper_snapshot(250, MainPID=0, ExecMainStatus=1), 1, "runtime-exit"),
+        (ekuiper_snapshot(250, {"status": "stopped by error", "message": "x"}), 0, "rule-error"),
+        (ekuiper_snapshot(250, {"message": "retrying after error: x"}), 0, "rule-error"),
+    ],
+)
+def test_ekuiper_failure_is_an_outcome_checked_only_for_harness_evidence(
+    tmp_path: Path, after: dict, exit_code: int | None, reason: str
+) -> None:
+    result = make_ekuiper_result(tmp_path, exit_code=exit_code)
+    write_ekuiper_health(result, after=after)
+    remove_measured_outputs(result)
+
+    completed = run(result)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert f"OUTCOME    {result}: system under test failed {reason}" in completed.stdout
+
+    metadata = json.loads((result / "metadata.json").read_text())
+    metadata["exit_codes"] = {"ekuiper": 0 if exit_code is None else None}
+    (result / "metadata.json").write_text(json.dumps(metadata))
+    rejected = run(result)
+    assert rejected.returncode == 1
+    assert "metadata exit_codes.ekuiper differs from ekuiper-health.json" in rejected.stdout
+
+
+def test_completed_ekuiper_run_must_report_a_clean_exit(tmp_path: Path) -> None:
+    result = make_ekuiper_result(tmp_path, exit_code=None)
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert "metadata exit_codes.ekuiper differs from ekuiper-health.json" in completed.stdout
+    assert "OUTCOME" not in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("health", "message"),
+    [
+        (
+            {"before": ekuiper_snapshot(50, {"status": "starting"})},
+            "eKuiper did not run pipeline_a before warm-up",
+        ),
+        (
+            {"before": ekuiper_snapshot(150)},
+            "ekuiper-health.json snapshots do not bracket the measurement window",
+        ),
+        (
+            {"after": ekuiper_snapshot(150)},
+            "ekuiper-health.json snapshots do not bracket the measurement window",
+        ),
+        (
+            {
+                "before": ekuiper_snapshot(50, MainPID=4343),
+                "after": ekuiper_snapshot(250, MainPID=4343),
+            },
+            "ekuiper-audit.json and ekuiper-health.json name different eKuiper main PIDs",
+        ),
+        (
+            {"after": ekuiper_snapshot(250, {"lastStartTimestamp": 61_000})},
+            "something outside the run started the eKuiper rule again",
+        ),
+        (
+            {"after": {"captured_at_ns": 250, "rule_status": EKUIPER_RULE}},
+            "ekuiper-health.json after snapshot is malformed",
+        ),
+    ],
+)
+def test_ekuiper_health_evidence_the_harness_could_not_have_written_is_rejected(
+    tmp_path: Path, health: dict, message: str
+) -> None:
+    result = make_ekuiper_result(tmp_path)
+    write_ekuiper_health(result, **health)
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert message in completed.stdout
+
+
+def test_swap3_rule_restart_must_show_in_the_rule_start_time(tmp_path: Path) -> None:
+    result = make_ekuiper_result(tmp_path)
+    metadata = json.loads((result / "metadata.json").read_text())
+    restarted = ekuiper_snapshot(250, {"lastStartTimestamp": 61_000})
+
+    write_ekuiper_health(result, after=restarted)
+    assert CONTRACT.check_ekuiper_health(result, metadata, "e-swap-3") == []
+    assert CONTRACT.sut_outcome_reasons(result, "e-swap-3") == []
+
+    write_ekuiper_health(result)
+    assert CONTRACT.check_ekuiper_health(result, metadata, "e-swap-3") == [
+        "E-Swap-3 restarted the eKuiper rule but its start time did not move"
+    ]
 
 
 def test_canonical_result_rejects_dirty_source_and_missing_output() -> None:

@@ -38,7 +38,14 @@ ANALYSIS_SRC = Path(__file__).resolve().parents[1] / "analysis" / "src" / "wafer
 if str(ANALYSIS_SRC) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_SRC))
 
-from attempts import INCOMPLETE_RUN_REASONS, sut_outcome_reasons
+from attempts import (
+    EKUIPER_UNIT_PROPERTIES,
+    INCOMPLETE_RUN_REASONS,
+    ekuiper_exit_code,
+    ekuiper_rule_running,
+    ekuiper_unit_restarted,
+    sut_outcome_reasons,
+)
 from results_layout import resolve_alias_receipt, validate_alias_mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
@@ -1292,6 +1299,84 @@ def check_ekuiper_godebug(leaf: Path, metadata: dict, experiment: str) -> list[s
     return violations
 
 
+def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[str]:
+    """The eKuiper snapshots must bracket the run and agree with the metadata and the audit.
+
+    What they show about eKuiper is an outcome (``attempts.ekuiper_health_reasons``), not a
+    violation; evidence the harness could not have written for this run is. Only E-Swap-3
+    starts the rule again during the run, so elsewhere a new rule start time without a unit
+    restart means something outside the run started it.
+    """
+    path = leaf / "ekuiper-health.json"
+    if not path.is_file():
+        return ["missing canonical eKuiper health artefact: ekuiper-health.json"]
+    violations: list[str] = []
+    health = _load_json(path, "ekuiper-health.json", violations)
+    if health is None:
+        return violations
+    if (health.get("schema_version"), health.get("unit"), health.get("rule")) != (
+        1,
+        "kuiper.service",
+        "pipeline_a",
+    ):
+        violations.append("ekuiper-health.json identity is invalid")
+    for name in ("before", "after"):
+        snapshot = health.get(name)
+        service = snapshot.get("service") if isinstance(snapshot, dict) else None
+        if (
+            not isinstance(service, dict)
+            or any(
+                type(service.get(key)) is not int or service[key] < 0
+                for key in EKUIPER_UNIT_PROPERTIES
+            )
+            or type(snapshot.get("captured_at_ns")) is not int
+            or "rule_status" not in snapshot
+        ):
+            violations.append(f"ekuiper-health.json {name} snapshot is malformed")
+    if violations:
+        return violations
+    before, after = health["before"], health["after"]
+    if before["service"]["MainPID"] == 0 or not ekuiper_rule_running(before["rule_status"]):
+        violations.append("eKuiper did not run pipeline_a before warm-up")
+    try:
+        window = json.loads((leaf / "measurement-window.json").read_text())
+        started, finished = int(window["started_ns"]), int(window["finished_ns"])
+    except (KeyError, OSError, TypeError, ValueError):
+        pass
+    else:
+        if before["captured_at_ns"] > started or after["captured_at_ns"] < finished:
+            violations.append("ekuiper-health.json snapshots do not bracket the measurement window")
+    exit_codes = metadata.get("exit_codes")
+    if (
+        not isinstance(exit_codes, dict)
+        or "ekuiper" not in exit_codes
+        or exit_codes["ekuiper"] != ekuiper_exit_code(health)
+    ):
+        violations.append("metadata exit_codes.ekuiper differs from ekuiper-health.json")
+    rule_before, rule_after = before["rule_status"], after["rule_status"]
+    if (
+        not ekuiper_unit_restarted(health)
+        and isinstance(rule_before, dict)
+        and isinstance(rule_after, dict)
+    ):
+        started_again = rule_after.get("lastStartTimestamp") != rule_before.get(
+            "lastStartTimestamp"
+        )
+        if experiment == "e-swap-3" and not started_again:
+            violations.append("E-Swap-3 restarted the eKuiper rule but its start time did not move")
+        elif experiment != "e-swap-3" and started_again:
+            violations.append("something outside the run started the eKuiper rule again")
+    audit_path = leaf / "ekuiper-audit.json"
+    if audit_path.is_file():
+        audit = _load_json(audit_path, "ekuiper-audit.json", [])
+        audited_pid = (audit or {}).get("service", {}).get("properties", {}).get("MainPID")
+        if audit is not None and str(audited_pid) != str(before["service"]["MainPID"]):
+            violations.append(
+                "ekuiper-audit.json and ekuiper-health.json name different eKuiper main PIDs"
+            )
+    return violations
+
+
 def check_candidate_swap_evidence(leaf: Path, metadata: dict, experiment: str) -> list[str]:
     violations: list[str] = []
     artifact_name = (
@@ -1745,7 +1830,7 @@ def check_leaf(
                     violations.append("Pi 5 metadata git_dirty is not boolean")
                 exit_codes = metadata.get("exit_codes", {})
                 if metadata.get("system") == "ekuiper":
-                    if exit_codes.get("ekuiper") != 0:
+                    if exit_codes.get("ekuiper") != 0 and "runtime-exit" not in outcomes:
                         violations.append("Pi 5 metadata records a non-zero eKuiper exit")
                 elif metadata.get("system") == "mqtt-loopback":
                     if exit_codes.get("publisher") != 0 or exit_codes.get("subscriber") != 0:
@@ -1826,6 +1911,8 @@ def check_leaf(
         window_path = leaf / "measurement-window.json"
         if window_path.is_file():
             violations.extend(check_measurement_window(window_path))
+        if metadata.get("system") == "ekuiper":
+            violations.extend(check_ekuiper_health(leaf, metadata, experiment))
 
     if incomplete:
         return violations, warnings

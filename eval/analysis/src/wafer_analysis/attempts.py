@@ -29,7 +29,10 @@ ADMITTED = frozenset({PASSED, SUT_OUTCOME})
 
 SUT_OUTCOME_REASONS = {
     "runtime-exit": "the system under test exited with a non-zero code after it started the "
-    "pipeline, crashed, or had to be killed after the shutdown grace period",
+    "pipeline, crashed, or had to be killed after the shutdown grace period; for eKuiper, the "
+    "kuiper unit lost or replaced its main process during the run",
+    "rule-error": "the eKuiper rule was not running at the end of the run, or its status "
+    "carried an error message",
     "containment-escape": "an attack was not stopped by its expected mechanism alone, or the "
     "runtime panicked",
     "message-loss": "messages were lost where the criterion expects none",
@@ -44,7 +47,7 @@ INFRASTRUCTURE_REASONS = {
     "contract-violation": "the result failed a schema, provenance, telemetry or host check",
     "interrupted": "the attempt directory has no receipt",
 }
-INCOMPLETE_RUN_REASONS = frozenset({"runtime-exit", "swap-failed", "rollback-failed"})
+INCOMPLETE_RUN_REASONS = frozenset({"runtime-exit", "rule-error", "swap-failed", "rollback-failed"})
 STARTUP_REFUSALS = frozenset({1, 2})
 OUTSIDE_INTERRUPTS = frozenset({130, 143})
 RUNTIME_SYSTEMS = frozenset({"wafer", "native"})
@@ -52,6 +55,7 @@ SWAP_EXPERIMENTS = frozenset({"e-swap-1", "e-swap-4", "e-swap-independent-sessio
 SWAP_REQUEST_EXPERIMENTS = SWAP_EXPERIMENTS | {"e-swap-3"}
 ROLLBACK_EXPERIMENTS = frozenset({"e-swap-5", "e-swap-rollback-sessions"})
 ZERO_LOSS_EXPERIMENTS = SWAP_EXPERIMENTS | ROLLBACK_EXPERIMENTS
+EKUIPER_UNIT_PROPERTIES = ("NRestarts", "ExecMainStatus", "MainPID")
 
 _ATTEMPT_NAME = re.compile(r"run-(\d+)(?:-attempt-(\d+))?")
 
@@ -68,6 +72,65 @@ def runtime_exit_is_outcome(code: int) -> bool:
     return status != 0 and status not in STARTUP_REFUSALS | OUTSIDE_INTERRUPTS
 
 
+def ekuiper_rule_running(status: object) -> bool:
+    """Whether an eKuiper rule status reads ``running`` with an empty ``message``.
+
+    eKuiper keeps a rule ``running`` while it restarts a topology that failed, and says so in
+    ``message``; a manual start clears it.
+    """
+    return (
+        isinstance(status, dict)
+        and str(status.get("status", "")).lower() == "running"
+        and not status.get("message")
+    )
+
+
+def ekuiper_unit_restarted(health: Mapping) -> bool:
+    """Whether the kuiper unit lost or replaced its main process between the two snapshots."""
+    before, after = (
+        snapshot.get("service") if isinstance(snapshot, dict) else None
+        for snapshot in (health.get("before"), health.get("after"))
+    )
+    return (
+        isinstance(before, dict)
+        and isinstance(after, dict)
+        and any(before.get(key) != after.get(key) for key in ("NRestarts", "MainPID"))
+    )
+
+
+def ekuiper_health_reasons(health: Mapping) -> list[str]:
+    """The outcomes the two snapshots in ``ekuiper-health.json`` show.
+
+    ``before`` is taken once the rule runs, before warm-up, and ``after`` once the load
+    generators are done, before the harness stops eKuiper. A new restart count or main PID
+    means the process that ran the measurement ended, a ``runtime-exit`` as a crash is for
+    WAFER; the rule status after it belongs to the new process and is not judged. Otherwise a
+    rule that does not run at the end or carries a message is a ``rule-error``. The
+    per-operator exception counters are not judged: eKuiper counts each message it drops from
+    a full buffer there, and the run measures that loss itself.
+    """
+    if not isinstance(health.get("before"), dict) or not isinstance(health.get("after"), dict):
+        return []
+    if ekuiper_unit_restarted(health):
+        return ["runtime-exit"]
+    if not ekuiper_rule_running(health["after"].get("rule_status")):
+        return ["rule-error"]
+    return []
+
+
+def ekuiper_exit_code(health: Mapping) -> int | None:
+    """The ``exit_codes.ekuiper`` that ``ekuiper-health.json`` shows for one run.
+
+    ``0`` while the process that ran the measurement is still the unit's main process, its
+    ``ExecMainStatus`` when the unit is down at the end, and ``None`` when systemd has already
+    started a new main process, because starting one resets that status.
+    """
+    if not ekuiper_unit_restarted(health):
+        return 0
+    after = health["after"]["service"]
+    return after["ExecMainStatus"] if after["MainPID"] == 0 else None
+
+
 def sut_outcome_reasons(leaf: Path, experiment: str) -> list[str]:
     """The criteria the system under test failed in one attempt, read from its artifacts.
 
@@ -80,6 +143,9 @@ def sut_outcome_reasons(leaf: Path, experiment: str) -> list[str]:
         code = exit_codes.get("wafer_runtime") if isinstance(exit_codes, dict) else None
         if type(code) is int and runtime_exit_is_outcome(code):
             reasons.append("runtime-exit")
+    health = _read_json(leaf / "ekuiper-health.json")
+    if isinstance(health, dict):
+        reasons.extend(ekuiper_health_reasons(health))
     containment = _read_json(leaf / "containment.json")
     if isinstance(containment, dict) and containment.get("contained") is False:
         reasons.append("containment-escape")
