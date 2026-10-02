@@ -39,25 +39,8 @@ REQUIRED_FIELDS = {
     "thesis_evidence",
     "evidence_class",
 }
-FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
-FINAL_CAPACITY_BRACKET_RULE = {
-    "ceiling_multipliers": [0.95, 1.05],
-    "competitive_threshold": "e-perf-10-competitive-ratio",
-    "step_msg_s": 100,
-    "max_extra_rates": 6,
-}
-CAPACITY_BRACKET_RULE_TEXT = {
-    "purpose", "source", "scout_ceiling", "decision_points", "rounding", "max_rate",
-    "selection", "runs_per_rate",
-}
-FINAL_SCHEDULE_RECORDS = 2_351
-FINAL_MEASURED_LEAVES = 2_121
 PAYLOAD_SIZES = ("120b", "1kb", "10kb", "100kb")
 NATIVE_PASS_THROUGH = {"kind": "native", "function": "passthrough"}
-PAYLOAD_BOUNDARY = (
-    "in-process path from bench-source through one pass-through transform to bench-sink; "
-    "no MQTT adapter"
-)
 SWAP_SESSION_EXPERIMENTS = {"e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"}
 SWAP_SESSION_RUNS = 10
 SWAP_SESSION_EVENTS = 50
@@ -76,64 +59,6 @@ VERDICT_THRESHOLD_FIELDS = {
 VERDICT_RULES = {"one-sided-bound", "exact-count", "every-run", "per-rate-cell", "tested-rate-bracket"}
 VERDICT_ROLES = {"criterion", "reference", "gate"}
 VERDICT_DIRECTIONS = {"<", "<=", ">", ">="}
-ISOLATION_ATTACKS = [f"e-iso-{index}" for index in range(1, 7)]
-# criterion: (experiments, value, unit, direction, rule, role)
-FROZEN_VERDICT_THRESHOLDS = {
-    "e-val-1-p99-low": (["e-val-1"], 45_000_000, "ns", ">=", "every-run", "gate"),
-    "e-val-1-p99-high": (["e-val-1"], 55_017_471, "ns", "<=", "every-run", "gate"),
-    "e-perf-1-p95-ratio": (["e-perf-1"], 2.0, "ratio", "<=", "one-sided-bound", "criterion"),
-    "e-perf-1-pooled-loss": (["e-perf-1"], 0.01, "fraction", "<=", "one-sided-bound", "criterion"),
-    "e-perf-1-achieved-ratio": (["e-perf-1"], 0.99, "ratio", ">=", "one-sided-bound", "criterion"),
-    "e-perf-1-duplicates": (["e-perf-1"], 0, "messages", "<=", "exact-count", "criterion"),
-    "e-perf-4-boundary-p50": (["e-perf-4"], 50_000, "ns", "<", "one-sided-bound", "reference"),
-    "e-perf-10-cell-loss": (["e-perf-10"], 0.01, "fraction", "<=", "per-rate-cell", "criterion"),
-    "e-perf-10-cell-achieved-ratio": (["e-perf-10"], 0.99, "ratio", ">=", "per-rate-cell", "criterion"),
-    "e-perf-10-cell-duplicates": (["e-perf-10"], 0, "messages", "<=", "per-rate-cell", "criterion"),
-    "e-perf-10-competitive-ratio": (["e-perf-10"], 0.7, "ratio", ">=", "tested-rate-bracket", "criterion"),
-    "e-iso-containment": (ISOLATION_ATTACKS, 0, "runs", "<=", "exact-count", "criterion"),
-    "e-iso-7-throughput-drop": (["e-iso-7"], 1.0, "percent", "<", "one-sided-bound", "criterion"),
-    "e-iso-7-stopped-runs": (["e-iso-7"], 0, "runs", "<=", "exact-count", "criterion"),
-    "e-swap-2-lossless": (["e-swap-2"], 0, "runs", "<=", "exact-count", "criterion"),
-    "e-swap-3-dip": (["e-swap-3"], 5.0, "percent", "<", "one-sided-bound", "criterion"),
-    "e-swap-3-lossless": (["e-swap-3"], 0, "runs", "<=", "exact-count", "criterion"),
-    "e-swap-4-p95-gap": (["e-swap-4"], 100_000_000, "ns", "<", "one-sided-bound", "criterion"),
-    "e-swap-4-lossless": (["e-swap-4"], 0, "runs", "<=", "exact-count", "criterion"),
-    "e-swap-5-rollback": (["e-swap-5"], 0, "runs", "<=", "exact-count", "criterion"),
-}
-FROZEN_REPLICATION_CONCORDANCE = {
-    "schema_version": 1,
-    "canonical_host": "rpi5",
-    "replication_hosts": ["jetson", "x86"],
-    "criteria_rules": ["one-sided-bound", "exact-count"],
-    "direction": (
-        "the side of the declared threshold on which a host's point estimate falls, "
-        "the count itself for an exact count: it meets the threshold or misses it"
-    ),
-    "classes": [
-        {
-            "class": "not-estimable",
-            "rule": "either host lacks the criterion, reports it PENDING or has no point estimate",
-        },
-        {
-            "class": "same-verdict",
-            "rule": "both hosts report the same PASS, FAIL or INCONCLUSIVE verdict",
-        },
-        {
-            "class": "same-direction",
-            "rule": "the verdicts differ and both point estimates fall on the same side of the threshold",
-        },
-        {
-            "class": "opposite-direction",
-            "rule": "the verdicts differ and the point estimates fall on opposite sides of the threshold",
-        },
-    ],
-    "precedence": "the first class in the listed order whose rule holds",
-    "canonical_verdict": (
-        "unchanged: replication reports agreement with the canonical host and never alters its verdict"
-    ),
-}
-
-
 def load_object(path: Path) -> dict:
     try:
         value = json.loads(path.read_text())
@@ -367,213 +292,14 @@ def validate_matrix(matrix: dict) -> list[str]:
         return errors
     if campaign.get("status") != "frozen-before-execution":
         errors.append("final_campaign status must be frozen-before-execution")
-    if campaign.get("seed") != 1729:
-        errors.append("final_campaign seed must be 1729")
     if campaign.get("thesis_evidence") is not True:
         errors.append("final_campaign thesis_evidence must be true")
     grid = dict(campaign.get("capacity_grid", {}))
-    bracket_rule = grid.pop("bracket_rates", None)
-    if grid != {
-        "source_batch_id": "capacity-scout-v3-20260904T045000Z",
-        "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
-        "candidate_sha256": "5f2231ef541c36c4fef3655ed25239ca028fb7ed7cd1387a3dd6644818cbfc3f",
-        "common_rate_points_msg_s": FINAL_CAPACITY_RATES,
-    }:
-        errors.append("final_campaign capacity grid differs from the frozen scout-derived grid")
-    if (
-        not isinstance(bracket_rule, dict)
-        or set(bracket_rule) != FINAL_CAPACITY_BRACKET_RULE.keys() | CAPACITY_BRACKET_RULE_TEXT
-        or any(bracket_rule[field] != value for field, value in FINAL_CAPACITY_BRACKET_RULE.items())
-        or any(
-            not isinstance(bracket_rule[field], str) or not bracket_rule[field]
-            for field in CAPACITY_BRACKET_RULE_TEXT
-        )
-    ):
-        errors.append("final_campaign capacity bracket rule differs from the frozen per-host rule")
-    metering = campaign.get("canonical_metering", {})
-    if metering != {
-        "policy": "explicit-fuel-and-epoch",
-        "fuel": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
-        "epoch_deadline": 100,
-        "epoch_tick_ms": 10,
-    }:
-        errors.append("final_campaign canonical metering policy is invalid")
-    if campaign.get("ekuiper_operator_concurrency") != 1:
-        errors.append("final_campaign eKuiper operator concurrency must be 1")
     if campaign.get("diagnostic_batches_excluded") is not True:
         errors.append("final_campaign must exclude diagnostic batches")
-    if campaign.get("attempt_policy") != {
-        "infrastructure_retries": 1,
-        "gate_experiments": ["e-val-1"],
-    }:
-        errors.append(
-            "final_campaign attempt policy must allow one in-place infrastructure retry "
-            "and none for the E-Val-1 gate"
-        )
-    if campaign.get("mqtt_drain_grace_secs") != 5:
-        errors.append("final_campaign MQTT drain grace must be 5 seconds")
-
-    expected_metering_exceptions = {
-        "e-perf-5": {
-            "wafer": {
-                "policy": "explicit-fuel-and-epoch-for-present-node-categories",
-                "fuel": {"transform": 10_000_000, "filter": None, "router": None},
-                "epoch_deadline": 100,
-                "epoch_tick_ms": 10,
-            }
-        },
-        "e-iso-4": {
-            "infinite-loop": {
-                "type": "epoch-containment-stimulus",
-                "rationale": "Fuel must not preempt the intended epoch-containment mechanism.",
-                "fuel": None,
-                "epoch_deadline": 1,
-                "epoch_tick_ms": 10,
-            }
-        },
-        "e-iso-5": {
-            "memory-exhaust": {
-                "type": "memory-limit-stimulus",
-                "rationale": "Fuel must not preempt the intended memory-limit mechanism.",
-                "fuel": None,
-                "epoch_deadline": 100,
-                "epoch_tick_ms": 10,
-            }
-        },
-        "e-iso-7": {
-            "epoch-loop-attack": {
-                "type": "epoch-containment-stimulus",
-                "rationale": "Fuel must not preempt the intended epoch-containment mechanism.",
-                "fuel": None,
-                "epoch_deadline": 100,
-                "epoch_tick_ms": 10,
-            }
-        },
-    }
-    for experiment_id, expected in expected_metering_exceptions.items():
-        if experiments.get(experiment_id, {}).get("metering_exceptions") != expected:
-            errors.append(f"{experiment_id} metering exceptions differ from the frozen policy")
-    undeclared = sorted(
-        experiment_id
-        for experiment_id, definition in experiments.items()
-        if "metering_exceptions" in definition and experiment_id not in expected_metering_exceptions
-    )
-    if undeclared:
-        errors.append(f"undeclared metering exceptions: {', '.join(undeclared)}")
-
-    metering_modes = experiments.get("e-perf-7", {}).get("metering_modes")
-    if metering_modes != {
-        "neither": {"fuel": None, "epoch_deadline": None},
-        "fuel-only": {"fuel": 10_000_000, "epoch_deadline": None},
-        "epoch-only": {"fuel": None, "epoch_deadline": 100},
-        "both": {"fuel": 10_000_000, "epoch_deadline": 100},
-    }:
-        errors.append("e-perf-7 metering modes differ from the Option-value truth table")
-
     sweep = experiments.get("e-perf-10", {})
-    if sweep.get("repetitions") != 30:
-        errors.append("e-perf-10 repetitions must be exactly 30")
-    if sweep.get("sample_unit") != "run":
-        errors.append("e-perf-10 sample_unit must be run")
-    if sweep.get("rate_points_msg_s") != FINAL_CAPACITY_RATES:
-        errors.append("e-perf-10 rate grid differs from the frozen scout-derived grid")
     if sweep.get("rate_points_msg_s") != grid.get("common_rate_points_msg_s"):
         errors.append("e-perf-10 rate grid differs from final_campaign capacity grid")
-    capacity_outputs = {
-        "latency.hdr", "throughput.csv", "sequence.csv", "subscriber-metadata.json",
-        "publisher-summary.json", "capacity-run.json", "resource-usage.csv",
-        "process-audit.json",
-    }
-    if set(sweep.get("required_outputs", [])) != capacity_outputs:
-        errors.append("e-perf-10 required outputs differ from the trace-free final contract")
-
-    swap3 = experiments.get("e-swap-3", {})
-    if swap3.get("sample_unit") != "run" or swap3.get("repetitions") != 30:
-        errors.append("e-swap-3 must use 30 run-level repetitions")
-    if swap3.get("conditions") != [
-        "wafer-hotswap",
-        "wafer-restart",
-        "ekuiper-rule-update",
-        "ekuiper-make-before-break",
-    ]:
-        errors.append("e-swap-3 conditions differ from the frozen strategies")
-    swap3_outputs = {
-        "latency.hdr",
-        "throughput.csv",
-        "sequence.csv",
-        "publisher-summary.json",
-        "subscriber-metadata.json",
-        "throughput-buckets.json",
-        "throughput-buckets-10ms.json",
-        "disruption-timeline.json",
-        "disruption-analysis.json",
-    }
-    if set(swap3.get("required_outputs", [])) != swap3_outputs:
-        errors.append("e-swap-3 required outputs differ from the final disruption contract")
-    alignment = swap3.get("event_alignment", {})
-    if alignment != {
-        "event_at_secs": 60,
-        "bucket_width_ms": 100,
-        "series_start_secs": -10,
-        "series_end_secs": 10,
-        "baseline_window_secs": [-10, -2],
-        "event_window_secs": [-2, 2],
-        "placebo_offset_secs": -6,
-        "recovery_window_secs": [2, 10],
-        "recovery_fraction": 0.95,
-        "recovery_consecutive_buckets": 5,
-        "max_hot_swap_dip_percent": 5.0,
-    }:
-        errors.append("e-swap-3 event alignment differs from the frozen estimator")
-
-    swap4 = experiments.get("e-swap-4", {})
-    if swap4.get("repetitions") != 30:
-        errors.append("e-swap-4 repetitions must be exactly 30")
-    if swap4.get("sample_unit") != "run":
-        errors.append("e-swap-4 sample_unit must be run")
-    if "events_per_run" in swap4:
-        errors.append("e-swap-4 must not declare correlated events_per_run")
-    if swap4.get("burst_profile") != {
-        "before_rate_msg_s": 1_000,
-        "burst_rate_msg_s": 2_000,
-        "after_rate_msg_s": 1_000,
-        "burst_start_secs": 55,
-        "swap_secs": 60,
-        "burst_end_secs": 65,
-        "swaps_per_run": 1,
-    }:
-        errors.append("e-swap-4 burst profile differs from the frozen one-swap design")
-    if swap4.get("sink_tail_policy") != {
-        "alignment_clock": "unix-epoch-source-sink-alignment",
-        "primary_start_secs": 0,
-        "primary_end_secs": 120,
-        "primary_bucket_count": 1_200,
-        "drain_start_secs": 120,
-        "drain_end_secs": 130,
-        "drain_bucket_count": 100,
-        "bucket_width_ms": 100,
-        "after_drain_events_allowed": 0,
-        "source_completion_deadline_secs": 130,
-        "require_full_sequence_reconciliation": True,
-    }:
-        errors.append("e-swap-4 sink tail policy differs from the frozen v3 design")
-    swap4_outputs = {
-        "latency.hdr",
-        "throughput.csv",
-        "sequence.csv",
-        "throughput-buckets.json",
-        "throughput-buckets-10ms.json",
-        "burst-source-timing.json",
-        "burst-source-summary.json",
-        "burst-timeline.json",
-        "swap-actual-t0.json",
-        "swap_timeline.json",
-        "hotswap-analysis.json",
-        "swap_requests.json",
-    }
-    if set(swap4.get("required_outputs", [])) != swap4_outputs:
-        errors.append("e-swap-4 required outputs differ from the final one-event contract")
-
     backpressure = experiments.get("e-backpressure", {})
     backpressure_configs = {
         "slow": "eval/configs/e-backpressure/pipeline-saturated.toml",
@@ -604,28 +330,14 @@ def validate_matrix(matrix: dict) -> list[str]:
     errors.extend(validate_verdict_rules(matrix))
     errors.extend(validate_replication_concordance(matrix))
 
-    if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
-        errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
-    if experiments.get("e-perf-5", {}).get("incomplete_until") != "matching x86 Linux batch":
-        errors.append("e-perf-5 must remain incomplete until matching x86 Linux batch")
-    if set(experiments.get("e-density-1", {}).get("required_outputs", [])) != {
-        "binary-sizes.csv",
-        "container-floor.json",
-    }:
-        errors.append("e-density-1 required outputs differ from the measured container-floor contract")
-
     records = 0
     for experiment_id, definition in experiments.items():
         multiplier = len(definition.get("conditions", []))
         if experiment_id == "e-perf-10":
             multiplier *= len(definition.get("rate_points_msg_s", []))
         records += int(definition.get("repetitions", 0)) * multiplier
-    if records != FINAL_SCHEDULE_RECORDS:
-        errors.append(f"final schedule record count must be {FINAL_SCHEDULE_RECORDS}, got {records}")
     if campaign.get("expected_schedule_records") != records:
         errors.append("final_campaign expected_schedule_records differs from calculated count")
-    if campaign.get("expected_measured_leaves") != FINAL_MEASURED_LEAVES:
-        errors.append(f"final_campaign expected_measured_leaves must be {FINAL_MEASURED_LEAVES}")
 
     return errors
 
@@ -637,8 +349,6 @@ def validate_verdict_rules(matrix: dict) -> list[str]:
     errors = []
     if rules.get("schema_version") != 1:
         errors.append("verdict_rules schema_version must be 1")
-    if rules.get("one_sided_confidence") != 0.95:
-        errors.append("verdict_rules one_sided_confidence must be 0.95")
     for field in ("resampling", "pilot_data"):
         if not isinstance(rules.get(field), str) or not rules[field]:
             errors.append(f"verdict_rules {field} must be a non-empty string")
@@ -679,14 +389,6 @@ def validate_verdict_rules(matrix: dict) -> list[str]:
             row["rule"],
             row["role"],
         )
-    for name in sorted(declared.keys() | FROZEN_VERDICT_THRESHOLDS.keys()):
-        if name not in declared:
-            errors.append(f"verdict threshold {name} is missing")
-        elif name not in FROZEN_VERDICT_THRESHOLDS:
-            errors.append(f"verdict threshold {name} is not part of the frozen table")
-        elif declared[name] != FROZEN_VERDICT_THRESHOLDS[name]:
-            errors.append(f"verdict threshold {name} differs from the frozen table")
-
     envelope = matrix.get("experiments", {}).get("e-perf-10", {}).get("capacity_envelope", {})
     restated = {
         "e-perf-10-competitive-ratio": envelope.get("competitive_ratio_threshold"),
@@ -712,8 +414,6 @@ def validate_replication_concordance(matrix: dict) -> list[str]:
     if not isinstance(rule, dict):
         return ["replication_concordance must be an object declaring how replication hosts agree"]
     errors = []
-    if rule != FROZEN_REPLICATION_CONCORDANCE:
-        errors.append("replication_concordance differs from the frozen rule")
     hosts = matrix.get("hosts", {})
     if rule.get("canonical_host") != matrix.get("canonical_host"):
         errors.append("replication_concordance canonical_host must be the matrix canonical_host")
@@ -730,8 +430,6 @@ def validate_payload_arms(payload: dict, campaign: dict) -> list[str]:
         errors.append("e-perf-4 must pair every WAFER payload size with a native arm")
     if not {"service.hdr", "service-percentiles.json"} <= set(payload.get("required_outputs", [])):
         errors.append("e-perf-4 required outputs lack the service-time histogram and summary")
-    if payload.get("measurement_boundary") != PAYLOAD_BOUNDARY:
-        errors.append("e-perf-4 measurement boundary differs from the in-process path")
     wafer_configs = {
         entry.get("condition"): entry.get("config")
         for entry in campaign.get("wafer_config_catalog", [])

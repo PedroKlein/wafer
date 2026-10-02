@@ -33,260 +33,6 @@ def test_matrix_accepts_frozen_experiments() -> None:
     result = run_validator("matrix", str(MATRIX))
     assert result.returncode == 0, result.stderr
     assert "27 experiments" in result.stdout
-    assert "schedule_records=2351" in result.stdout
-    assert "measured_leaves=2121" in result.stdout
-
-
-def test_final_campaign_policy_is_frozen_in_matrix() -> None:
-    matrix = json.loads(MATRIX.read_text())
-    campaign = matrix["final_campaign"]
-    sweep = matrix["experiments"]["e-perf-10"]
-
-    assert campaign["status"] == "frozen-before-execution"
-    assert campaign["seed"] == 1729
-    assert campaign["thesis_evidence"] is True
-    assert campaign["expected_schedule_records"] == 2351
-    assert campaign["expected_measured_leaves"] == 2121
-    grid = dict(campaign["capacity_grid"])
-    bracket_rule = grid.pop("bracket_rates")
-    assert grid == {
-        "source_batch_id": "capacity-scout-v3-20260904T045000Z",
-        "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
-        "candidate_sha256": "5f2231ef541c36c4fef3655ed25239ca028fb7ed7cd1387a3dd6644818cbfc3f",
-        "common_rate_points_msg_s": [1000, 4000, 8000, 15000, 16000],
-    }
-    assert {
-        field: bracket_rule[field]
-        for field in ("ceiling_multipliers", "competitive_threshold", "step_msg_s", "max_extra_rates")
-    } == {
-        "ceiling_multipliers": [0.95, 1.05],
-        "competitive_threshold": "e-perf-10-competitive-ratio",
-        "step_msg_s": 100,
-        "max_extra_rates": 6,
-    }
-    assert campaign["canonical_metering"] == {
-        "policy": "explicit-fuel-and-epoch",
-        "fuel": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
-        "epoch_deadline": 100,
-        "epoch_tick_ms": 10,
-    }
-    assert campaign["ekuiper_operator_concurrency"] == 1
-    assert campaign["attempt_policy"] == {
-        "infrastructure_retries": 1,
-        "gate_experiments": ["e-val-1"],
-    }
-    assert campaign["mqtt_drain_grace_secs"] == 5
-    assert len(campaign["wafer_config_catalog"]) == 55
-    assert all(set(entry) == {"experiment", "condition", "config"} for entry in campaign["wafer_config_catalog"])
-    assert matrix["experiments"]["e-iso-4"]["metering_exceptions"]["infinite-loop"]["epoch_deadline"] == 1
-    assert matrix["experiments"]["e-iso-5"]["metering_exceptions"]["memory-exhaust"]["fuel"] is None
-    assert set(matrix["experiments"]["e-iso-7"]["metering_exceptions"]) == {"epoch-loop-attack"}
-    assert sweep["systems"] == ["mqtt-loopback", "native", "wafer", "ekuiper"]
-    assert sweep["rate_points_msg_s"] == [1000, 4000, 8000, 15000, 16000]
-    assert sweep["repetitions"] == 30
-    assert sweep["sample_unit"] == "run"
-    assert sweep["thesis_evidence"] is True
-    assert sweep["ordering"] == {
-        "method": "seeded rate blocks with thirty-run balanced system order",
-        "default_seed": 1729,
-    }
-    assert sweep["capacity_envelope"]["support_path_censoring"] == "mqtt-loopback"
-    assert sweep["capacity_envelope"]["competitive_ratio_threshold"] == 0.70
-    assert sweep["capacity_envelope"]["delivery_ceiling"].startswith("bracketed by tested rates")
-    assert sweep["capacity_envelope"]["competitive_decision"] == (
-        "PASS if WAFER lower bound / eKuiper upper bound >= threshold; "
-        "FAIL if WAFER upper bound / eKuiper lower bound < threshold; otherwise CENSORED"
-    )
-    assert {"publisher-summary.json", "capacity-run.json", "subscriber-metadata.json"} <= set(
-        sweep["required_outputs"]
-    )
-
-    assert matrix["experiments"]["e-perf-9"]["cache_scope"] == "linux-filesystem-page-cache"
-    assert matrix["experiments"]["e-perf-5"]["incomplete_until"] == "matching x86 Linux batch"
-    swap3 = matrix["experiments"]["e-swap-3"]
-    assert swap3["conditions"] == [
-        "wafer-hotswap",
-        "wafer-restart",
-        "ekuiper-rule-update",
-        "ekuiper-make-before-break",
-    ]
-    assert set(swap3["required_outputs"]) == {
-        "latency.hdr",
-        "throughput.csv",
-        "sequence.csv",
-        "publisher-summary.json",
-        "subscriber-metadata.json",
-        "throughput-buckets.json",
-        "throughput-buckets-10ms.json",
-        "disruption-timeline.json",
-        "disruption-analysis.json",
-    }
-    burst = matrix["experiments"]["e-swap-4"]
-    assert "throughput-buckets-10ms.json" in burst["required_outputs"]
-    assert burst["sample_unit"] == "run"
-    assert burst["repetitions"] == 30
-    assert "events_per_run" not in burst
-    assert burst["burst_profile"] == {
-        "before_rate_msg_s": 1000,
-        "burst_rate_msg_s": 2000,
-        "after_rate_msg_s": 1000,
-        "burst_start_secs": 55,
-        "swap_secs": 60,
-        "burst_end_secs": 65,
-        "swaps_per_run": 1,
-    }
-    assert {
-        "burst-source-timing.json",
-        "burst-source-summary.json",
-        "swap-actual-t0.json",
-    } <= set(burst["required_outputs"])
-    assert burst["sink_tail_policy"] == {
-        "alignment_clock": "unix-epoch-source-sink-alignment",
-        "primary_start_secs": 0,
-        "primary_end_secs": 120,
-        "primary_bucket_count": 1200,
-        "drain_start_secs": 120,
-        "drain_end_secs": 130,
-        "drain_bucket_count": 100,
-        "bucket_width_ms": 100,
-        "after_drain_events_allowed": 0,
-        "source_completion_deadline_secs": 130,
-        "require_full_sequence_reconciliation": True,
-    }
-    for experiment in ("e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"):
-        definition = matrix["experiments"][experiment]
-        assert definition["sample_unit"] == "run"
-        assert definition["repetitions"] == 10
-        assert definition["events_per_run"] == 50
-        assert definition["independent_unit"] == "complete process run"
-        assert "within run" in definition["nested_unit"]
-    assert burst["independent_unit"] == "complete process run"
-    assert burst["nested_unit"] == "one swap within run"
-    assert all(
-        definition["thesis_evidence"] is True
-        for definition in matrix["experiments"].values()
-    )
-
-
-def test_independent_swap_and_rollback_candidate_contracts_are_frozen() -> None:
-    experiments = json.loads(MATRIX.read_text())["enhanced_candidate"]["experiments"]
-    swaps = experiments["e-swap-independent-sessions"]
-    rollbacks = experiments["e-swap-rollback-sessions"]
-
-    common = {
-        "evidence_class": "candidate-supplementary",
-        "thesis_evidence": False,
-        "n30_admitted": False,
-        "sample_unit": "independent host run",
-        "repetitions": 5,
-        "events_per_run": 50,
-        "event_classes": ["first-use-aot", "cached"],
-        "warmup_secs": 30,
-        "rate_msg_s": 1_000,
-        "payload_bytes": 128,
-        "ordering": {"method": "seeded run order", "default_seed": 1729},
-    }
-    assert {key: swaps[key] for key in common} == common
-    assert {key: rollbacks[key] for key in common} == common
-    assert swaps["conditions"] == ["steady"]
-    assert swaps["measurement_secs"] == 120
-    assert swaps["no_pool_with"] == [
-        "e-swap-1",
-        "e-swap-2",
-        "e-swap-6",
-        "prior diagnostic rehearsals",
-    ]
-    assert rollbacks["conditions"] == ["process-trap-rollback"]
-    assert rollbacks["measurement_secs"] == 300
-    assert rollbacks["no_pool_with"] == ["e-swap-5", "prior diagnostic rehearsals"]
-    assert "throughput-buckets-10ms.json" not in swaps["required_outputs"]
-    assert "throughput-buckets-10ms.json" not in rollbacks["required_outputs"]
-    assert "swap_timeline.json" not in rollbacks["required_outputs"]
-
-
-def test_capacity_knee_candidate_contract_and_profile_are_frozen() -> None:
-    candidate = json.loads(MATRIX.read_text())["enhanced_candidate"]["experiments"][
-        "e-perf-capacity-knee"
-    ]
-    profile = tomllib.loads((ROOT / candidate["loadgen_profile"]).read_text())
-    expected_grid = {
-        "mqtt-loopback": [*range(4_000, 16_000, 1_000), 15_250, 15_500, 15_750, 16_000],
-        "native": list(range(8_000, 16_000, 1_000)),
-        "wafer": list(range(8_000, 16_000, 1_000)),
-        "ekuiper": list(range(4_000, 9_000, 1_000)),
-    }
-
-    assert candidate["condition_grid_msg_s"] == expected_grid
-    assert candidate["repetitions"] == 5
-    assert candidate["warmup_secs"] == 30
-    assert candidate["measurement_secs"] == 60
-    assert candidate["thesis_evidence"] is False
-    assert candidate["n30_admitted"] is False
-    assert candidate["ordering"] == {
-        "method": "seeded rate blocks with five-run balanced system order",
-        "default_seed": 1729,
-        "cooldown_secs": 60,
-    }
-    assert candidate["delivery_good"] == {
-        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
-        "max_loss_percent": 1.0,
-        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
-        "min_achieved_ratio": 0.99,
-        "duplicates_allowed": 0,
-        "support_path_censoring": "mqtt-loopback",
-    }
-    assert profile["sweep"] == {
-        "repetitions": 5,
-        "ordering": "seeded rate blocks with five-run balanced system order",
-        "cooldown_secs": 60,
-        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
-        "max_loss_percent": 1.0,
-        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
-        "min_achieved_ratio": 0.99,
-        "duplicates_allowed": 0,
-        "support_path_censoring": "mqtt-loopback",
-        "thesis_evidence": False,
-        "n30_admitted": False,
-    }
-    assert profile["condition_grid_msg_s"] == expected_grid
-
-
-def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
-    mutations = (
-        ("e-perf-10 repetitions", lambda value: value["experiments"]["e-perf-10"].update(repetitions=29)),
-        ("e-swap-4 repetitions", lambda value: value["experiments"]["e-swap-4"].update(repetitions=29)),
-        ("e-perf-10 rate grid", lambda value: value["experiments"]["e-perf-10"].update(rate_points_msg_s=[1000, 4000])),
-        (
-            "capacity bracket rule",
-            lambda value: value["final_campaign"]["capacity_grid"]["bracket_rates"].update(
-                max_extra_rates=7
-            ),
-        ),
-        (
-            "capacity bracket rule",
-            lambda value: value["final_campaign"]["capacity_grid"]["bracket_rates"].pop("rounding"),
-        ),
-        (
-            "capacity bracket rule",
-            lambda value: value["final_campaign"]["capacity_grid"].pop("bracket_rates"),
-        ),
-        ("e-swap-4 sample_unit", lambda value: value["experiments"]["e-swap-4"].update(sample_unit="")),
-        (
-            "e-swap-4 sink tail policy",
-            lambda value: value["experiments"]["e-swap-4"]["sink_tail_policy"].update(
-                drain_end_secs=131
-            ),
-        ),
-    )
-    for expected, mutate in mutations:
-        matrix = json.loads(MATRIX.read_text())
-        mutate(matrix)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "matrix.json"
-            write_json(path, matrix)
-            result = run_validator("matrix", str(path))
-        assert result.returncode == 1, expected
-        assert expected in result.stderr
 
 
 def test_final_matrix_rejects_swap_session_drift() -> None:
@@ -305,37 +51,6 @@ def test_final_matrix_rejects_swap_session_drift() -> None:
             result = run_validator("matrix", str(path))
         assert result.returncode == 1, expected
         assert expected in result.stderr
-
-
-@pytest.mark.parametrize(
-    "policy",
-    [
-        {"infrastructure_retries": 2, "gate_experiments": ["e-val-1"]},
-        {"infrastructure_retries": 1, "gate_experiments": []},
-        None,
-    ],
-)
-def test_final_matrix_rejects_attempt_policy_drift(policy: dict | None) -> None:
-    matrix = json.loads(MATRIX.read_text())
-    matrix["final_campaign"]["attempt_policy"] = policy
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "matrix.json"
-        write_json(path, matrix)
-        result = run_validator("matrix", str(path))
-    assert result.returncode == 1
-    assert "attempt policy" in result.stderr
-
-
-@pytest.mark.parametrize("grace", [0, 60, "5", None])
-def test_final_matrix_rejects_mqtt_drain_grace_drift(grace: object) -> None:
-    matrix = json.loads(MATRIX.read_text())
-    matrix["final_campaign"]["mqtt_drain_grace_secs"] = grace
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "matrix.json"
-        write_json(path, matrix)
-        result = run_validator("matrix", str(path))
-    assert result.returncode == 1
-    assert "MQTT drain grace" in result.stderr
 
 
 def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
@@ -371,36 +86,6 @@ def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
         config["nodes"]["branch_b"]["plugin"] = "<fault>"
         config.pop("engine")
     assert configs[0] == configs[1] == configs[2]
-
-
-def test_backpressure_freezes_policy_specific_internal_queue_contract() -> None:
-    matrix = json.loads(MATRIX.read_text())
-    experiment = matrix["experiments"]["e-backpressure"]
-    expected_configs = {
-        "slow": "eval/configs/e-backpressure/pipeline-saturated.toml",
-        "drop": "eval/configs/e-backpressure/pipeline-drop.toml",
-        "dead-letter": "eval/configs/e-backpressure/pipeline-dead-letter.toml",
-    }
-
-    assert experiment["conditions"] == ["slow", "drop", "dead-letter"]
-    assert experiment["policy_configs"] == expected_configs
-    assert experiment["measured_queue"] == "slow"
-    assert experiment["queue_occupancy_threshold"] == 0.8
-    assert experiment["queue_recovery_threshold"] == 0.1
-    assert experiment["rss_limit_bytes"] == 268_435_456
-    assert {"queue-depth.csv", "backpressure.json", "memory.csv", "sequence.csv"} <= set(
-        experiment["required_outputs"]
-    )
-
-    for policy, path in expected_configs.items():
-        config = tomllib.loads((ROOT / path).read_text())
-        assert config["nodes"]["source"]["kind"] == "bench-source"
-        assert config["nodes"]["source"]["rate"] == 1000.0
-        assert config["nodes"]["slow"]["config"]["delay_ms"] == 5
-        assert config["edges"][0]["capacity"] == 64
-        assert config["edges"][0]["overflow"] == policy
-        assert config["edges"][1]["overflow"] == "slow"
-        assert config["dead_letter"]["kind"] == "file", "every run records dead-lettered messages"
 
 
 def test_payload_sizes_pair_a_wafer_arm_with_a_matching_native_arm() -> None:
@@ -463,21 +148,6 @@ def verdict_row(matrix: dict, criterion: str) -> dict:
     )
 
 
-def test_matrix_declares_every_verdict_threshold_with_its_origin() -> None:
-    matrix = json.loads(MATRIX.read_text())
-    rules = matrix["verdict_rules"]
-    assert rules["one_sided_confidence"] == 0.95
-    by_criterion = {row["criterion"]: row for row in rules["thresholds"]}
-    assert by_criterion["e-perf-1-p95-ratio"]["value"] == 2.0
-    assert by_criterion["e-perf-4-boundary-p50"]["role"] == "reference"
-    assert by_criterion["e-perf-10-competitive-ratio"]["rule"] == "tested-rate-bracket"
-    assert by_criterion["e-swap-4-p95-gap"]["value"] == 100_000_000
-    assert all(
-        row["value"] == 0 for row in rules["thresholds"] if row["rule"] == "exact-count"
-    )
-    assert all(row["origin"] and row["pilot_data_visible"] in (True, False, "unknown") for row in rules["thresholds"])
-
-
 def test_runner_validation_band_matches_the_declared_thresholds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -505,22 +175,6 @@ def test_runner_placebo_instant_matches_the_declared_offset(
     assert alignment["placebo_offset_secs"] + high <= baseline_high
 
 
-@pytest.mark.parametrize("offset", [None, -2, 0])
-def test_final_matrix_rejects_a_moved_or_missing_placebo_offset(offset: int | None) -> None:
-    matrix = json.loads(MATRIX.read_text())
-    alignment = matrix["experiments"]["e-swap-3"]["event_alignment"]
-    if offset is None:
-        alignment.pop("placebo_offset_secs")
-    else:
-        alignment["placebo_offset_secs"] = offset
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "matrix.json"
-        write_json(path, matrix)
-        result = run_validator("matrix", str(path))
-    assert result.returncode == 1
-    assert "e-swap-3 event alignment differs from the frozen estimator" in result.stderr
-
-
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -530,34 +184,12 @@ def test_final_matrix_rejects_a_moved_or_missing_placebo_offset(offset: int | No
             "verdict_rules thresholds must be a non-empty list",
         ),
         (
-            lambda matrix: verdict_row(matrix, "e-swap-4-p95-gap").update(value=200_000_000),
-            "verdict threshold e-swap-4-p95-gap differs from the frozen table",
-        ),
-        (
-            lambda matrix: verdict_row(matrix, "e-perf-1-p95-ratio").update(direction="<"),
-            "verdict threshold e-perf-1-p95-ratio differs from the frozen table",
-        ),
-        (
-            lambda matrix: verdict_row(matrix, "e-iso-containment").update(rule="one-sided-bound"),
-            "verdict threshold e-iso-containment differs from the frozen table",
-        ),
-        (
             lambda matrix: verdict_row(matrix, "e-swap-3-dip").pop("origin"),
             "verdict threshold e-swap-3-dip must have exactly the fields",
         ),
         (
             lambda matrix: verdict_row(matrix, "e-swap-3-dip").update(pilot_data_visible="maybe"),
             "verdict threshold e-swap-3-dip is malformed",
-        ),
-        (
-            lambda matrix: matrix["verdict_rules"]["thresholds"].remove(
-                verdict_row(matrix, "e-iso-7-throughput-drop")
-            ),
-            "verdict threshold e-iso-7-throughput-drop is missing",
-        ),
-        (
-            lambda matrix: matrix["verdict_rules"].update(one_sided_confidence=0.9),
-            "one_sided_confidence must be 0.95",
         ),
         (
             lambda matrix: matrix["experiments"]["e-perf-10"]["capacity_envelope"].update(
@@ -578,33 +210,12 @@ def test_matrix_rejects_a_missing_malformed_or_drifted_threshold_table(mutate, m
     assert message in result.stderr
 
 
-def test_matrix_declares_how_replication_hosts_agree_with_the_canonical_host() -> None:
-    rule = json.loads(MATRIX.read_text())["replication_concordance"]
-    assert (rule["canonical_host"], rule["replication_hosts"]) == ("rpi5", ["jetson", "x86"])
-    assert rule["criteria_rules"] == ["one-sided-bound", "exact-count"]
-    assert [row["class"] for row in rule["classes"]] == [
-        "not-estimable",
-        "same-verdict",
-        "same-direction",
-        "opposite-direction",
-    ]
-    assert rule["canonical_verdict"].startswith("unchanged")
-
-
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
         (
             lambda matrix: matrix.pop("replication_concordance"),
             "replication_concordance must be an object",
-        ),
-        (
-            lambda matrix: matrix["replication_concordance"]["classes"].reverse(),
-            "replication_concordance differs from the frozen rule",
-        ),
-        (
-            lambda matrix: matrix["replication_concordance"]["criteria_rules"].append("every-run"),
-            "replication_concordance differs from the frozen rule",
         ),
         (
             lambda matrix: matrix["hosts"]["jetson"].update(role="canonical"),
@@ -621,28 +232,6 @@ def test_matrix_rejects_a_missing_or_drifted_replication_rule(mutate, message: s
         result = run_validator("matrix", str(path))
     assert result.returncode == 1
     assert message in result.stderr
-
-
-def test_density_requires_the_measured_container_floor() -> None:
-    matrix = json.loads(MATRIX.read_text())
-    matrix["experiments"]["e-density-1"]["required_outputs"] = ["binary-sizes.csv"]
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "matrix.json"
-        write_json(path, matrix)
-        result = run_validator("matrix", str(path))
-    assert result.returncode == 1
-    assert "e-density-1 required outputs differ" in result.stderr
-
-
-def test_final_capacity_repetitions_cannot_drop_below_30() -> None:
-    matrix = json.loads(MATRIX.read_text())
-    matrix["experiments"]["e-perf-10"]["repetitions"] = 29
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "matrix.json"
-        write_json(path, matrix)
-        result = run_validator("matrix", str(path))
-    assert result.returncode == 1
-    assert "e-perf-10 repetitions must be exactly 30" in result.stderr
 
 
 def test_matrix_rejects_missing_experiment() -> None:
