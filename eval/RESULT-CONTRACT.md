@@ -339,6 +339,29 @@ Final E-Perf-4 runs eight conditions: a WAFER pass-through transform at 120 B, 1
 
 Final E-Perf-5 uses explicit transform fuel and epoch protection. Its transform-only pipeline records `filter = null` and `router = null` because those node categories are absent; this is a declared matrix exception, not an unmetered WAFER run.
 
+E-Perf-1 and E-Perf-5 run all their conditions in one randomised block per run index, so analysis pairs each WAFER run with the native or eKuiper run of the same index and resamples those pairs. E-Perf-5 has a descriptive estimator on each host: `overhead_contrast_table` pairs the WAFER and native run p50 and reports the median WAFER over the median native (`median_ratio`) and the median over pairs of WAFER minus native (`difference_ns`), each with a bootstrap 95% CI over run pairs. It carries no verdict and makes no cross-architecture claim. E-Perf-1 adds `target_contrast_table`, the same paired contrast for run p95 and run p50, with the CI half-width and the minimum detectable difference of that design at the observed spread:
+
+```text
+MDD = (z(1 - alpha/2) + z(power)) * SD(WAFER - native over pairs) / sqrt(N pairs)
+alpha = 0.05 two-sided, power = 0.80, so the factor is 1.960 + 0.842 = 2.802
+```
+
+The MDD is a normal approximation for a mean paired shift: it says how large a WAFER minus native difference this design detects, not whether one exists. The contrast carries no verdict. Both contrast tables have one row per statistic with these columns:
+
+| Column | Meaning |
+|---|---|
+| `statistic` | Run-level latency percentile compared: `p95` or `p50` |
+| `condition`, `reference_condition` | `wafer` and `native` |
+| `N_pairs` | Run indices with both a WAFER and a native run |
+| `wafer_median_ns`, `native_median_ns` | Median of the statistic over the paired runs of each arm |
+| `median_ratio`, `ratio_ci95_low`, `ratio_ci95_high` | WAFER median over native median with a bootstrap 95% CI over run pairs |
+| `difference_ns`, `difference_ci95_low_ns`, `difference_ci95_high_ns` | Median over pairs of WAFER minus native with a bootstrap 95% CI over run pairs |
+| `difference_ci_half_width_ns` | Half the width of that interval |
+| `paired_sd_ns` | Sample standard deviation of the paired differences; empty with one pair |
+| `mdd_ns` | Minimum detectable difference from the formula above; empty with one pair |
+
+The E-Perf-1 target-load table reads the WAFER/eKuiper p95 ratio, its two-sided 95% interval (`ratio_ci95_low`, `ratio_ci95_high`, on every system's row against eKuiper) and Cliff's delta against eKuiper from the same run pairs.
+
 Final E-Perf-10 requires `capacity-run.json`, `publisher-summary.json`, `subscriber-metadata.json`, `latency.hdr`, `throughput.csv`, `sequence.csv`, `resource-usage.csv`, and `process-audit.json`; a run the runtime did not survive has no `capacity-run.json`. Such a run counts toward its rate's 30 runs as `sut_outcome_runs` in `rate-sweep-summary.json` and makes that rate delivery-bad; the rate's loss, achieved-rate and p99 figures cover the runs that completed. `capacity-run.json` uses this counter identity:
 
 ```text
@@ -381,12 +404,12 @@ Each `binary-sizes.csv` row holds only measured sizes: `plugin`, `wasm_bytes` an
 | `per-rate-cell` | delivery-good or delivery-bad | Point rules on one E-Perf-10 rate cell's pooled counters; the cells feed the bracket. |
 | `tested-rate-bracket` | `PASS`, `FAIL`, `CENSORED`, `PENDING` | The E-Perf-10 ratio interval between bracketed delivery ceilings, as described above. |
 
-A `one-sided-bound` criterion adds four columns, named after its prefix, to the table the notebook saves: `<prefix>_verdict`, `<prefix>_threshold` (the declared value), `<prefix>_flips_at` and `<prefix>_ci_half_width`. `flips_at` is the bound the threshold has to cross for the verdict to change: the favourable bound for `PASS`, the other bound for `FAIL`, and the nearer bound for `INCONCLUSIVE`. `ci_half_width` is half the distance between the two one-sided bounds. A row that combines criteria also has `verdict`: `FAIL` when any of them fails, otherwise `PENDING` when any is pending, otherwise `INCONCLUSIVE` when any is inconclusive, otherwise `PASS`. The two-sided 95% intervals in the `*_ci95_*` columns stay descriptive. Diagnostic batches get the same columns and stay labelled `thesis_evidence=false`.
+A `one-sided-bound` criterion adds five columns, named after its prefix, to the table the notebook saves: `<prefix>_verdict`, `<prefix>_estimate` (the point estimate of the bounded statistic), `<prefix>_threshold` (the declared value), `<prefix>_flips_at` and `<prefix>_ci_half_width`. `flips_at` is the bound the threshold has to cross for the verdict to change: the favourable bound for `PASS`, the other bound for `FAIL`, and the nearer bound for `INCONCLUSIVE`. `ci_half_width` is half the distance between the two one-sided bounds. A row that combines criteria also has `verdict`: `FAIL` when any of them fails, otherwise `PENDING` when any is pending, otherwise `INCONCLUSIVE` when any is inconclusive, otherwise `PASS`. The two-sided 95% intervals in the `*_ci95_*` columns stay descriptive. Diagnostic batches get the same columns and stay labelled `thesis_evidence=false`.
 
 | Criterion | Threshold | Statistic | Rule | Columns |
 |---|---|---|---|---|
 | E-Val-1 | `>= 45 ms` and `<= 55,017,471 ns` | p99 of each run with the injected 50 ms delay | `every-run` (gate) | `gate_passed` |
-| E-Perf-1 latency | `<= 2.0` | median WAFER run p95 / median eKuiper run p95; each system's runs resampled apart | `one-sided-bound` | `p95_ratio_*`, `verdict` |
+| E-Perf-1 latency | `<= 2.0` | median WAFER run p95 / median eKuiper run p95; run pairs of the same index resampled together | `one-sided-bound` | `p95_ratio_*`, `verdict` |
 | E-Perf-1 loss | `<= 0.01` | pooled loss over one system's runs | `one-sided-bound` | `loss_*`, `delivery_verdict` |
 | E-Perf-1 delivery | `>= 0.99` | mean achieved / offered ratio over one system's runs | `one-sided-bound` | `achieved_ratio_*`, `delivery_verdict` |
 | E-Perf-1 duplicates | `<= 0` | duplicates over one system's runs | `exact-count` | `delivery_verdict` |
@@ -404,6 +427,31 @@ A `one-sided-bound` criterion adds four columns, named after its prefix, to the 
 | E-Swap-5 | `<= 0` | runs with a failed rollback, no output after the final rollback, loss or duplicates | `exact-count` | `all_rolled_back`, exact totals |
 
 The table's `origin` column records where each value came from. Values taken from the research questions (2.0, 0.70, 50 microseconds, 1 percent, 5 percent, zero loss and duplication, full containment) were written before any measurement; the forms that read them as run-level medians, upper bounds, brackets or paired differences were fixed later, after pilot data existed. The 100 ms swap pause target predates the runtime. The loss, delivery-ratio and duplicate rules for target load and capacity cells were added after the rate-sweep and capacity scouts. The lower end of the E-Val-1 band is recorded as `unknown` because it was introduced together with the first delay test.
+
+#### Replication concordance
+
+The Raspberry Pi 5 decides every verdict. Jetson and x86 batches replicate it: `replication_concordance` in `eval/canonical-matrix.json`, next to `verdict_rules`, declares the canonical host, the replication hosts, and how a replication host's verdict on one criterion is compared with the canonical one. `eval/scripts/validate-canonical.py` holds a frozen copy and rejects a matrix whose rule differs from it or whose hosts disagree with the `hosts` roles. The analysis reads it through `wafer_analysis.verdicts.declared_concordance()` and refuses classes other than the four it applies.
+
+The rule covers `one-sided-bound` criteria, the ones with a point estimate and bounds. Direction is the side of the threshold on which a host's point estimate (`<prefix>_estimate`) falls: it meets the threshold or misses it. Each criterion and row gets the first class that holds:
+
+| Class | When |
+|---|---|
+| `not-estimable` | Either host lacks the criterion, reports it `PENDING`, or has no point estimate |
+| `same-verdict` | Both hosts report the same `PASS`, `FAIL` or `INCONCLUSIVE` |
+| `same-direction` | The verdicts differ and both point estimates fall on the same side of the threshold |
+| `opposite-direction` | The verdicts differ and the point estimates fall on opposite sides of the threshold |
+
+Replication never changes a canonical verdict: the concordance table copies it and adds no combined verdict. `concordance_table` takes one verdict table per host, all built by the same table builder, and matches rows by `condition` (or another key). Canonical analysis resolves each host's batch through `wafer_analysis.paths.approved_host_batches()`, which reads that host's entry in `eval/final-batches.json` and validates the batch against it; a host without an entry is missing and its rows are `not-estimable`. The E-Perf-1 notebook applies the rule to `p95_ratio`, `loss` and `achieved_ratio` and saves `e-perf-1-replication-concordance`. Its columns:
+
+| Column | Meaning |
+|---|---|
+| `criterion`, `condition`, `host` | Declared criterion, table row and replication host |
+| `canonical_host` | `rpi5` |
+| `threshold`, `direction` | Declared value and comparator |
+| `canonical_verdict`, `canonical_estimate`, `canonical_side` | The canonical host's verdict, point estimate and side of the threshold (`meets` or `misses`) |
+| `replication_verdict`, `replication_estimate`, `replication_side` | The same for the replication host |
+| `concordance` | One of the four classes |
+| `thesis_evidence` | True only when both rows are canonical evidence |
 
 ### Candidate experiment contract
 
@@ -600,6 +648,7 @@ use new IDs and do not turn these aliases into additional observations.
 The PMIC internal-rail proxy is not total input power. External total-input
 power and matched x86 execution are future work; E-Perf-5 remains PENDING until
 the matching x86 Linux block exists, and no cross-architecture claim is made.
+Each host's half has its own descriptive WAFER/native contrast in the meantime.
 The retained 5 V / 4.2 A supply gets no threshold waiver: every final run must
 record `throttled=0x0`, and `approve-batch` refuses a batch with any other value.
 
