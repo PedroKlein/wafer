@@ -38,7 +38,9 @@ const DELAY_WASM: &str = concat!(
     "/../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
 );
 const EXPECTED_MIN_MEDIAN_NS: u64 = 45_000_000;
-const EXPECTED_MAX_MEDIAN_NS: u64 = 55_000_000;
+// A sleep never ends early, so only the lower bound proves the delay survived;
+// the upper bound only catches a stalled runner, with headroom for loaded CI hosts.
+const EXPECTED_MAX_MEDIAN_NS: u64 = 100_000_000;
 const UPPERCASE_WASM: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm"
@@ -350,6 +352,6 @@ async fn delay_injector_runs_without_wasi_runtime_panic() {
     let p50_ns = p50_ns_from(&bench_dir);
     assert!(
         (EXPECTED_MIN_MEDIAN_NS..=EXPECTED_MAX_MEDIAN_NS).contains(&p50_ns),
-        "delay-injector median = {p50_ns} ns, expected [45, 55] ms"
+        "delay-injector median = {p50_ns} ns, expected [45, 100] ms"
     );
 }
