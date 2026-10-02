@@ -44,7 +44,7 @@ schedule_records=2321
 measured_leaves=2091
 ```
 
-The 2,321 records include shared-result aliases with `independent_n_contribution=0`. The 2,091 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+The 2,321 records include shared-result aliases with `independent_n_contribution=0`. The 2,091 measured-or-static leaves are the processes/static measurements that produce new evidence. These counts are the common schedule that every host shares. Each host's final batch adds its E-Perf-10 bracket rates (see [Run the host's capacity scout](#run-the-hosts-capacity-scout)): 120 leaves per rate, at most six rates, so at most 720 leaves. The `BRACKETS` line of a dry run with `--scout-batch-id`, and the batch's `batch.json`, give the host's own figure. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
 
 The current estimate is:
 
@@ -52,10 +52,11 @@ The current estimate is:
 |---|---:|---|
 | Nominal active-run time | 49.88 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
 | Operational estimate | 54.87 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
+| Bracket rates, per host | at most 18.00 h nominal, 19.80 h operational | 3.00 h nominal per rate (120 runs of 90 s) on top of the common schedule above, at most six rates |
 | Storage estimate | 43,433,437,093 bytes | Primary N=30 estimate over the earlier 2,165 schedule records, including the three E-Backpressure policies; it predates the 120 E-Perf-4 native runs and the ten-run E-Swap-1 and E-Swap-5 sessions, so regenerate before execution |
 | Required free space | at least 50 GiB; 60 GiB preferred | Allows attempt evidence and operational headroom |
 
-Reserve a three-day window so the run can stop safely and resume without compressing cooling periods.
+Reserve a three-day window, plus 3.3 hours for each bracket rate, so the run can stop safely and resume without compressing cooling periods.
 
 ## Verify one clean commit locally
 
@@ -132,6 +133,30 @@ Run this on every host (Raspberry Pi 5, Jetson and x86) after deploying the comm
 
 Use `--host jetson` or `--host x86` on the replication hosts. The smoke test confirms that the rule passes only the boundary record, with its schema and `ts`/`seq` unchanged. The E-Swap-3 batch then stops and starts `pipeline_a` once in each of five `ekuiper-restart` runs under the 1,000 msg/s Pipeline A load, and runs the two WAFER strategies alongside: 15 runs, about 45 minutes. Each eKuiper run first refuses a package other than 2.1.5, and a restart fails its run if either REST call fails or the rule does not report `running` within 10 seconds. The command exits non-zero when a run failed for the harness, and the batch's `failures.json` lists those runs. A run in which the `kuiper` unit restarted or `pipeline_a` stopped or reported an error is a system outcome instead: the command still exits 0, prints an `OUTCOME` line with `runtime-exit` or `rule-error`, and the run's `canonical-status.json` records it. Investigate any failure or outcome before running that host's diagnostic or final batch. The re-check batch is diagnostic: its `batch.json` records `repetitions=5` and `thesis_evidence=false`, `approve-batch` refuses it, and it is never pooled with the final batch.
 
+## Run the host's capacity scout
+
+Each host's final batch adds a few E-Perf-10 rates beside the common grid, taken from that host's own capacity scout. Run the scout on the host, from the deployed commit, before its diagnostic batch:
+
+```sh
+./eval/scripts/run-rpi5-canonical.sh \
+  --execute \
+  --host rpi5 \
+  --capacity-scout \
+  --batch-id scout-<date>
+```
+
+Each run of the command carries out the next probe decision and exits. Run it again until it prints `"action": "stop"` and writes `manifests/capacity-scout/rpi5-scout-<date>/scout-complete.json` in the host's results root. Then preview what the final batch will add:
+
+```sh
+./eval/scripts/run-rpi5-canonical.sh \
+  --dry-run \
+  --host rpi5 \
+  --batch-id preview-only \
+  --scout-batch-id scout-<date>
+```
+
+The `BRACKETS` line lists the bracket rates, the scout summary and its SHA-256, and the leaves and nominal hours the rates add. [Per-host bracket rates](../../eval/RESULT-CONTRACT.md#per-host-bracket-rates) defines the rule. Use `--host jetson` or `--host x86` on the replication hosts; each host uses its own scout. The scout is diagnostic and is never pooled with the final batch.
+
 ## Run the diagnostic batch
 
 Before the final batch, run the first three repetitions of every experiment from the deployed commit:
@@ -141,10 +166,11 @@ Before the final batch, run the first three repetitions of every experiment from
   --execute \
   --batch-id diag-<date> \
   --seed 1729 \
+  --scout-batch-id scout-<date> \
   --repetitions 3
 ```
 
-That is 214 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
+That is 214 runs and about five hours of nominal run time, plus 12 runs and 18 minutes for each bracket rate. Without `--scout-batch-id` the diagnostic batch runs the common E-Perf-10 grid only. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
 
 - E-Val-1;
 - all four E-Perf-7 modes;
@@ -164,12 +190,13 @@ Launch only after the diagnostic batch passes review, from the same deployed com
 ./eval/scripts/run-rpi5-canonical.sh \
   --execute \
   --batch-id <fresh-batch-id> \
-  --seed 1729
+  --seed 1729 \
+  --scout-batch-id scout-<date>
 ```
 
 `mise run run-campaign -- --batch-id <id>` runs the same command, and `mise run campaign-status -- --batch-id <id>` lists its done and pending runs. On the Jetson and x86 replication hosts add `--host jetson` or `--host x86`.
 
-On the first start the runner writes `batch.json` into the batch ledger. It records the batch ID, host, source SHA and dirty flag, the SHA-256 of `eval/canonical-matrix.json`, the seed, the experiments, the repetition override, whether the batch can become thesis evidence, and the start time. The runner executes sequentially and writes `progress.jsonl`. Each attempt ends as a clean pass, a system outcome, or an infrastructure failure, and its `canonical-status.json` records the class and reasons; [Attempts and retries](../../eval/RESULT-CONTRACT.md#attempts-and-retries) defines them. A clean pass or a system outcome is admitted and the run index is skipped from then on. A system outcome, such as a runtime exit or a containment escape, is data and is never retried. An infrastructure failure is retried once, immediately and in a new attempt directory; when the retry also fails, the run is missing and is not run again. E-Val-1 is never retried: any failed or interrupted repetition fails the gate, and a new gate needs a new batch. Reusing the same command and batch ID resumes the batch; an interrupted attempt counts as one infrastructure attempt. `--status` lists done, pending and missing runs. A resume from another commit or matrix is refused. A final batch also refuses to start or resume from a dirty source tree, and a batch that `approve-batch` has sealed cannot be resumed.
+On the first start the runner writes `batch.json` into the batch ledger. It records the batch ID, host, source SHA and dirty flag, the SHA-256 of `eval/canonical-matrix.json`, the seed, the experiments, the repetition override, whether the batch can become thesis evidence, the start time, and `capacity_brackets`: the scout batch, the SHA-256 of its `scout-complete.json`, the E-Perf-10 bracket rates derived from it, and the leaves and nominal hours they add. A final batch refuses to start without a usable scout summary for its host, and a resume reuses the recorded scout and refuses the batch when its summary or the rates it gives have changed. The runner executes sequentially and writes `progress.jsonl`. Each attempt ends as a clean pass, a system outcome, or an infrastructure failure, and its `canonical-status.json` records the class and reasons; [Attempts and retries](../../eval/RESULT-CONTRACT.md#attempts-and-retries) defines them. A clean pass or a system outcome is admitted and the run index is skipped from then on. A system outcome, such as a runtime exit or a containment escape, is data and is never retried. An infrastructure failure is retried once, immediately and in a new attempt directory; when the retry also fails, the run is missing and is not run again. E-Val-1 is never retried: any failed or interrupted repetition fails the gate, and a new gate needs a new batch. Reusing the same command and batch ID resumes the batch; an interrupted attempt counts as one infrastructure attempt. `--status` lists done, pending and missing runs. A resume from another commit or matrix is refused. A final batch also refuses to start or resume from a dirty source tree, and a batch that `approve-batch` has sealed cannot be resumed.
 
 To dry-run one experiment without execution:
 
@@ -238,11 +265,12 @@ It refuses the batch unless all of these hold:
 
 - the ledger is under `manifests/canonical-batches/`, and its `batch.json` marks thesis evidence with no repetition override;
 - the batch ran from one clean commit with the current matrix;
-- `schedule.json` is the full schedule for the batch seed, and every run has an admitted attempt (a clean pass or a system outcome) within its retry cap, or an alias receipt;
+- the bracket rates in `batch.json` still follow from the host's scout summary;
+- `schedule.json` is the full schedule for the batch seed and bracket rates, and every run has an admitted attempt (a clean pass or a system outcome) within its retry cap, or an alias receipt;
 - `e-val-1-gate.json` reports a pass;
 - every admitted leaf has the batch SHA, a clean tree, `throttled=0x0`, and no `thesis_evidence=false`.
 
-It then writes `raw.sha256` into the ledger. That file holds the SHA-256 of every file of the batch under `raw/`, its alias receipts, and its ledger, with paths relative to the volume root. Check it at any time:
+It then writes `raw.sha256` into the ledger. That file holds the SHA-256 of every file of the batch under `raw/`, its alias receipts, its ledger, and the scout summary its bracket rates came from, with paths relative to the volume root. Check it at any time:
 
 ```sh
 cd /Volumes/WAF_RESULTS
@@ -268,7 +296,7 @@ Canonical analysis reads the host entry in `eval/final-batches.json`. It rejects
 ## Experiment boundaries to retain
 
 - E-Perf-1 is the matched 1,000 msg/s operating point, not capacity.
-- E-Perf-10 is the common-grid gateway envelope with MQTT support censoring. Delivery-good remains pooled loss at or below 1 percent, mean achieved/offered ratio at least 0.99, and zero duplicates. Each delivery ceiling is bracketed by tested rates, and a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
+- E-Perf-10 is the gateway envelope over the common grid plus the host's bracket rates, with MQTT support censoring. Delivery-good remains pooled loss at or below 1 percent, mean achieved/offered ratio at least 0.99, and zero duplicates. Each delivery ceiling is bracketed by tested rates, and a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - E-Perf-7 disables mechanisms by TOML omission.
 - E-Perf-9 is Linux filesystem page-cache evidence with disk compiled-component cache disabled.
 - E-Perf-5 remains `PENDING` until the matched x86 Linux block exists; x86 execution and any cross-architecture conclusion are `future-work`.
