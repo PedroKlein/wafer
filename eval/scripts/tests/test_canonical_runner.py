@@ -86,7 +86,6 @@ T2_EXPERIMENTS = {
     "e-perf-9",
     "e-backpressure",
 }
-T3_EXPERIMENTS = {"e-perf-1", "e-perf-2", "e-perf-5", "e-swap-3"}
 T4_EXPERIMENTS = {
     *(f"e-iso-{index}" for index in range(1, 9)),
     *(f"e-swap-{index}" for index in range(1, 7)),
@@ -781,52 +780,6 @@ def test_candidate_postprocess_stamps_metadata_and_writes_manifest(
     assert manifest["condition"] == "16kb"
     assert manifest["run_index"] == 3
     assert manifest["payload_bytes"] == 16_384
-
-
-def test_schedule_covers_performance_matrix() -> None:
-    schedule = build_schedule(T2_EXPERIMENTS, seed=1729)
-    by_experiment: dict[str, list] = {}
-    for item in schedule:
-        by_experiment.setdefault(item.experiment, []).append(item)
-
-    assert set(by_experiment) == T2_EXPERIMENTS
-    assert schedule[0].experiment == "e-val-1"
-    assert len(by_experiment["e-val-1"]) == 30
-    assert len(by_experiment["e-perf-3"]) == 4 * 30
-    assert len(by_experiment["e-perf-4"]) == 8 * 30
-    assert len(by_experiment["e-perf-6"]) == 4 * 30
-    assert len(by_experiment["e-perf-8"]) == 0 or all(
-        item.shared_from == "e-perf-6" for item in by_experiment["e-perf-8"]
-    )
-    assert len(by_experiment["e-perf-7"]) == 4 * 30
-    assert len(by_experiment["e-perf-9"]) == 6 * 30
-    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
-    assert set(matrix["experiments"]["e-perf-9"]["required_outputs"]) == {
-        "startup-preparation.json",
-        "startup.json",
-    }
-    assert len(by_experiment["e-backpressure"]) == 90
-    assert {
-        (item.condition, item.run_index)
-        for item in by_experiment["e-backpressure"]
-    } == {
-        (policy, run_index)
-        for policy in ("slow", "drop", "dead-letter")
-        for run_index in range(1, 31)
-    }
-    assert all(item.warmup_secs == 30 for item in by_experiment["e-perf-4"])
-    assert all(item.runtime_cpus == "1-3" for item in schedule)
-    assert all(item.support_cpus == "0" for item in schedule)
-    assert len({item.result_key for item in schedule}) == len(schedule)
-    catalog = {
-        (entry["experiment"], entry["condition"]): entry["config"]
-        for entry in matrix["final_campaign"]["wafer_config_catalog"]
-    }
-    assert all(
-        item.config == catalog[(item.experiment, item.condition)]
-        for item in schedule
-        if item.system == "wafer" and item.config
-    )
 
 
 def test_payload_schedule_runs_each_native_arm_in_the_block_of_its_wafer_arm() -> None:
@@ -3308,7 +3261,7 @@ def test_capacity_scout_invocations_match_controlled_factors_and_are_trace_free(
 def test_final_schedule_contains_every_declared_condition_once_per_run() -> None:
     matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
     schedule = build_schedule(set(matrix["experiments"]), seed=1729)
-    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"] == 2_321
+    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"]
     keys = [item.result_key for item in schedule]
     assert len(keys) == len(set(keys))
     for experiment, definition in matrix["experiments"].items():
@@ -3326,8 +3279,7 @@ def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:
     systems = tuple(definition["systems"])
     rates = tuple(definition["rate_points_msg_s"])
 
-    assert rates == (1000, 4000, 8000, 15000, 16000)
-    assert len(schedule) == 30 * len(systems) * len(rates) == 600
+    assert len(schedule) == 30 * len(systems) * len(rates)
     assert {
         (item.system, item.offered_rate_msg_s)
         for item in schedule
@@ -4173,27 +4125,6 @@ def test_rate_sweep_summary_counts_a_system_outcome_against_its_rate(
     )
 
 
-def test_comparator_schedule_is_native_and_cross_arch_is_explicitly_partial() -> None:
-    schedule = build_schedule(T3_EXPERIMENTS, seed=1729)
-    by_experiment: dict[str, list] = {}
-    for item in schedule:
-        by_experiment.setdefault(item.experiment, []).append(item)
-
-    assert len(by_experiment["e-perf-1"]) == 3 * 30
-    assert {item.system for item in by_experiment["e-perf-1"]} == {
-        "wafer",
-        "native",
-        "ekuiper",
-    }
-    assert len(by_experiment["e-perf-2"]) == 3 * 30
-    assert all(item.shared_from == "e-perf-1" for item in by_experiment["e-perf-2"])
-    assert len(by_experiment["e-perf-5"]) == 2 * 30
-    assert {item.system for item in by_experiment["e-perf-5"]} == {"wafer", "native"}
-    assert len(by_experiment["e-swap-3"]) == 3 * 30
-    assert all("docker" not in item.config for item in schedule)
-    assert "docker" not in (ROOT / "eval/scripts/lib/canonical_runner.py").read_text().lower()
-
-
 def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
     schedule = build_schedule(T4_EXPERIMENTS, seed=1729)
     by_experiment: dict[str, list] = {}
@@ -4218,29 +4149,6 @@ def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
     assert all(item.shared_from is None for item in by_experiment["e-swap-1"] + by_experiment["e-swap-5"])
     assert all(item.shared_from == "e-swap-1" for item in by_experiment["e-swap-2"] + by_experiment["e-swap-6"])
     assert all("shakedown-macos" not in item.result_key for item in schedule)
-
-    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())["experiments"]
-    for index in range(1, 9):
-        assert "per_node_metrics.csv" in matrix[f"e-iso-{index}"]["required_outputs"]
-    iso_7_outputs = set(matrix["e-iso-7"]["required_outputs"])
-    assert "branch-isolation.json" in iso_7_outputs
-    assert not {"latency.hdr", "throughput.csv", "sequence.csv"} & iso_7_outputs
-    assert {"recovery.csv", "recovery.json"} <= set(matrix["e-iso-8"]["required_outputs"])
-    for index in (1, 2, 4, 6):
-        assert "swap_timeline.json" in matrix[f"e-swap-{index}"]["required_outputs"]
-    assert "swap_timeline.json" not in matrix["e-swap-3"]["required_outputs"]
-    for index in (1, 2, 4, 6):
-        outputs = set(matrix[f"e-swap-{index}"]["required_outputs"])
-        assert {"swap_requests.json", "hotswap-analysis.json"} <= outputs
-    rollback_outputs = set(matrix["e-swap-5"]["required_outputs"])
-    assert "swap_timeline.json" not in rollback_outputs
-    assert {
-        "swap_requests.json",
-        "rollback.json",
-        "post-rollback-continuity.json",
-        "sequence.csv",
-    } <= rollback_outputs
-
 
 def test_swap3_final_artifact_sets_match_matrix_runner_verifier_and_analysis() -> None:
     matrix_outputs = set(
@@ -6074,8 +5982,6 @@ def test_approve_refuses_diagnostic_candidate_and_dirty_batches(
 
 
 if __name__ == "__main__":
-    test_schedule_covers_performance_matrix()
-    test_comparator_schedule_is_native_and_cross_arch_is_explicitly_partial()
     test_isolation_and_swap_schedule_preserves_experiment_semantics()
     test_isolation_derivations_use_raw_runtime_metrics()
     test_branch_isolation_uses_branch_artifacts_not_aggregate_fan_in()

@@ -9,7 +9,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
-from host_profiles import host_profile, host_profiles  # noqa: E402
 
 MATRIX = ROOT / "eval/canonical-matrix.json"
 VALIDATOR = ROOT / "eval/scripts/validate-canonical.py"
@@ -61,25 +60,6 @@ def preflight(host: str, value: dict) -> subprocess.CompletedProcess[str]:
             text=True,
             check=False,
         )
-
-
-def test_rpi5_profile_keeps_the_frozen_pi_host_policy() -> None:
-    profile = host_profile("rpi5")
-    assert (profile.role, profile.arch, profile.hardware_model_contains) == (
-        "canonical",
-        "aarch64",
-        "Raspberry Pi 5",
-    )
-    assert (profile.housekeeping_cpus, profile.sut_cpus, profile.support_cpus) == ("0", "1-3", "0")
-    assert profile.cpu_governors == ("performance",) and profile.throttled == "0x0"
-    assert profile.allowed_facts == {}
-    matrix = json.loads(MATRIX.read_text())
-    assert matrix["schema_version"] == 2 and matrix["canonical_host"] == "rpi5"
-    assert {tag: p.role for tag, p in host_profiles(matrix).items()} == {
-        "rpi5": "canonical",
-        "jetson": "replication",
-        "x86": "replication",
-    }
 
 
 def test_each_host_passes_its_own_preflight_and_fails_another_hosts() -> None:

@@ -1,10 +1,6 @@
 {
   "schema_version": 2,
   "canonical_host": "rpi5",
-  "source_policy": {
-    "clean": true,
-    "same_sha_per_batch": true
-  },
   "hosts": {
     "rpi5": {
       "role": "canonical",
@@ -66,29 +62,6 @@
     }
   },
   "enhanced_candidate": {
-    "schema_version": 1,
-    "id": "rpi5-v10-enhanced-candidate",
-    "status": "architecture-frozen-before-n5",
-    "thesis_evidence": false,
-    "campaign_started": false,
-    "n30_admitted": false,
-    "capabilities": [
-      "bounded-interval-metrics",
-      "multi-resolution-swap-buckets",
-      "capacity-knee",
-      "payload-refinement",
-      "depth-extension",
-      "independent-swap-sessions",
-      "independent-rollback-sessions",
-      "thermal-storage-characterization",
-      "ekuiper-tail-profiling"
-    ],
-    "evidence_classes": {
-      "canonical_primary": "Existing final estimands; unchanged by candidate instrumentation.",
-      "candidate_supplementary": "Diagnostic N=5 evidence kept out of the final campaign.",
-      "diagnostic": "Host qualification and profiler evidence excluded from thesis estimators.",
-      "future_work": "Evidence that is not collected in the Raspberry Pi 5 candidate campaign."
-    },
     "instrumentation": {
       "bounded_interval_metrics": {
         "applies_to": "all canonical and candidate timed runs with latency or throughput outputs",
@@ -123,22 +96,6 @@
           "latency.hdr population",
           "throughput and sequence counters"
         ]
-      },
-      "multi_resolution_swap_buckets": {
-        "applies_to": [
-          "e-swap-3",
-          "e-swap-4"
-        ],
-        "canonical_bucket_width_ms": 100,
-        "canonical_series_unchanged": true,
-        "event_bucket_width_ms": 10,
-        "event_window_start_ms": -2000,
-        "event_window_end_ms": 2000,
-        "event_bucket_count": 400,
-        "alignment": "actual-t0",
-        "required_output": "throughput-buckets-10ms.json",
-        "nested_unit": "bucket within run",
-        "reconciles_to": "canonical unique/event/duplicate populations"
       }
     },
     "experiments": {
@@ -409,38 +366,6 @@
           "default_seed": 1729
         }
       },
-      "e-host-thermal-storage": {
-        "evidence_class": "diagnostic",
-        "thesis_evidence": false,
-        "n30_admitted": false,
-        "sample_unit": "clean-boot host characterization session",
-        "nested_units": [
-          "load phase within session",
-          "one-second telemetry interval within phase"
-        ],
-        "repetitions": 1,
-        "conditions": [
-          "idle",
-          "sut-core-load-1",
-          "sut-core-load-2",
-          "sut-core-load-3",
-          "cpu-memory",
-          "usb-write",
-          "usb-read",
-          "cpu-memory-usb"
-        ],
-        "required_outputs": [
-          "host-load-ladder.json",
-          "host-telemetry.csv",
-          "kernel-io.log",
-          "usb-integrity.json"
-        ],
-        "analysis": "thermal-storage-characterization",
-        "no_pool_with": [
-          "performance experiments",
-          "prior diagnostic rehearsals"
-        ]
-      },
       "e-compare-ekuiper-profile": {
         "evidence_class": "diagnostic",
         "thesis_evidence": false,
@@ -489,66 +414,6 @@
           "prior diagnostic rehearsals"
         ]
       }
-    },
-    "primary_invariants": {
-      "existing_primary_estimands_unchanged": true,
-      "delivery_good": {
-        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
-        "max_loss_percent": 1.0,
-        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
-        "min_achieved_ratio": 0.99,
-        "duplicates_allowed": 0
-      },
-      "mqtt_support_path_censoring": "MQTT-loopback delivery-bad rates censor SUT-only capacity at that rate and above",
-      "canonical_aliases": {
-        "e-perf-2": "e-perf-1",
-        "e-perf-8": "e-perf-6",
-        "e-swap-2": "e-swap-1",
-        "e-swap-6": "e-swap-1"
-      },
-      "e_swap_4": {
-        "primary_bucket_count": 1200,
-        "primary_window_secs": [
-          0,
-          120
-        ],
-        "drain_bucket_count": 100,
-        "drain_window_secs": [
-          120,
-          130
-        ],
-        "after_drain_events_allowed": 0,
-        "right_censoring_allowed": false
-      },
-      "e_perf_10_trace_free": true
-    },
-    "storage": {
-      "filesystem": "exFAT",
-      "volume_label": "WAF_RESULTS",
-      "physical_raw_copies": 1,
-      "mount_paths": {
-        "pi_jetson": "/mnt/wafer-results",
-        "macos": "/Volumes/WAF_RESULTS"
-      },
-      "manifest_paths": "volume-root-relative",
-      "directories": [
-        "raw",
-        "manifests",
-        "derived",
-        "reports"
-      ],
-      "raw_policy": "append-only; preserve failed and interrupted attempts; never duplicate",
-      "analysis_write_roots": [
-        "derived",
-        "reports"
-      ]
-    },
-    "deferred_claims": {
-      "external_total_input_power": "deferred",
-      "pmic_measurement_boundary": "internal-rail-proxy",
-      "x86_execution": "deferred",
-      "e_perf_5_claim_status": "PENDING",
-      "current_supply": "5 V / 4.2 A; no throttle, temperature, reboot, or I/O gate waiver"
     }
   },
   "experiments": {
@@ -590,9 +455,6 @@
         "sequence.csv"
       ],
       "analysis": "09-saturation.ipynb",
-      "shares_measurements_with": [
-        "e-perf-2"
-      ],
       "thesis_evidence": true,
       "evidence_class": "final",
       "target_rate_msg_s": 1000,
@@ -616,9 +478,6 @@
         "sequence.csv"
       ],
       "analysis": "01-latency-cdf.ipynb",
-      "shares_measurements_with": [
-        "e-perf-1"
-      ],
       "thesis_evidence": true,
       "evidence_class": "final",
       "alias_of": "e-perf-1",
@@ -729,9 +588,6 @@
         "memory.csv"
       ],
       "analysis": "03-memory-scaling.ipynb",
-      "shares_measurements_with": [
-        "e-perf-8"
-      ],
       "thesis_evidence": true,
       "evidence_class": "final"
     },
@@ -795,9 +651,6 @@
         "sequence.csv"
       ],
       "analysis": "08-depth-scaling.ipynb",
-      "shares_measurements_with": [
-        "e-perf-6"
-      ],
       "thesis_evidence": true,
       "evidence_class": "final",
       "alias_of": "e-perf-6",
@@ -1089,10 +942,6 @@
         "hotswap-analysis.json"
       ],
       "analysis": "05-hotswap-timeline.ipynb",
-      "shares_measurements_with": [
-        "e-swap-2",
-        "e-swap-6"
-      ],
       "thesis_evidence": true,
       "evidence_class": "final",
       "independent_unit": "complete process run",
@@ -1116,10 +965,6 @@
         "hotswap-analysis.json"
       ],
       "analysis": "05-hotswap-timeline.ipynb",
-      "shares_measurements_with": [
-        "e-swap-1",
-        "e-swap-6"
-      ],
       "thesis_evidence": true,
       "evidence_class": "final",
       "independent_unit": "complete process run",
@@ -1271,10 +1116,6 @@
         "hotswap-analysis.json"
       ],
       "analysis": "05-hotswap-timeline.ipynb",
-      "shares_measurements_with": [
-        "e-swap-1",
-        "e-swap-2"
-      ],
       "thesis_evidence": true,
       "evidence_class": "final",
       "independent_unit": "complete process run",
@@ -1340,8 +1181,6 @@
     }
   },
   "final_campaign": {
-    "schema_version": 1,
-    "id": "rpi5-final-campaign-v1",
     "status": "frozen-before-execution",
     "seed": 1729,
     "thesis_evidence": true,
@@ -1370,7 +1209,6 @@
       "epoch_tick_ms": 10
     },
     "ekuiper_operator_concurrency": 1,
-    "support_path_censoring": "MQTT-loopback delivery-bad rates censor SUT-only capacity at that rate and above",
     "diagnostic_batches_excluded": true,
     "attempt_policy": {
       "infrastructure_retries": 1,
