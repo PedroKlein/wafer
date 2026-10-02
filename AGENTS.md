@@ -42,7 +42,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 - **Multiple I/O** — Native sources and sinks support stdin/stdout, files, MQTT pub/sub, and HTTP webhooks.
 - **Control plane** — axum HTTP REST API + Prometheus metrics on a separate port.
 - **OCI registry** — Wasm components can be pulled from container registries (ghcr.io, Docker Hub) via the same `plugin` field used for local paths, with content-addressable local caching.
-- **Fuel + epoch metering** — Untrusted guests are bounded in both computation (fuel) and wall-clock time (epoch interruption on a dedicated OS thread).
+- **Fuel + epoch metering** — When a config enables them (both default to off), guests are bounded in both computation (fuel) and wall-clock time (epoch interruption on a dedicated OS thread).
 
 ### Tech Stack
 
