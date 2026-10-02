@@ -1,10 +1,11 @@
-# E-Swap-3: MQTT pipeline with pass-through transform for hot-swap measurement.
-# Same topology as Pipeline A but uses a swappable transform instead of filter.
-# API enabled for hot-swap REST calls.
+# E-Swap-3: Pipeline A with the API enabled for the hot-swap REST call.
+# The wafer-hotswap arm swaps the threshold filter for threshold-filter-v2,
+# which raises the lower bound to 60 as the eKuiper replacement rule does.
+# The workload's temperature is 72.5, so both versions pass every message.
 
 [pipeline]
 name = "e-swap-3-hotswap"
-description = "E-Swap-3: MQTT → pass-through (v1, swappable) → MQTT"
+description = "E-Swap-3: Pipeline A with a swappable threshold filter"
 
 [engine]
 epoch_deadline = 100
@@ -28,10 +29,14 @@ topic = "wafer/telemetry"
 qos = 1
 client_id = "wafer-swap3-in"
 
-[nodes.transform]
-type = "transform"
-plugin = "../../../plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pass_through_v1.wasm"
-plugin_version = "v1"
+[nodes.filter]
+type = "filter"
+plugin = "../../../plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm"
+
+[nodes.filter.config]
+field = "temperature"
+min = 50.0
+max = 99999.0
 
 [nodes.mqtt-out]
 type = "sink"
@@ -48,8 +53,8 @@ bind = "127.0.0.1:9090"
 
 [[edges]]
 from = "mqtt-in"
-to = "transform"
+to = "filter"
 
 [[edges]]
-from = "transform"
+from = "filter"
 to = "mqtt-out"

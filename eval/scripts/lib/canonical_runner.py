@@ -33,6 +33,7 @@ if str(RESULTS_LAYOUT_ROOT) not in sys.path:
 
 from attempts import (
     ADMITTED,
+    EKUIPER_REPLACEMENT_RULE,
     EKUIPER_UNIT_PROPERTIES,
     INCOMPLETE_RUN_REASONS,
     INFRASTRUCTURE,
@@ -250,7 +251,19 @@ CAPACITY_SCOUT_DIAGNOSTIC_ARM_CONFIG = "eval/configs/capacity-scout-wafer-max-in
 CAPACITY_SCOUT_ATTEMPT_TIMEOUT_SECS = 240
 CAPACITY_SCOUT_BATCH_TIMEOUT_SECS = 18 * 60 * 60
 CAPACITY_SCOUT_DISK_FLOOR_BYTES = 2 * 1024 * 1024 * 1024
-SWAP3_STRATEGIES = ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
+SWAP3_STRATEGIES = (
+    "wafer-hotswap",
+    "wafer-restart",
+    "ekuiper-restart",
+    "ekuiper-make-before-break",
+)
+SWAP3_EKUIPER_STRATEGIES = frozenset({"ekuiper-restart", "ekuiper-make-before-break"})
+SWAP3_REPLACEMENT_PLUGIN = (
+    "plugins/threshold-filter-v2/target/wasm32-wasip2/release/wafer_threshold_filter_v2.wasm"
+)
+# Only the replacement rule's own sink counts its output; the source counters belong to the
+# shared stream that both rules read.
+EKUIPER_EMISSION_METRIC = "sink_mqtt_0_0_records_out_total"
 SWAP3_EVENT_OFFSET_NS = 60_000_000_000
 SWAP3_BUCKET_WIDTH_NS = 100_000_000
 SWAP3_COVERAGE_START_NS = -10_000_000_000
@@ -2625,14 +2638,14 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
     "e-swap-3": tuple(
         Condition(
             strategy,
-            "eval/configs/e-swap/pipeline-swap3-mqtt.toml"
-            if strategy != "ekuiper-restart"
-            else "eval/configs/canonical/e-perf-1-ekuiper.toml",
+            "eval/configs/canonical/e-perf-1-ekuiper.toml"
+            if strategy in SWAP3_EKUIPER_STRATEGIES
+            else "eval/configs/e-swap/pipeline-swap3-mqtt.toml",
             "eval/loadgen/telemetry-120b.toml",
             120_000,
-            system="ekuiper" if strategy == "ekuiper-restart" else "wafer",
+            system="ekuiper" if strategy in SWAP3_EKUIPER_STRATEGIES else "wafer",
         )
-        for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
+        for strategy in SWAP3_STRATEGIES
     ),
     "e-iso-1": (Condition("buffer-overflow", "eval/configs/e-iso-1/pipeline.toml"),),
     "e-iso-2": (Condition("cross-read", "eval/configs/e-iso-2/pipeline.toml"),),
@@ -3883,7 +3896,7 @@ def wait_for_ekuiper_rule_ready(rule_id: str, timeout_secs: float = 10.0) -> Non
     raise RuntimeError(f"eKuiper rule did not become ready: {rule_id}")
 
 
-def ekuiper_health_snapshot() -> dict:
+def ekuiper_health_snapshot(rule_id: str = "pipeline_a") -> dict:
     """systemd's view of the kuiper unit and the rule's own status at one point of a run.
 
     A rule status that cannot be read is recorded with its error, not raised: at the end
@@ -3904,7 +3917,7 @@ def ekuiper_health_snapshot() -> dict:
         "rule_status_error": None,
     }
     try:
-        snapshot["rule_status"] = _url_value("http://127.0.0.1:9081/rules/pipeline_a/status")
+        snapshot["rule_status"] = _url_value(f"http://127.0.0.1:9081/rules/{rule_id}/status")
     except (OSError, ValueError, http.client.HTTPException) as error:
         snapshot["rule_status_error"] = str(error)
     return snapshot
@@ -3914,26 +3927,136 @@ def ekuiper_run_start() -> dict:
     """Wait until the rule runs and take the snapshot that the run's warm-up starts from.
 
     A rule that does not run cleanly here never started the measured pipeline, so it fails
-    the attempt as infrastructure, like a WAFER runtime that refuses to start.
+    the attempt as infrastructure, like a WAFER runtime that refuses to start. eKuiper keeps
+    rules across restarts, so a rule left by an earlier run would also read the stream and
+    publish; every run starts from pipeline_a alone.
     """
     wait_for_ekuiper_rule_ready("pipeline_a")
+    rules = _url_value("http://127.0.0.1:9081/rules")
+    rule_ids = [rule.get("id") for rule in rules] if isinstance(rules, list) else rules
+    if rule_ids != ["pipeline_a"]:
+        raise RuntimeError(f"eKuiper must hold only pipeline_a before warm-up, not {rule_ids}")
     before = ekuiper_health_snapshot()
     if before["service"]["MainPID"] == 0 or not ekuiper_rule_running(before["rule_status"]):
         raise RuntimeError(f"eKuiper is not running pipeline_a before warm-up: {before}")
     return before
 
 
-def write_ekuiper_health(output: Path, before: dict) -> dict:
-    """Take the snapshot after the run and keep both in ``ekuiper-health.json``."""
+def write_ekuiper_health(output: Path, before: dict, replacement_rule: str | None = None) -> dict:
+    """Take the snapshot after the run and keep both in ``ekuiper-health.json``.
+
+    A run that replaced pipeline_a takes the snapshot after it of ``replacement_rule``.
+    """
     health = {
         "schema_version": 1,
         "unit": "kuiper.service",
         "rule": "pipeline_a",
         "before": before,
-        "after": ekuiper_health_snapshot(),
+        "after": ekuiper_health_snapshot(replacement_rule or "pipeline_a"),
     }
+    if replacement_rule is not None:
+        health["replacement_rule"] = replacement_rule
     write_json_atomic(output / "ekuiper-health.json", health)
     return health
+
+
+def _ekuiper_request(method: str, path: str, payload: dict | None = None) -> tuple[int, str]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:9081{path}",
+        data=None if payload is None else json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, response.read().decode(errors="replace")
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode(errors="replace")
+
+
+def ekuiper_replacement_rule(root: Path) -> dict:
+    """The replacement rule the seed script declares next to pipeline_a."""
+    rendered = json.loads(
+        subprocess.check_output(
+            [
+                str(root / "eval/ekuiper/seed-pipeline-a.sh"),
+                "--concurrency",
+                str(ekuiper_operator_concurrency(root)),
+                "--dry-run",
+            ],
+            cwd=root,
+            text=True,
+        )
+    )
+    replacement = rendered["replacement_rule_payload"]
+    if replacement.get("id") != EKUIPER_REPLACEMENT_RULE:
+        raise ValueError(f"the seed script's replacement rule is not {EKUIPER_REPLACEMENT_RULE}")
+    return replacement
+
+
+def replace_ekuiper_rule(
+    output: Path, replacement: dict, started_monotonic_ns: int, timeout_secs: float = 10.0
+) -> None:
+    """Replace pipeline_a make-before-break and record each REST call in ``rule-replacement.json``.
+
+    Creating a rule on the shared stream attaches it to the stream's open MQTT subscription and
+    starts it asynchronously, so a ``running`` status does not show that it carries data yet.
+    pipeline_a is deleted only once the replacement's sink has counted output; until then both
+    rules publish, and deleting the last rule on the stream would close the subscription.
+    """
+    rule_id = replacement["id"]
+    calls: list[dict] = []
+    record = {
+        "schema_version": 1,
+        "strategy": "ekuiper-make-before-break",
+        "retired_rule": "pipeline_a",
+        "replacement_rule": rule_id,
+        "replacement_sql": replacement["sql"],
+        "emission_metric": EKUIPER_EMISSION_METRIC,
+        "offset_clock": "monotonic",
+        "calls": calls,
+    }
+
+    def call(method: str, path: str, payload: dict | None = None) -> tuple[int, str]:
+        started = time.monotonic_ns()
+        status, body = _ekuiper_request(method, path, payload)
+        calls.append(
+            {
+                "method": method,
+                "path": path,
+                "http_status": status,
+                "body": body,
+                "start_offset_ns": started - started_monotonic_ns,
+                "end_offset_ns": time.monotonic_ns() - started_monotonic_ns,
+            }
+        )
+        return status, body
+
+    try:
+        status, body = call("POST", "/rules", replacement)
+        if status != 201:
+            raise RuntimeError(f"eKuiper refused the replacement rule: {status} {body}")
+        polls = 0
+        deadline = time.monotonic() + timeout_secs
+        while True:
+            polls += 1
+            status, body = call("GET", f"/rules/{rule_id}/status")
+            try:
+                emitted = status == 200 and json.loads(body).get(EKUIPER_EMISSION_METRIC, 0) > 0
+            except (AttributeError, TypeError, ValueError):
+                emitted = False
+            if emitted or time.monotonic() >= deadline:
+                break
+            calls.pop()
+            time.sleep(0.01)
+        record["status_polls"] = polls
+        if not emitted:
+            raise RuntimeError(f"{rule_id} did not emit within {timeout_secs:g} s")
+        status, body = call("DELETE", "/rules/pipeline_a")
+        if status != 200:
+            raise RuntimeError(f"eKuiper did not delete pipeline_a: {status} {body}")
+    finally:
+        write_json_atomic(output / "rule-replacement.json", record)
 
 
 def hot_swap_offsets(item: RunItem) -> list[float]:
@@ -4256,6 +4379,7 @@ def run_restart_item(
     ekuiper_audit: Path | None = None
     ekuiper_before: dict | None = None
     ekuiper_health: dict | None = None
+    replacement_rule: dict | None = None
     is_ekuiper = item.system == "ekuiper"
     telemetry = start_pi_telemetry(root, output, item)
     try:
@@ -4279,6 +4403,8 @@ def run_restart_item(
         if is_ekuiper:
             ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
             ekuiper_before = ekuiper_run_start()
+        if item.condition == "ekuiper-make-before-break":
+            replacement_rule = ekuiper_replacement_rule(root)
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = facts["git_sha"]
         environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
@@ -4359,12 +4485,14 @@ def run_restart_item(
             action_started_monotonic_ns = time.monotonic_ns()
             alignment_error_ns = action_started_ns - scheduled_event_ns
             if item.condition == "wafer-hotswap":
-                plugin = root / "plugins/pass-through-v2/target/wasm32-wasip2/release/wafer_pass_through_v2.wasm"
-                response = post_hot_swap("transform", plugin)
+                plugin = root / SWAP3_REPLACEMENT_PLUGIN
+                response = post_hot_swap("filter", plugin)
                 write_json_atomic(
                     output / "swap_requests.json",
                     [{"event_index": 0, "plugin": plugin.name, **response}],
                 )
+            elif replacement_rule is not None:
+                replace_ekuiper_rule(output, replacement_rule, action_started_monotonic_ns)
             elif is_ekuiper:
                 subprocess.run(
                     ["curl", "-fsS", "-X", "POST", "http://127.0.0.1:9081/rules/pipeline_a/stop"],
@@ -4438,9 +4566,13 @@ def run_restart_item(
                     f"loadgen failed: publisher={publisher_code}, subscriber={subscriber_code}"
                 )
             if ekuiper_before is not None:
-                # The rule stop and start above leave the unit's main process alone, so only
-                # a crash or a failed rule shows in this snapshot.
-                ekuiper_health = write_ekuiper_health(output, ekuiper_before)
+                # Changing the rule above leaves the unit's main process alone, so only a
+                # crash or a failed rule shows in this snapshot.
+                ekuiper_health = write_ekuiper_health(
+                    output,
+                    ekuiper_before,
+                    None if replacement_rule is None else replacement_rule["id"],
+                )
 
         (output / "measurement-window.json").write_text(
             json.dumps(

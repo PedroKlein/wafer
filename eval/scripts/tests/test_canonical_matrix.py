@@ -33,8 +33,8 @@ def test_matrix_accepts_frozen_experiments() -> None:
     result = run_validator("matrix", str(MATRIX))
     assert result.returncode == 0, result.stderr
     assert "27 experiments" in result.stdout
-    assert "schedule_records=2321" in result.stdout
-    assert "measured_leaves=2091" in result.stdout
+    assert "schedule_records=2351" in result.stdout
+    assert "measured_leaves=2121" in result.stdout
 
 
 def test_final_campaign_policy_is_frozen_in_matrix() -> None:
@@ -45,8 +45,8 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     assert campaign["status"] == "frozen-before-execution"
     assert campaign["seed"] == 1729
     assert campaign["thesis_evidence"] is True
-    assert campaign["expected_schedule_records"] == 2321
-    assert campaign["expected_measured_leaves"] == 2091
+    assert campaign["expected_schedule_records"] == 2351
+    assert campaign["expected_measured_leaves"] == 2121
     assert campaign["capacity_grid"] == {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -97,6 +97,7 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "wafer-hotswap",
         "wafer-restart",
         "ekuiper-restart",
+        "ekuiper-make-before-break",
     ]
     assert set(swap3["required_outputs"]) == {
         "latency.hdr",

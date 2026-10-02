@@ -980,7 +980,7 @@
     },
     "e-swap-3": {
       "research_question": "rq3",
-      "purpose": "Compare WAFER hot-swap, WAFER restart, and eKuiper rule restart disruption.",
+      "purpose": "Compare output disruption around one control action: WAFER hot-swap to threshold-filter v2, WAFER restart, eKuiper rule update (stop and start), and eKuiper make-before-break replacement by the same v2 rule.",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 30,
@@ -988,7 +988,8 @@
       "conditions": [
         "wafer-hotswap",
         "wafer-restart",
-        "ekuiper-restart"
+        "ekuiper-restart",
+        "ekuiper-make-before-break"
       ],
       "required_outputs": [
         "latency.hdr",
@@ -1190,8 +1191,8 @@
     "status": "frozen-before-execution",
     "seed": 1729,
     "thesis_evidence": true,
-    "expected_schedule_records": 2321,
-    "expected_measured_leaves": 2091,
+    "expected_schedule_records": 2351,
+    "expected_measured_leaves": 2121,
     "capacity_grid": {
       "source_batch_id": "capacity-scout-v3-20260904T045000Z",
       "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",

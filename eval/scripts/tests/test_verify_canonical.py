@@ -946,6 +946,156 @@ def test_swap3_rule_restart_must_show_in_the_rule_start_time(tmp_path: Path) -> 
     ]
 
 
+@pytest.mark.parametrize(
+    ("strategy", "mutate", "message"),
+    [
+        (
+            "wafer-hotswap",
+            lambda leaf: (leaf / "swap_requests.json").write_text(
+                json.dumps([{**SWAP3_SWAP_REQUEST, "plugin": "wafer_pass_through_v2.wasm"}])
+            ),
+            "swap_requests.json must record the one response to the wafer_threshold_filter_v2.wasm swap",
+        ),
+        (
+            "wafer-hotswap",
+            lambda leaf: (leaf / "swap_requests.json").unlink(),
+            "swap_requests.json",
+        ),
+        (
+            "wafer-restart",
+            lambda leaf: (leaf / "swap_requests.json").write_text(json.dumps([SWAP3_SWAP_REQUEST])),
+            "swap_requests.json belongs to the E-Swap-3 wafer-hotswap arm",
+        ),
+        (
+            "ekuiper-restart",
+            lambda leaf: (leaf / "rule-replacement.json").write_text(
+                json.dumps(swap3_rule_replacement())
+            ),
+            "rule-replacement.json belongs to the E-Swap-3 ekuiper-make-before-break arm",
+        ),
+        (
+            "ekuiper-make-before-break",
+            lambda leaf: (leaf / "rule-replacement.json").write_text(
+                json.dumps(swap3_rule_replacement(emitted=0))
+            ),
+            "rule-replacement.json deletes pipeline_a before the replacement emits",
+        ),
+        (
+            "ekuiper-make-before-break",
+            lambda leaf: (leaf / "rule-replacement.json").write_text(
+                json.dumps(
+                    {
+                        **swap3_rule_replacement(),
+                        "calls": swap3_rule_replacement()["calls"][::2],
+                    }
+                )
+            ),
+            "rule-replacement.json must record the create, first emission and delete calls",
+        ),
+        (
+            "ekuiper-make-before-break",
+            lambda leaf: (leaf / "rule-replacement.json").write_text(
+                json.dumps(
+                    {
+                        **swap3_rule_replacement(),
+                        "calls": [
+                            *swap3_rule_replacement()["calls"][:2],
+                            {**swap3_rule_replacement()["calls"][2], "end_offset_ns": 2},
+                        ],
+                    }
+                )
+            ),
+            "rule-replacement.json calls outlast the E-Swap-3 action",
+        ),
+    ],
+)
+def test_swap3_leaf_must_keep_the_record_of_its_own_arm_action(
+    tmp_path: Path, strategy: str, mutate: Callable[[Path], object], message: str
+) -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    leaf = make_swap3_canonical_leaf(tmp_path, strategy)
+    mutate(leaf)
+
+    violations, _ = CONTRACT.check_leaf(leaf, "e-swap-3", canonical=True, canonical_matrix=matrix)
+
+    assert any(message in violation for violation in violations), violations
+
+
+def make_replacement_health(result: Path) -> dict:
+    """An eKuiper E-Swap-3 make-before-break leaf whose rule was replaced at measured t=60."""
+    metadata_path = result / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(experiment="e-swap-3", condition="ekuiper-make-before-break")
+    metadata_path.write_text(json.dumps(metadata))
+    (result / "measurement-window.json").write_text(
+        json.dumps({"started_ns": 2_000_000_000_000, "finished_ns": 2_150_000_000_000})
+    )
+    health = {
+        "schema_version": 1,
+        "unit": "kuiper.service",
+        "rule": "pipeline_a",
+        "replacement_rule": "pipeline_a_v2",
+        "before": ekuiper_snapshot(1_990_000_000_000),
+        "after": ekuiper_snapshot(2_160_000_000_000, {"lastStartTimestamp": 2_090_000}),
+    }
+    (result / "ekuiper-health.json").write_text(json.dumps(health))
+    return metadata
+
+
+def test_swap3_rule_replacement_is_judged_by_the_replacement_rule(tmp_path: Path) -> None:
+    result = make_ekuiper_result(tmp_path)
+    metadata = make_replacement_health(result)
+    health = json.loads((result / "ekuiper-health.json").read_text())
+    assert CONTRACT.check_ekuiper_health(result, metadata, "e-swap-3") == []
+    assert CONTRACT.sut_outcome_reasons(result, "e-swap-3") == []
+
+    health["after"]["rule_status"].update(status="stopped by error", message="sink failed")
+    (result / "ekuiper-health.json").write_text(json.dumps(health))
+    assert CONTRACT.check_ekuiper_health(result, metadata, "e-swap-3") == []
+    assert CONTRACT.sut_outcome_reasons(result, "e-swap-3") == ["rule-error"]
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (
+            lambda health: health["after"]["rule_status"].update(lastStartTimestamp=1_000),
+            "the eKuiper replacement rule did not start during the run",
+        ),
+        (
+            lambda health: health.pop("replacement_rule"),
+            "ekuiper-health.json identity is invalid",
+        ),
+        (
+            lambda health: health.update(replacement_rule="pipeline_a"),
+            "ekuiper-health.json identity is invalid",
+        ),
+    ],
+)
+def test_swap3_rule_replacement_health_the_harness_could_not_have_written_is_rejected(
+    tmp_path: Path, change: Callable[[dict], object], message: str
+) -> None:
+    result = make_ekuiper_result(tmp_path)
+    metadata = make_replacement_health(result)
+    health = json.loads((result / "ekuiper-health.json").read_text())
+    change(health)
+    (result / "ekuiper-health.json").write_text(json.dumps(health))
+
+    assert message in CONTRACT.check_ekuiper_health(result, metadata, "e-swap-3")
+
+
+def test_only_the_make_before_break_arm_may_name_a_replacement_rule(tmp_path: Path) -> None:
+    result = make_ekuiper_result(tmp_path)
+    health = json.loads((result / "ekuiper-health.json").read_text())
+    health["replacement_rule"] = "pipeline_a_v2"
+    (result / "ekuiper-health.json").write_text(json.dumps(health))
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert "ekuiper-health.json identity is invalid" in completed.stdout
+
+
 def test_canonical_result_rejects_dirty_source_and_missing_output() -> None:
     mutations = {
         "dirty source": lambda result, metadata: metadata.update(git_dirty=True),
@@ -992,6 +1142,51 @@ def test_final_matrix_missing_new_artifacts_has_experiment_diagnostics() -> None
     assert "missing required canonical artefact for e-swap-3: disruption-timeline.json" in swap3
     assert "missing required canonical artefact for e-swap-3: disruption-analysis.json" in swap3
     assert "missing required canonical artefact for e-swap-4: swap-actual-t0.json" in swap4
+
+
+SWAP3_SWAP_REQUEST = {
+    "event_index": 0,
+    "plugin": "wafer_threshold_filter_v2.wasm",
+    "http_status": 200,
+    "body": {"node_id": "filter", "replacement_adopted": True},
+}
+
+
+def swap3_rule_replacement(emitted: int = 1) -> dict:
+    """The REST calls of one make-before-break replacement, inside a 1 ns action."""
+    calls = [
+        ("POST", "/rules", 201, "Rule pipeline_a_v2 was created successfully.", 0),
+        (
+            "GET",
+            "/rules/pipeline_a_v2/status",
+            200,
+            json.dumps({"status": "running", "sink_mqtt_0_0_records_out_total": emitted}),
+            0,
+        ),
+        ("DELETE", "/rules/pipeline_a", 200, "Rule pipeline_a is dropped.", 1),
+    ]
+    return {
+        "schema_version": 1,
+        "strategy": "ekuiper-make-before-break",
+        "retired_rule": "pipeline_a",
+        "replacement_rule": "pipeline_a_v2",
+        "replacement_sql": "SELECT device_id, temperature, humidity, ts, seq FROM "
+        "wafer_telemetry WHERE temperature >= 60 AND temperature <= 99999",
+        "emission_metric": "sink_mqtt_0_0_records_out_total",
+        "offset_clock": "monotonic",
+        "status_polls": 2,
+        "calls": [
+            {
+                "method": method,
+                "path": path,
+                "http_status": status,
+                "body": body,
+                "start_offset_ns": offset,
+                "end_offset_ns": offset,
+            }
+            for method, path, status, body, offset in calls
+        ],
+    }
 
 
 def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Path:
@@ -1122,6 +1317,10 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
     )
     (leaf / "disruption-timeline.json").write_text(json.dumps(disruption))
     (leaf / "disruption-analysis.json").write_text(json.dumps(analysis))
+    if strategy == "wafer-hotswap":
+        (leaf / "swap_requests.json").write_text(json.dumps([SWAP3_SWAP_REQUEST]))
+    if strategy == "ekuiper-make-before-break":
+        (leaf / "rule-replacement.json").write_text(json.dumps(swap3_rule_replacement()))
     interval_fragment = json.loads((leaf / "interval-latency.json").read_text())
     interval_fragment["aggregate_latency_count"] = 120_000
     interval_fragment["rows"][0]["latency_count"] = 120_000
@@ -1728,7 +1927,7 @@ def test_final_swap3_leaf_accepts_all_declared_strategies_and_rejects_legacy_tim
     tmp_path: Path,
 ) -> None:
     matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
-    for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart"):
+    for strategy in matrix["experiments"]["e-swap-3"]["conditions"]:
         leaf = make_swap3_canonical_leaf(tmp_path / strategy, strategy)
         violations, warnings = CONTRACT.check_leaf(
             leaf, "e-swap-3", canonical=True, canonical_matrix=matrix

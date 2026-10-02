@@ -298,7 +298,7 @@ def build_complete_fixture(root: Path) -> None:
             }
         )
     )
-    for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart"):
+    for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart", "ekuiper-make-before-break"):
         leaf = root / "e-swap-3" / strategy / "run-01"
         leaf.mkdir(parents=True, exist_ok=True)
         (leaf / "throughput-buckets.json").write_text(
@@ -552,7 +552,7 @@ def test_all_notebooks_execute_against_complete_fixture(
 
     output_by_name = dict(zip((path.name for path in NOTEBOOKS), outputs))
     hotswap_output = output_by_name["05-hotswap-timeline.ipynb"]
-    assert "N=4" in hotswap_output
+    assert "N=5" in hotswap_output
     assert "median_dip_percent" in hotswap_output
     assert "e-swap-1" in hotswap_output
     assert "e-swap-2" not in hotswap_output

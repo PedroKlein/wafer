@@ -1772,7 +1772,7 @@ def backpressure_table(records: list[dict], *, canonical: bool = True) -> pd.Dat
 
 
 def swap3_table(runs: list[dict]) -> pd.DataFrame:
-    strategies = ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
+    strategies = ("wafer-hotswap", "wafer-restart", "ekuiper-restart", "ekuiper-make-before-break")
     rules = declared_thresholds()
     dip_rule = rules["e-swap-3-dip"]
     lossless_rule = rules["e-swap-3-lossless"]

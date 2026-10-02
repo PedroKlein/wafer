@@ -39,6 +39,7 @@ if str(ANALYSIS_SRC) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_SRC))
 
 from attempts import (
+    EKUIPER_REPLACEMENT_RULE,
     EKUIPER_UNIT_PROPERTIES,
     INCOMPLETE_RUN_REASONS,
     ekuiper_exit_code,
@@ -98,6 +99,13 @@ PAYLOAD_REFINEMENT_GRID = {
     "256kb": 262_144,
 }
 DEPTH_EXTENSION_GRID = {1, 3, 5, 10, 20, 50}
+SWAP3_STRATEGIES = {
+    "wafer-hotswap",
+    "wafer-restart",
+    "ekuiper-restart",
+    "ekuiper-make-before-break",
+}
+SWAP3_REPLACEMENT_PLUGIN = "wafer_threshold_filter_v2.wasm"
 PASS_THROUGH_PLUGIN = (
     "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
 )
@@ -831,7 +839,7 @@ def check_disruption_timeline(path: Path) -> list[str]:
         or value["timestamp_clock_purpose"] != "cross-process-alignment"
         or value["scheduling_clock"] != "monotonic"
         or value["duration_clock"] != "monotonic"
-        or value["strategy"] not in {"wafer-hotswap", "wafer-restart", "ekuiper-restart"}
+        or value["strategy"] not in SWAP3_STRATEGIES
         or int(value["scheduled_event_offset_ns"]) != 60_000_000_000
         or scheduled_timestamp != measurement_start + 60_000_000_000
         or int(value["event_offset_from_measurement_start_ns"])
@@ -847,6 +855,76 @@ def check_disruption_timeline(path: Path) -> list[str]:
             != action_end_monotonic - action_start_monotonic
     ):
         violations.append("disruption-timeline.json event/action clocks are invalid")
+    return violations
+
+
+def check_swap3_action(leaf: Path, condition: object) -> list[str]:
+    """The record of the arm's action: the swap request, or the rule replacement's REST calls."""
+    violations: list[str] = []
+    records = {
+        "wafer-hotswap": "swap_requests.json",
+        "ekuiper-make-before-break": "rule-replacement.json",
+    }
+    for arm, name in records.items():
+        if arm != condition and (leaf / name).exists():
+            violations.append(f"{name} belongs to the E-Swap-3 {arm} arm")
+    if condition == "wafer-hotswap":
+        try:
+            requests = json.loads((leaf / "swap_requests.json").read_text())
+        except (OSError, ValueError) as error:
+            return violations + [f"swap_requests.json is unreadable: {error}"]
+        if (
+            not isinstance(requests, list)
+            or len(requests) != 1
+            or not isinstance(requests[0], dict)
+            or requests[0].get("plugin") != SWAP3_REPLACEMENT_PLUGIN
+            or not {"http_status", "body"} <= requests[0].keys()
+        ):
+            violations.append(
+                f"swap_requests.json must record the one response to the {SWAP3_REPLACEMENT_PLUGIN} swap"
+            )
+    if condition != "ekuiper-make-before-break":
+        return violations
+    record = _load_json(leaf / "rule-replacement.json", "rule-replacement.json", violations)
+    timeline = _load_json(leaf / "disruption-timeline.json", "disruption-timeline.json", [])
+    if record is None:
+        return violations
+    expected_calls = [
+        ("POST", "/rules", 201),
+        ("GET", f"/rules/{EKUIPER_REPLACEMENT_RULE}/status", 200),
+        ("DELETE", "/rules/pipeline_a", 200),
+    ]
+    calls = record.get("calls")
+    try:
+        if (
+            record.get("schema_version") != 1
+            or record.get("strategy") != "ekuiper-make-before-break"
+            or record.get("retired_rule") != "pipeline_a"
+            or record.get("replacement_rule") != EKUIPER_REPLACEMENT_RULE
+            or record.get("emission_metric") != "sink_mqtt_0_0_records_out_total"
+            or record.get("offset_clock") != "monotonic"
+            or type(record.get("status_polls")) is not int
+            or record["status_polls"] < 1
+            or not isinstance(calls, list)
+            or [(call["method"], call["path"], call["http_status"]) for call in calls]
+            != expected_calls
+        ):
+            return violations + [
+                "rule-replacement.json must record the create, first emission and delete calls"
+            ]
+        offsets = [
+            offset
+            for call in calls
+            for offset in (int(call["start_offset_ns"]), int(call["end_offset_ns"]))
+        ]
+        if offsets[0] < 0 or offsets != sorted(offsets):
+            violations.append("rule-replacement.json calls overlap or run out of order")
+        if json.loads(calls[1]["body"]).get(record["emission_metric"], 0) <= 0:
+            violations.append("rule-replacement.json deletes pipeline_a before the replacement emits")
+        if timeline is not None and offsets[-1] > int(timeline["action_duration_ns"]):
+            violations.append("rule-replacement.json calls outlast the E-Swap-3 action")
+    except (AttributeError, KeyError, TypeError, ValueError):
+        violations.append("rule-replacement.json calls are malformed")
     return violations
 
 
@@ -902,7 +980,7 @@ def check_disruption_analysis(path: Path) -> list[str]:
     }
     if not required <= value.keys():
         violations.append("disruption-analysis.json is missing estimator fields")
-    if value.get("strategy") not in {"wafer-hotswap", "wafer-restart", "ekuiper-restart"}:
+    if value.get("strategy") not in SWAP3_STRATEGIES:
         violations.append("disruption-analysis.json strategy is invalid")
     for field in ("baseline_rate_msg_s", "event_min_rate_msg_s", "dip_percent"):
         if not isinstance(value.get(field), (int, float)) or value[field] < 0:
@@ -1360,7 +1438,9 @@ def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[st
     What they show about eKuiper is an outcome (``attempts.ekuiper_health_reasons``), not a
     violation; evidence the harness could not have written for this run is. Only E-Swap-3
     starts the rule again during the run, so elsewhere a new rule start time without a unit
-    restart means something outside the run started it.
+    restart means something outside the run started it. The make-before-break arm deletes
+    pipeline_a during the run, so its ``after`` snapshot is of the replacement rule, which
+    must have started after ``before``.
     """
     path = leaf / "ekuiper-health.json"
     if not path.is_file():
@@ -1369,11 +1449,16 @@ def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[st
     health = _load_json(path, "ekuiper-health.json", violations)
     if health is None:
         return violations
-    if (health.get("schema_version"), health.get("unit"), health.get("rule")) != (
-        1,
-        "kuiper.service",
-        "pipeline_a",
-    ):
+    replaces_rule = (experiment, metadata.get("condition")) == (
+        "e-swap-3",
+        "ekuiper-make-before-break",
+    )
+    if (
+        health.get("schema_version"),
+        health.get("unit"),
+        health.get("rule"),
+        health.get("replacement_rule"),
+    ) != (1, "kuiper.service", "pipeline_a", EKUIPER_REPLACEMENT_RULE if replaces_rule else None):
         violations.append("ekuiper-health.json identity is invalid")
     for name in ("before", "after"):
         snapshot = health.get(name)
@@ -1417,7 +1502,13 @@ def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[st
         started_again = rule_after.get("lastStartTimestamp") != rule_before.get(
             "lastStartTimestamp"
         )
-        if experiment == "e-swap-3" and not started_again:
+        if replaces_rule:
+            started_at_ms = rule_after.get("lastStartTimestamp")
+            if type(started_at_ms) is not int or started_at_ms * 1_000_000 < before[
+                "captured_at_ns"
+            ] - 1_000_000:
+                violations.append("the eKuiper replacement rule did not start during the run")
+        elif experiment == "e-swap-3" and not started_again:
             violations.append("E-Swap-3 restarted the eKuiper rule but its start time did not move")
         elif experiment != "e-swap-3" and started_again:
             violations.append("something outside the run started the eKuiper rule again")
@@ -2104,6 +2195,7 @@ def check_leaf(
         violations.extend(check_mqtt_run_end(leaf))
         violations.extend(check_disruption_analysis(leaf / "disruption-analysis.json"))
         violations.extend(check_swap3_reconciliation(leaf, metadata))
+        violations.extend(check_swap3_action(leaf, metadata.get("condition")))
     if experiment == "e-swap-4":
         violations.extend(check_burst_timeline(leaf / "burst-timeline.json"))
         violations.extend(check_swap4_reconciliation(leaf))

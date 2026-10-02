@@ -40,8 +40,8 @@ REQUIRED_FIELDS = {
     "evidence_class",
 }
 FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
-FINAL_SCHEDULE_RECORDS = 2_321
-FINAL_MEASURED_LEAVES = 2_091
+FINAL_SCHEDULE_RECORDS = 2_351
+FINAL_MEASURED_LEAVES = 2_121
 PAYLOAD_SIZES = ("120b", "1kb", "10kb", "100kb")
 NATIVE_PASS_THROUGH = {"kind": "native", "function": "passthrough"}
 PAYLOAD_BOUNDARY = (
@@ -437,7 +437,12 @@ def validate_matrix(matrix: dict) -> list[str]:
     swap3 = experiments.get("e-swap-3", {})
     if swap3.get("sample_unit") != "run" or swap3.get("repetitions") != 30:
         errors.append("e-swap-3 must use 30 run-level repetitions")
-    if swap3.get("conditions") != ["wafer-hotswap", "wafer-restart", "ekuiper-restart"]:
+    if swap3.get("conditions") != [
+        "wafer-hotswap",
+        "wafer-restart",
+        "ekuiper-restart",
+        "ekuiper-make-before-break",
+    ]:
         errors.append("e-swap-3 conditions differ from the frozen strategies")
     swap3_outputs = {
         "latency.hdr",

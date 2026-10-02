@@ -1443,7 +1443,12 @@ def swap3_runs() -> list[dict]:
             "loss": 0,
             "duplicates": 0,
         }
-        for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
+        for strategy in (
+            "wafer-hotswap",
+            "wafer-restart",
+            "ekuiper-restart",
+            "ekuiper-make-before-break",
+        )
         for run in range(1, 31)
     ]
 
@@ -2179,7 +2184,9 @@ def test_swap3_dip_verdict_reads_the_one_sided_upper_bound(verdict: str) -> None
     assert wafer["dip_threshold"] == 5.0
     assert wafer["dip_flips_at"] in (low, high)
     assert wafer["dip_ci_half_width"] == pytest.approx((high - low) / 2)
-    assert table.loc[["wafer-restart", "ekuiper-restart"], "verdict"].isna().all()
+    comparators = ["wafer-restart", "ekuiper-restart", "ekuiper-make-before-break"]
+    assert table.loc[comparators, "verdict"].isna().all()
+    assert table.loc[comparators, "dip_verdict"].isna().all()
 
 
 def test_swap3_loss_fails_the_hot_swap_whatever_the_dip() -> None:

@@ -76,6 +76,7 @@ from canonical_runner import (  # noqa: E402
     write_progress,
 )
 
+REAL_CHECK_OUTPUT = subprocess.check_output
 T2_EXPERIMENTS = {
     "e-val-1",
     "e-perf-3",
@@ -1652,12 +1653,12 @@ def test_swap3_strategies_share_boundary_and_commands_except_strategy() -> None:
             item for item in build_schedule({"e-swap-3"}, seed=1729)
             if item.condition == strategy and item.run_index == 1
         )
-        for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
+        for strategy in runner.SWAP3_STRATEGIES
     ]
     invocations = [build_swap3_invocation(ROOT, item, Path("/tmp/swap3")) for item in items]
     assert all(invocation["controlled_factors"] == invocations[0]["controlled_factors"] for invocation in invocations)
     assert {invocation["strategy"] for invocation in invocations} == {
-        "wafer-hotswap", "wafer-restart", "ekuiper-restart"
+        "wafer-hotswap", "wafer-restart", "ekuiper-restart", "ekuiper-make-before-break"
     }
     assert all("--timing-receipt" in invocation["publisher_command"] for invocation in invocations)
     assert all("--publisher-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
@@ -1714,7 +1715,11 @@ def test_swap3_postprocess_removes_publisher_timing_temporary(
 
 
 class FakeEkuiper:
-    """The kuiper unit as `systemctl show` reports it and pipeline_a as its REST API does."""
+    """The kuiper unit as `systemctl show` reports it and pipeline_a as its REST API does.
+
+    The REST API also lists the rules, creates the replacement rule, which starts emitting
+    after ``replacement_quiet_polls`` status reads, and deletes rules.
+    """
 
     def __init__(self) -> None:
         self.unit = {"NRestarts": 0, "ExecMainStatus": 0, "MainPID": 4242}
@@ -1726,13 +1731,52 @@ class FakeEkuiper:
         }
         self.pending_statuses: list[str] = []
         self.events: list[str] = []
+        self.leftover_rules: list[str] = []
+        self.replacement: dict | None = None
+        self.replacement_quiet_polls = 1
 
     def check_output(self, command: list[str], **kwargs: object) -> str:
+        if str(command[0]).endswith("seed-pipeline-a.sh"):
+            return REAL_CHECK_OUTPUT(command, **kwargs)
         assert list(command[:3]) == ["systemctl", "show", "kuiper.service"], command
         return "".join(f"{name}={value}\n" for name, value in self.unit.items())
 
-    def urlopen(self, url: str, timeout: float | None = None) -> io.BytesIO:
-        assert url == "http://127.0.0.1:9081/rules/pipeline_a/status", url
+    def urlopen(self, request: object, timeout: float | None = None) -> io.BytesIO:
+        if isinstance(request, runner.urllib.request.Request):
+            method, url = request.get_method(), request.full_url
+        else:
+            method, url = "GET", request
+        path = url.removeprefix("http://127.0.0.1:9081")
+        if (method, path) == ("GET", "/rules"):
+            self.events.append("rule-list")
+            rules = ["pipeline_a"] if self.rule is not None else []
+            rules += self.leftover_rules + (["pipeline_a_v2"] if self.replacement else [])
+            return io.BytesIO(json.dumps([{"id": rule, "status": "running"} for rule in rules]).encode())
+        if (method, path) == ("POST", "/rules"):
+            payload = json.loads(request.data)
+            assert payload["id"] == "pipeline_a_v2" and self.replacement is None
+            self.events.append("create-replacement")
+            self.replacement = {
+                "status": "running",
+                "message": "",
+                "lastStartTimestamp": 61_000,
+                "lastStopTimestamp": 0,
+                "sink_mqtt_0_0_records_out_total": 0,
+                "sql": payload["sql"],
+            }
+            return self._response(201, "Rule pipeline_a_v2 was created successfully.")
+        if (method, path) == ("GET", "/rules/pipeline_a_v2/status"):
+            self.events.append("replacement-status")
+            if self.replacement_quiet_polls > 0:
+                self.replacement_quiet_polls -= 1
+            else:
+                self.replacement["sink_mqtt_0_0_records_out_total"] += 1
+            return self._response(200, json.dumps(self.replacement))
+        if (method, path) == ("DELETE", "/rules/pipeline_a"):
+            self.events.append("delete-pipeline_a")
+            self.rule = None
+            return self._response(200, "Rule pipeline_a is dropped.")
+        assert (method, path) == ("GET", "/rules/pipeline_a/status"), (method, url)
         self.events.append("rule-status")
         if self.rule is None:
             raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
@@ -1741,6 +1785,12 @@ class FakeEkuiper:
                 json.dumps({**self.rule, "status": self.pending_statuses.pop(0)}).encode()
             )
         return io.BytesIO(json.dumps(self.rule).encode())
+
+    @staticmethod
+    def _response(status: int, body: str) -> io.BytesIO:
+        response = io.BytesIO(body.encode())
+        response.status = status
+        return response
 
     def crash(self) -> None:
         """The main process dies; systemd starts a new one, which starts the rule again."""
@@ -4610,6 +4660,13 @@ def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
     stream_sql = rendered["stream_payload"]["sql"]
     rule = rendered["rule_payload"]
     action = rule["actions"][0]["mqtt"]
+    replacement = rendered["replacement_rule_payload"]
+    assert replacement == {
+        **rule,
+        "id": "pipeline_a_v2",
+        "sql": rule["sql"].replace("temperature >= 50", "temperature >= 60"),
+    }
+    assert replacement["sql"] != rule["sql"]
     assert "device_id STRING" in stream_sql
     assert "humidity FLOAT" in stream_sql
     assert "DATASOURCE=\"wafer/telemetry\"" in stream_sql
@@ -4683,9 +4740,10 @@ def test_ekuiper_concurrency_diagnostic_changes_only_rule_concurrency() -> None:
         rendered.append(json.loads(result.stdout))
 
     concurrency_one, concurrency_three = rendered
-    assert concurrency_one["rule_payload"]["options"] == {"concurrency": 1}
-    assert concurrency_three["rule_payload"]["options"] == {"concurrency": 3}
-    concurrency_one["rule_payload"]["options"] = {"concurrency": 3}
+    for payload in ("rule_payload", "replacement_rule_payload"):
+        assert concurrency_one[payload]["options"] == {"concurrency": 1}
+        assert concurrency_three[payload]["options"] == {"concurrency": 3}
+        concurrency_one[payload]["options"] = {"concurrency": 3}
     assert concurrency_one == concurrency_three
 
 
@@ -5194,8 +5252,21 @@ def test_disruption_runtime_that_dies_at_startup_is_judged_by_its_exit(
     )
 
 
-def test_disruption_hot_swap_request_that_fails_is_a_failed_swap(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("response", "reasons"),
+    [
+        ({"http_status": 500, "body": "rejected"}, ["swap-failed"]),
+        (
+            {"http_status": 200, "body": {"node_id": "filter", "status": "rolled_back"}},
+            ["swap-failed"],
+        ),
+        ({"http_status": 202, "body": {"replacement_adopted": False}}, ["swap-failed"]),
+        ({"http_status": 200, "body": {"node_id": "filter"}}, ["swap-failed"]),
+        ({"http_status": 200, "body": {"replacement_adopted": True}}, None),
+    ],
+)
+def test_disruption_hot_swap_counts_only_an_adopted_replacement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, response: dict, reasons: list[str] | None
 ) -> None:
     stub_runner_host(monkeypatch, runtime_exit=0)
     clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
@@ -5232,18 +5303,25 @@ def test_disruption_hot_swap_request_that_fails_is_a_failed_swap(
             )
         return Process()
 
+    swaps: list[tuple[str, str]] = []
+
+    def swap(node: str, plugin: Path) -> dict:
+        swaps.append((node, plugin.name))
+        return response
+
     monkeypatch.setattr(runner.subprocess, "Popen", launch)
     monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
-    monkeypatch.setattr(
-        runner, "post_hot_swap", lambda node, plugin: {"http_status": 500, "body": "rejected"}
-    )
+    monkeypatch.setattr(runner, "post_hot_swap", swap)
     monkeypatch.setattr(runner, "wait_for_subscriber", lambda process, timeout=30: 0)
 
     assert runner.run_restart_item(ROOT, item, runner.AttemptSelection(output, False))
 
+    assert swaps == [("filter", "wafer_threshold_filter_v2.wasm")]
     receipt = json.loads((output / "canonical-status.json").read_text())
-    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["swap-failed"])
-    assert json.loads((output / "swap_requests.json").read_text())[0]["http_status"] == 500
+    assert receipt.get("reasons") == reasons
+    assert json.loads((output / "swap_requests.json").read_text()) == [
+        {"event_index": 0, "plugin": "wafer_threshold_filter_v2.wasm", **response}
+    ]
 
 
 def stub_ekuiper_run(monkeypatch: pytest.MonkeyPatch, ekuiper: FakeEkuiper) -> list[list[str]]:
@@ -5285,9 +5363,15 @@ def test_ekuiper_run_waits_for_the_rule_before_warm_up_and_records_its_health(
         ROOT, ekuiper_item("e-perf-1", "ekuiper"), runner.AttemptSelection(output, False)
     )
 
-    # Three polls until the rule runs, the snapshot before warm-up, two publish phases, and
-    # the snapshot after the run.
-    assert ekuiper.events == ["rule-status"] * 4 + ["publish", "publish", "rule-status"]
+    # Three polls until the rule runs, the rule list, the snapshot before warm-up, two publish
+    # phases, and the snapshot after the run.
+    assert ekuiper.events == ["rule-status"] * 3 + [
+        "rule-list",
+        "rule-status",
+        "publish",
+        "publish",
+        "rule-status",
+    ]
     health = json.loads((output / "ekuiper-health.json").read_text())
     assert (health["unit"], health["rule"]) == ("kuiper.service", "pipeline_a")
     for snapshot in (health["before"], health["after"]):
@@ -5564,6 +5648,88 @@ def test_swap3_rule_restart_is_the_arm_action_not_an_ekuiper_failure(
     assert receipt.get("reasons") == reasons
     exit_code = json.loads((output / "metadata.json").read_text())["exit_codes"]["ekuiper"]
     assert exit_code == (None if crash else 0)
+
+
+def test_swap3_make_before_break_deletes_pipeline_a_only_after_the_replacement_emits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    replacement = runner.ekuiper_replacement_rule(ROOT)
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    monkeypatch.setattr(runner, "ekuiper_replacement_rule", lambda root: replacement)
+    ekuiper.replacement_quiet_polls = 2
+    clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
+    monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
+    output = tmp_path / "ekuiper-make-before-break/run-01-attempt-01"
+
+    def launch(command: list[str], **kwargs: object) -> StoppedRuntime:
+        if command == ["publish"]:
+            now = next(clock)
+            (output / "publisher-timing.json").write_text(
+                json.dumps(
+                    {
+                        "measurement_started_unix_epoch_ns": now,
+                        "event_unix_epoch_ns": now,
+                        "event_offset_ns": runner.SWAP3_EVENT_OFFSET_NS,
+                    }
+                )
+            )
+        return StoppedRuntime(0)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", launch)
+
+    assert runner.run_restart_item(
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-make-before-break"),
+        runner.AttemptSelection(output, False),
+    )
+
+    # Two status reads before the replacement's sink counts output, the one that sees it, the
+    # delete, and the health snapshot after the run, which reads the replacement.
+    action = ekuiper.events[ekuiper.events.index("create-replacement") :]
+    assert action == ["create-replacement"] + ["replacement-status"] * 3 + [
+        "delete-pipeline_a",
+        "replacement-status",
+    ]
+    assert "60 AND" in ekuiper.replacement["sql"]
+    record = json.loads((output / "rule-replacement.json").read_text())
+    assert [(call["method"], call["path"], call["http_status"]) for call in record["calls"]] == [
+        ("POST", "/rules", 201),
+        ("GET", "/rules/pipeline_a_v2/status", 200),
+        ("DELETE", "/rules/pipeline_a", 200),
+    ]
+    assert record["status_polls"] == 3
+    assert json.loads(record["calls"][1]["body"])["sink_mqtt_0_0_records_out_total"] == 1
+    offsets = [call[key] for call in record["calls"] for key in ("start_offset_ns", "end_offset_ns")]
+    assert offsets == sorted(offsets)
+    health = json.loads((output / "ekuiper-health.json").read_text())
+    assert (health["rule"], health["replacement_rule"]) == ("pipeline_a", "pipeline_a_v2")
+    assert health["after"]["rule_status"]["lastStartTimestamp"] == 61_000
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert receipt["status"] == "passed"
+
+
+def test_swap3_make_before_break_keeps_pipeline_a_when_the_replacement_never_emits(
+    tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    ekuiper.replacement_quiet_polls = 1_000_000
+    replacement = runner.ekuiper_replacement_rule(ROOT)
+
+    with pytest.raises(RuntimeError, match="pipeline_a_v2 did not emit"):
+        runner.replace_ekuiper_rule(
+            tmp_path, replacement, runner.time.monotonic_ns(), timeout_secs=0.05
+        )
+
+    assert ekuiper.rule is not None
+    assert "delete-pipeline_a" not in ekuiper.events
+    record = json.loads((tmp_path / "rule-replacement.json").read_text())
+    assert [call["method"] for call in record["calls"]] == ["POST", "GET"]
+
+
+def test_ekuiper_run_refuses_a_rule_left_by_an_earlier_run(ekuiper: FakeEkuiper) -> None:
+    ekuiper.leftover_rules = ["pipeline_a_v2"]
+
+    with pytest.raises(RuntimeError, match="must hold only pipeline_a"):
+        runner.ekuiper_run_start()
 
 
 def test_ekuiper_audit_hashes_the_engine_configuration(
