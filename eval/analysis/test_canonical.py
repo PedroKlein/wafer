@@ -222,8 +222,23 @@ def test_replication_concordance_reads_per_host_target_load_tables() -> None:
     assert table.loc[("e-perf-1-p95-ratio", "wafer", "x86"), "concordance"] == "same-verdict"
     assert table.loc[("e-perf-1-p95-ratio", "wafer", "jetson"), "canonical_verdict"] == "PASS"
     assert table.loc[("e-perf-1-pooled-loss", "ekuiper", "jetson"), "concordance"] == "same-verdict"
-    assert len(table) == (1 + 3 + 3) * 2
+    assert len(table) == (1 + 3 + 3 + 3) * 2
     assert pi.loc[pi.condition == "wafer", "verdict"].item() == "PASS"
+
+
+def test_replication_concordance_shows_a_duplicate_that_flips_the_replication_verdict() -> None:
+    pi = target_latency_table(percentile_runs(("wafer", "native", "ekuiper")))
+    duplicated = percentile_runs(("wafer", "native", "ekuiper"))
+    duplicated[4]["duplicates"] = 3
+    jetson = target_latency_table(duplicated)
+
+    table = concordance_table({"rpi5": pi, "jetson": jetson}, TARGET_LOAD_CRITERIA)
+
+    wafer = table[(table.condition == "wafer") & (table.host == "jetson")].set_index("criterion")
+    assert jetson.loc[jetson.condition == "wafer", "verdict"].item() == "FAIL"
+    assert wafer.loc["e-perf-1-duplicates", "concordance"] == "opposite-direction"
+    assert (wafer.loc["e-perf-1-duplicates", "canonical_estimate"], wafer.loc["e-perf-1-duplicates", "replication_estimate"]) == (0, 3)
+    assert wafer.drop("e-perf-1-duplicates")["concordance"].eq("same-verdict").all()
 
 
 def test_target_latency_rejects_missing_delivery_evidence() -> None:
@@ -2262,6 +2277,7 @@ def test_target_latency_achieved_ratio_verdict_bounds_the_mean_over_runs(
 def test_one_duplicate_fails_target_load_delivery_exactly() -> None:
     wafer = wafer_target_row(lambda record: record.update(duplicates=int(record["run_index"] == 1)))
     assert (wafer["loss_verdict"], wafer["achieved_ratio_verdict"]) == ("PASS", "PASS")
+    assert (wafer["duplicates_verdict"], wafer["duplicates_estimate"], wafer["duplicates_threshold"]) == ("FAIL", 1, 0)
     assert (wafer["delivery_verdict"], wafer["verdict"]) == ("FAIL", "FAIL")
 
 

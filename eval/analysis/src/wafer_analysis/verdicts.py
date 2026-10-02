@@ -169,7 +169,7 @@ _DECIDED = {"PASS", "FAIL", "INCONCLUSIVE"}
 class Concordance:
     canonical_host: str
     replication_hosts: tuple[str, ...]
-    criteria_rule: str
+    criteria_rules: tuple[str, ...]
 
 
 def declared_concordance(matrix_path: Path | None = None) -> Concordance:
@@ -187,14 +187,16 @@ def declared_concordance(matrix_path: Path | None = None) -> Concordance:
     ) != CONCORDANCE:
         raise ValueError(f"replication_concordance classes differ from {CONCORDANCE}")
     hosts = rule.get("replication_hosts")
+    criteria_rules = rule.get("criteria_rules")
     if (
         not isinstance(rule.get("canonical_host"), str)
         or not isinstance(hosts, list)
         or not all(isinstance(host, str) for host in hosts)
-        or not isinstance(rule.get("criteria_rule"), str)
+        or not isinstance(criteria_rules, list)
+        or not all(isinstance(name, str) for name in criteria_rules)
     ):
         raise ValueError(f"malformed replication_concordance rule in {path}")
-    return Concordance(rule["canonical_host"], tuple(hosts), rule["criteria_rule"])
+    return Concordance(rule["canonical_host"], tuple(hosts), tuple(criteria_rules))
 
 
 def _estimable(verdict: object, estimate: object) -> bool:
@@ -216,7 +218,8 @@ def concordance(
 ) -> str:
     """How a replication host's verdict on one criterion agrees with the canonical host's.
 
-    Direction is the side of the threshold on which a point estimate falls.
+    Direction is the side of the threshold on which a point estimate falls. An
+    exact count is its own estimate, so its verdict follows its side.
     """
     canonical_side = _side(threshold, canonical_verdict, canonical_estimate)
     replication_side = _side(threshold, replication_verdict, replication_estimate)
@@ -264,8 +267,8 @@ def concordance_table(
     rows = []
     for prefix, criterion in criteria.items():
         threshold = thresholds[criterion]
-        if threshold.rule != rule.criteria_rule:
-            raise ValueError(f"{criterion} is not a {rule.criteria_rule} criterion")
+        if threshold.rule not in rule.criteria_rules:
+            raise ValueError(f"{criterion} is not a {' or '.join(rule.criteria_rules)} criterion")
         canonical = _criterion_rows(tables.get(rule.canonical_host), prefix, key)
         replicas = {
             host: _criterion_rows(tables.get(host), prefix, key) for host in rule.replication_hosts
@@ -301,7 +304,8 @@ def concordance_table(
                         ),
                         "units": threshold.unit,
                         "estimator": (
-                            "each host's own verdict and point estimate; direction is the side of the threshold "
+                            "each host's own verdict and point estimate, the count for an exact count; "
+                            "direction is the side of the threshold "
                             "the point estimate falls on; first matching class of not-estimable, same-verdict, "
                             "same-direction, opposite-direction"
                         ),

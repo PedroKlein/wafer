@@ -74,6 +74,7 @@ TARGET_LOAD_CRITERIA = {
     "p95_ratio": "e-perf-1-p95-ratio",
     "loss": "e-perf-1-pooled-loss",
     "achieved_ratio": "e-perf-1-achieved-ratio",
+    "duplicates": "e-perf-1-duplicates",
 }
 
 
@@ -146,11 +147,14 @@ def target_latency_table(records: list[dict], *, canonical: bool = True) -> pd.D
                 bootstrap_ci(achieved_ratios, ci=achieved_rule.interval, statistic=np.mean),
                 estimate=mean_achieved_ratio,
             ),
+            "duplicates_verdict": count_verdict(duplicate_rule, total_duplicates),
+            "duplicates_estimate": total_duplicates,
+            "duplicates_threshold": duplicate_rule.value,
         }
         delivery["delivery_verdict"] = combined_verdict(
             delivery["loss_verdict"],
             delivery["achieved_ratio_verdict"],
-            count_verdict(duplicate_rule, total_duplicates),
+            delivery["duplicates_verdict"],
         )
         if condition == "wafer":
             _, ratio_low, ratio_high = median_shift_ci(

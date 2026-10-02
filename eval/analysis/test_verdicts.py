@@ -154,7 +154,7 @@ def test_declared_thresholds_reject_a_missing_or_malformed_table(
 def test_declared_concordance_reads_the_canonical_matrix() -> None:
     rule = declared_concordance()
     assert (rule.canonical_host, rule.replication_hosts) == ("rpi5", ("jetson", "x86"))
-    assert rule.criteria_rule == "one-sided-bound"
+    assert rule.criteria_rules == ("one-sided-bound", "exact-count")
 
 
 @pytest.mark.parametrize(
@@ -234,9 +234,29 @@ def test_concordance_table_compares_each_replication_host_with_the_canonical_ver
     pd.testing.assert_frame_equal(pi, before)
 
 
-def test_concordance_table_refuses_a_criterion_without_bounds() -> None:
-    with pytest.raises(ValueError, match="e-perf-1-duplicates is not a one-sided-bound criterion"):
-        concordance_table({}, {"duplicates": "e-perf-1-duplicates"})
+def test_concordance_table_refuses_a_criterion_without_an_estimate_and_a_verdict() -> None:
+    with pytest.raises(
+        ValueError,
+        match="e-perf-10-competitive-ratio is not a one-sided-bound or exact-count criterion",
+    ):
+        concordance_table({}, {"competitive": "e-perf-10-competitive-ratio"})
+
+
+def test_concordance_table_compares_an_exact_count_by_the_count() -> None:
+    def duplicates(verdict: str, count: int) -> pd.DataFrame:
+        return pd.DataFrame(
+            [{"condition": "wafer", "duplicates_verdict": verdict, "duplicates_estimate": count}]
+        )
+
+    table = concordance_table(
+        {"rpi5": duplicates("PASS", 0), "jetson": duplicates("FAIL", 3), "x86": duplicates("PASS", 0)},
+        {"duplicates": "e-perf-1-duplicates"},
+    )
+
+    assert table[["host", "canonical_side", "replication_side", "concordance"]].values.tolist() == [
+        ["jetson", "meets", "misses", "opposite-direction"],
+        ["x86", "meets", "meets", "same-verdict"],
+    ]
 
 
 def test_concordance_table_matches_rows_by_the_named_key() -> None:

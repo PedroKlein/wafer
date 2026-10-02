@@ -1801,8 +1801,11 @@
       "jetson",
       "x86"
     ],
-    "criteria_rule": "one-sided-bound",
-    "direction": "the side of the declared threshold on which a host's point estimate falls: it meets the threshold or misses it",
+    "criteria_rules": [
+      "one-sided-bound",
+      "exact-count"
+    ],
+    "direction": "the side of the declared threshold on which a host's point estimate falls, the count itself for an exact count: it meets the threshold or misses it",
     "classes": [
       {
         "class": "not-estimable",

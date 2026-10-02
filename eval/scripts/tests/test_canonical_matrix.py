@@ -525,7 +525,7 @@ def test_matrix_rejects_a_missing_malformed_or_drifted_threshold_table(mutate, m
 def test_matrix_declares_how_replication_hosts_agree_with_the_canonical_host() -> None:
     rule = json.loads(MATRIX.read_text())["replication_concordance"]
     assert (rule["canonical_host"], rule["replication_hosts"]) == ("rpi5", ["jetson", "x86"])
-    assert rule["criteria_rule"] == "one-sided-bound"
+    assert rule["criteria_rules"] == ["one-sided-bound", "exact-count"]
     assert [row["class"] for row in rule["classes"]] == [
         "not-estimable",
         "same-verdict",
@@ -547,7 +547,7 @@ def test_matrix_declares_how_replication_hosts_agree_with_the_canonical_host() -
             "replication_concordance differs from the frozen rule",
         ),
         (
-            lambda matrix: matrix["replication_concordance"].update(criteria_rule="exact-count"),
+            lambda matrix: matrix["replication_concordance"]["criteria_rules"].append("every-run"),
             "replication_concordance differs from the frozen rule",
         ),
         (

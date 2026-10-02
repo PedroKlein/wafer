@@ -94,10 +94,10 @@ FROZEN_REPLICATION_CONCORDANCE = {
     "schema_version": 1,
     "canonical_host": "rpi5",
     "replication_hosts": ["jetson", "x86"],
-    "criteria_rule": "one-sided-bound",
+    "criteria_rules": ["one-sided-bound", "exact-count"],
     "direction": (
-        "the side of the declared threshold on which a host's point estimate falls: "
-        "it meets the threshold or misses it"
+        "the side of the declared threshold on which a host's point estimate falls, "
+        "the count itself for an exact count: it meets the threshold or misses it"
     ),
     "classes": [
         {
