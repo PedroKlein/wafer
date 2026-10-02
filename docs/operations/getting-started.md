@@ -177,13 +177,16 @@ in [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md#runtime-exit-status
 ## Notebook outputs
 
 Notebooks under `eval/analysis/notebooks/` are tracked without cell
-outputs so the repository stays small and free of local paths. If you
-plan to edit notebooks, install `nbstripout` and register it as a git
-filter once:
+outputs so the repository stays small and free of local paths. `mise run setup`
+installs the version of `nbstripout` pinned in `eval/analysis/uv.lock` and
+registers it as this checkout's Git filter.
+
+Normalize notebooks before committing and check them with:
 
 ```sh
-pip install --user nbstripout
-nbstripout --install
+mise run //eval:notebooks-format
+mise run //eval:notebooks-check
 ```
 
-Regenerate outputs locally with `mise run //eval:notebooks`.
+CI runs the same normalization check. Regenerate outputs locally with
+`mise run //eval:notebooks`.

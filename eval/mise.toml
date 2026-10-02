@@ -17,6 +17,27 @@ run = "rm -rf results/*/"
 # Analysis notebooks + thesis figures
 # =============================================================================
 
+[tasks.notebooks-install-filter]
+description = "Install the pinned nbstripout Git filter in this checkout"
+dir = "{{config_root}}/analysis"
+run = '''
+python=$(uv run --frozen python -c 'import sys; print(sys.executable)')
+git config filter.nbstripout.clean "\"$python\" -m nbstripout --keep-id"
+git config filter.nbstripout.smudge cat
+git config filter.nbstripout.required true
+git config diff.ipynb.textconv "\"$python\" -m nbstripout --keep-id -t"
+'''
+
+[tasks.notebooks-format]
+description = "Strip outputs and normalize tracked analysis notebooks"
+dir = "{{config_root}}/analysis"
+run = "uv run --frozen nbstripout --keep-id notebooks/*.ipynb"
+
+[tasks.notebooks-check]
+description = "Fail if tracked analysis notebooks are not nbstripout-normalized"
+dir = "{{config_root}}/analysis"
+run = "uv run --frozen nbstripout --keep-id --verify notebooks/*.ipynb"
+
 [tasks.notebooks]
 description = "Open all analysis notebooks in JupyterLab (browser)"
 dir = "{{config_root}}/analysis"

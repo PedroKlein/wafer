@@ -61,6 +61,7 @@ fi
 rustup show active-toolchain
 rustup target add wasm32-wasip2
 mise install --monorepo
+mise run //eval:notebooks-install-filter
 '''
 
 [tasks.tool-versions]
@@ -104,6 +105,7 @@ run = ["plugins/build-plugins.sh --no-record", "cargo test --locked --workspace"
 [tasks.test-eval]
 description = "Run the evaluation harness tests (pytest suites plus the shell tests; needs built plugins and uv)"
 run = [
+  "mise run //eval:notebooks-check",
   "python3 -m pytest eval/scripts/tests -q",
   "eval/scripts/tests/test_ekuiper_install.sh",
   "eval/scripts/tests/test_glibc_floor.sh",

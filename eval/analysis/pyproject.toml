@@ -21,5 +21,6 @@ packages = ["src/wafer_analysis"]
 
 [dependency-groups]
 dev = [
+    "nbstripout==0.9.1",
     "pytest>=9.1.1",
 ]
