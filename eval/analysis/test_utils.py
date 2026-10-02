@@ -568,6 +568,56 @@ def test_canonical_batch_admits_a_system_outcome_that_stopped_the_run(
     assert utils.validate_canonical_batch(batch, "e-perf-5") == "1" * 40
 
 
+EKUIPER_RULE_RUNNING = {"status": "running", "message": "", "lastStartTimestamp": 1_000}
+
+
+def ekuiper_health(after_service: dict, after_rule: dict | None) -> dict:
+    """``ekuiper-health.json`` whose snapshot after the run differs from the one before it."""
+    unit = {"NRestarts": 0, "ExecMainStatus": 0, "MainPID": 4242}
+    return {
+        "schema_version": 1,
+        "unit": "kuiper.service",
+        "rule": "pipeline_a",
+        "before": {"captured_at_ns": 1, "service": unit, "rule_status": EKUIPER_RULE_RUNNING},
+        "after": {
+            "captured_at_ns": 2,
+            "service": {**unit, **after_service},
+            "rule_status": after_rule,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("reason", "after_service", "after_rule"),
+    [
+        ("runtime-exit", {"NRestarts": 1, "MainPID": 4343}, EKUIPER_RULE_RUNNING),
+        ("runtime-exit", {"MainPID": 0, "ExecMainStatus": 1}, None),
+        ("rule-error", {}, {**EKUIPER_RULE_RUNNING, "status": "stopped by error"}),
+        ("rule-error", {}, {**EKUIPER_RULE_RUNNING, "message": "retrying after error: x"}),
+    ],
+)
+def test_canonical_batch_admits_an_ekuiper_failure_as_a_stopped_run(
+    fake_results: pathlib.Path, reason: str, after_service: dict, after_rule: dict | None
+):
+    batch = perf_unit(
+        fake_results, {"status": "failed", "failure_class": "sut_outcome", "reasons": [reason]}
+    )
+    leaf = batch / "delay-50ms/run-01-attempt-01"
+    metadata = json.loads((leaf / "metadata.json").read_text())
+    metadata.update(system="ekuiper", exit_codes={"ekuiper": 0})
+    (leaf / "metadata.json").write_text(json.dumps(metadata))
+    (leaf / "percentiles.json").unlink()
+    (leaf / "ekuiper-health.json").write_text(
+        json.dumps(ekuiper_health({}, EKUIPER_RULE_RUNNING))
+    )
+    with pytest.raises(ValueError, match="differs from its outcome evidence"):
+        utils.validate_canonical_batch(batch, "e-perf-5")
+
+    (leaf / "ekuiper-health.json").write_text(json.dumps(ekuiper_health(after_service, after_rule)))
+
+    assert utils.validate_canonical_batch(batch, "e-perf-5") == "1" * 40
+
+
 def test_canonical_batch_rejects_a_retry_after_a_system_outcome(
     fake_results: pathlib.Path,
 ):

@@ -123,7 +123,8 @@ the reason `interrupted`.
 
 | Reason | Class | When |
 | --- | --- | --- |
-| `runtime-exit` | system outcome | The runtime exited non-zero after it started the pipeline, crashed, or was killed after its shutdown grace period (see [Runtime exit status](#runtime-exit-status)). |
+| `runtime-exit` | system outcome | The runtime exited non-zero after it started the pipeline, crashed, or was killed after its shutdown grace period (see [Runtime exit status](#runtime-exit-status)). For eKuiper, `ekuiper-health.json` shows a different `NRestarts` or `MainPID` for the `kuiper` unit after the run than before it (see [eKuiper health](#ekuiper-health)). |
+| `rule-error` | system outcome | eKuiper kept its main process, but `pipeline_a` did not report `running` at the end of the run, or its status carried a `message` (see [eKuiper health](#ekuiper-health)). |
 | `containment-escape` | system outcome | `containment.json` records `contained: false`. |
 | `message-loss` | system outcome | Messages were lost where the criterion expects none: E-Swap-1, the E-Swap-3 hot swap, E-Swap-4, E-Swap-5, the candidate swap and rollback sessions, and the E-Backpressure `slow` policy. |
 | `duplicates` | system outcome | Messages were delivered twice where the criterion expects none, in the same experiments. |
@@ -140,18 +141,28 @@ entry there and its check. The runner writes the receipt from those reasons afte
 the verifier accepted the leaf, and the analysis rejects a receipt whose reasons
 differ from the ones the artefacts give.
 
-A run that the system under test stopped early (`runtime-exit`, `swap-failed` or
-`rollback-failed`) is not post-processed. The verifier checks only what the
-harness owns: the core artefacts, provenance, host facts, Pi telemetry and the
-measurement window. When the runtime died before its sink exported
-`measurement-window.json`, the harness writes the attempt's own wall-clock bounds in
-its place, so the leaf still verifies. A run that completed with a failed criterion
-goes through every check. The verifier prints an `OUTCOME` line for each system
-outcome and still exits 0 when nothing else is wrong. A runtime that dies before
-its control plane answers, or that dies when E-Swap-3 restarts it, is judged by its
-exit code like any other run. One path still ends as an infrastructure failure
-although the system under test may have caused it: an E-Swap-3 restart whose new
-runtime keeps running but never answers its control plane.
+A run that the system under test stopped early (`runtime-exit`, `rule-error`,
+`swap-failed` or `rollback-failed`) is not post-processed. The verifier checks only
+what the harness owns: the core artefacts, provenance, host facts, Pi telemetry, the
+measurement window and, for eKuiper, `ekuiper-health.json`. When the runtime died
+before its sink exported `measurement-window.json`, the harness writes the attempt's
+own wall-clock bounds in its place, so the leaf still verifies. An eKuiper failure
+leaves every harness and load-generator artefact in place, because eKuiper writes
+nothing into the leaf, but those artefacts measure a pipeline that died or stopped
+during the window. Post-processing them would turn the failure into latency,
+disruption and capacity numbers, and a check that the failure broke would retry the
+attempt as infrastructure, so an eKuiper run with `runtime-exit` or `rule-error`
+stops early as a WAFER run with `runtime-exit` does. A run that completed with a
+failed criterion goes through every check. The verifier prints an `OUTCOME` line for
+each system outcome and still exits 0 when nothing else is wrong. A runtime that dies
+before its control plane answers, or that dies when E-Swap-3 restarts it, is judged
+by its exit code like any other run. An eKuiper rule that does not run cleanly before
+warm-up never started the measured pipeline and fails the attempt as infrastructure,
+as a WAFER startup refusal does. Two paths still end as infrastructure failures
+although the system under test may have caused them: an E-Swap-3 restart whose new
+runtime keeps running but never answers its control plane, and an E-Swap-3 eKuiper
+rule restart whose REST calls fail or whose rule does not report `running` within
+10 seconds.
 
 `final_campaign.attempt_policy` in `canonical-matrix.json` sets the retry cap: one
 infrastructure retry per unit, and none for the experiments in `gate_experiments`
@@ -249,6 +260,8 @@ before reading. The matrix below is authoritative:
 | `host-load-ladder.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Append-only clean-boot session receipt with the exact eight-phase order, per-phase pass/fail/not-run status, 75 °C stop limit, boot identity, bounded sample counts, diagnostic/final admission decisions, source state, and the PMIC internal-rail boundary. |
 | `host-telemetry.csv` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | One-second phase-labeled temperature, CPU frequency, throttling, PMIC internal-rail proxy, memory availability/pressure, USB throughput, boot ID, wall-clock, and monotonic samples. No per-message data. |
 | `kernel-io.log`, `usb-integrity.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Bounded matching kernel I/O errors and per-USB-phase byte/duration/SHA-256 reconciliation. Any recorded kernel I/O error or hash mismatch stops the ladder and blocks final admission. |
+| `ekuiper-audit.json` | Every eKuiper run: E-Perf-1, E-Perf-2, E-Perf-10, E-Perf-Capacity-Knee, the capacity scout, the E-Swap-3 `ekuiper-restart` arm and E-Compare-eKuiper-Profile | `canonical_runner.py` | Taken before warm-up: the package version and install receipt, the effective `kuiper.service` properties and unit text with its SHA-256, the path and SHA-256 of `/etc/kuiper/mqtt_source.yaml` (which must equal `eval/ekuiper/mqtt-source-default.yaml`) and of `/etc/kuiper/kuiper.yaml`, the process tree with each process's `Cpus_allowed_list`, the active stream and rule, and the seed script's dry run. `metadata.json` names it and its SHA-256 under `comparator_audit`. |
+| `ekuiper-health.json` | Same as `ekuiper-audit.json` | `canonical_runner.py` | The `kuiper` unit and `pipeline_a` before warm-up and after the run; see [eKuiper health](#ekuiper-health). |
 | `ekuiper-runtime-summary.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Diagnostic run identity, interval alignment, latency percentiles, bounded external `/proc` process summary when available, and the Go GC trace summary for the measurement window (`gc_runtime_metrics`) when the profiled run logged one. It never infers GC events from RSS or latency. |
 | `ekuiper-gctrace.log` | E-Compare-eKuiper-Profile | `canonical_runner.py` | One line per Go GC cycle that the `kuiper.service` journal recorded from eKuiper start to stop: the journal receive time in Unix-epoch nanoseconds, a space, and the unchanged `GODEBUG=gctrace=1` line. Empty in the unprofiled control. |
 | `profiler-overhead.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Profiler state, matched rate/run pair, collection-enabled flag, and the run-level profiled-minus-control estimator label. It declares association-only interpretation and is not primary evidence. |
@@ -642,7 +655,10 @@ comes from batch `capacity-scout-v3-20260904T045000Z`; a later scout batch does 
 change it. The grid's provenance is the summary and candidate hashes recorded in
 `eval/canonical-matrix.json`, not a replay of that batch: the runner replays a
 batch against its current system set, so a batch recorded before the diagnostic
-arm existed cannot be resumed with the current runner.
+arm existed cannot be resumed with the current runner. The scout keeps its own stop
+rules, so a WAFER runtime that exits non-zero, or an eKuiper run whose
+`ekuiper-health.json` gives `runtime-exit` or `rule-error`, fails the scout attempt
+as infrastructure instead of being admitted as a system outcome.
 
 Besides MQTT loopback, native, WAFER and eKuiper, the scout runs a diagnostic arm,
 `wafer-max-inflight-1`. It is the WAFER scout pipeline with `max_inflight = 1` on
@@ -803,6 +819,64 @@ their contract being checked.
 ```sh
 python3 eval/scripts/verify-result-contract.py --canonical <pi-batch> --match <jetson-batch> --match <x86-batch>
 ```
+
+### eKuiper health
+
+The harness starts and stops eKuiper as the `kuiper` systemd unit, so it has no
+process exit code to read. Before warm-up, every eKuiper run waits up to 10 seconds
+for `pipeline_a` to report `running`, the same wait E-Swap-3 uses after it restarts
+the rule, and then takes a snapshot of the unit and the rule. It takes a second
+snapshot after the run, before it stops the unit. Both go into
+`ekuiper-health.json` (rule status shortened):
+
+```json
+{
+  "schema_version": 1,
+  "unit": "kuiper.service",
+  "rule": "pipeline_a",
+  "before": {
+    "captured_at_ns": 1784644215000000000,
+    "service": {"NRestarts": 0, "ExecMainStatus": 0, "MainPID": 4242},
+    "rule_status": {"status": "running", "message": "", "lastStartTimestamp": 1784644214512},
+    "rule_status_error": null
+  },
+  "after": {
+    "captured_at_ns": 1784644377000000000,
+    "service": {"NRestarts": 0, "ExecMainStatus": 0, "MainPID": 4242},
+    "rule_status": {"status": "running", "message": "", "lastStartTimestamp": 1784644214512},
+    "rule_status_error": null
+  }
+}
+```
+
+`service` holds `systemctl show kuiper.service -p NRestarts,ExecMainStatus,MainPID`.
+`rule_status` is the body of `GET http://127.0.0.1:9081/rules/pipeline_a/status`,
+unchanged, or `null` with the error in `rule_status_error` when the request failed.
+A rule that is not `running` with an empty `message` before warm-up fails the
+attempt as infrastructure. After the run:
+
+- A different `NRestarts` or `MainPID` means the unit lost or replaced its main
+  process: a `runtime-exit` outcome.
+- Otherwise a rule status that cannot be read, is not `running`, or carries a
+  `message` is a `rule-error` outcome. eKuiper keeps the status `running` while it
+  retries a failed rule and leaves `retrying after error: ...` in `message`, even
+  after a retry succeeded.
+- The per-operator `exceptions_total` counters are not judged, because they also
+  count messages dropped from a full buffer under overload.
+
+`exit_codes.ekuiper` in `metadata.json` follows from the snapshots: `0` when the
+main process survived the run, the unit's `ExecMainStatus` when it has no main
+process at the end, and `null` when systemd already started a new one, which
+resets `ExecMainStatus`.
+
+The verifier checks `ekuiper-health.json` on every canonical eKuiper leaf,
+including one that stopped early. It rejects a leaf whose snapshots are missing or
+malformed, do not bracket `measurement-window.json`, show a rule that was not
+running cleanly before warm-up, disagree with `exit_codes.ekuiper`, or name another
+main PID than `ekuiper-audit.json`. E-Swap-3 stops and starts the rule itself, so
+there `lastStartTimestamp` must move; in every other experiment a moved
+`lastStartTimestamp` without a unit restart means something outside the run
+started the rule, and the leaf is rejected.
 
 ### Host profile fields
 

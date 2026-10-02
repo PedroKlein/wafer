@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -1707,8 +1708,76 @@ def test_swap3_postprocess_removes_publisher_timing_temporary(
     assert (tmp_path / "disruption-analysis.json").is_file()
 
 
+class FakeEkuiper:
+    """The kuiper unit as `systemctl show` reports it and pipeline_a as its REST API does."""
+
+    def __init__(self) -> None:
+        self.unit = {"NRestarts": 0, "ExecMainStatus": 0, "MainPID": 4242}
+        self.rule: dict | None = {
+            "status": "running",
+            "message": "",
+            "lastStartTimestamp": 1_000,
+            "lastStopTimestamp": 0,
+        }
+        self.pending_statuses: list[str] = []
+        self.events: list[str] = []
+
+    def check_output(self, command: list[str], **kwargs: object) -> str:
+        assert list(command[:3]) == ["systemctl", "show", "kuiper.service"], command
+        return "".join(f"{name}={value}\n" for name, value in self.unit.items())
+
+    def urlopen(self, url: str, timeout: float | None = None) -> io.BytesIO:
+        assert url == "http://127.0.0.1:9081/rules/pipeline_a/status", url
+        self.events.append("rule-status")
+        if self.rule is None:
+            raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        if self.pending_statuses:
+            return io.BytesIO(
+                json.dumps({**self.rule, "status": self.pending_statuses.pop(0)}).encode()
+            )
+        return io.BytesIO(json.dumps(self.rule).encode())
+
+    def crash(self) -> None:
+        """The main process dies; systemd starts a new one, which starts the rule again."""
+        self.unit.update(NRestarts=self.unit["NRestarts"] + 1, MainPID=self.unit["MainPID"] + 1)
+        self.restart_rule()
+
+    def die(self, status: int) -> None:
+        """The main process exits and systemd has not started a new one yet."""
+        self.unit.update(MainPID=0, ExecMainStatus=status)
+        self.rule = None
+
+    def fail_rule(self) -> None:
+        self.rule = {**self.rule, "status": "stopped by error", "message": "sink failed"}
+
+    def retry_rule(self) -> None:
+        """eKuiper restarts the rule's failed topology and keeps the rule running."""
+        self.rule = {**self.rule, "message": "retrying after error: sink failed"}
+
+    def restart_rule(self) -> None:
+        self.rule = {**self.rule, "lastStartTimestamp": self.rule["lastStartTimestamp"] + 60_000}
+
+
+@pytest.fixture
+def ekuiper(monkeypatch: pytest.MonkeyPatch) -> FakeEkuiper:
+    fake = FakeEkuiper()
+    monkeypatch.setattr(runner.subprocess, "check_output", fake.check_output)
+    monkeypatch.setattr(runner.urllib.request, "urlopen", fake.urlopen)
+    return fake
+
+
+def fake_ekuiper_audit(
+    root: Path, destination: Path, cpus: str, gctrace: bool = False
+) -> Path:
+    path = destination / "ekuiper-audit.json"
+    path.write_text(
+        '{"service":{"properties":{"MainPID":"4242"}},"process_snapshot":{"processes":[]}}\n'
+    )
+    return path
+
+
 def test_swap3_stops_subscriber_when_publisher_window_ends(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ekuiper: FakeEkuiper
 ) -> None:
     output = tmp_path / "attempt"
     config = tmp_path / "ekuiper.toml"
@@ -1725,7 +1794,7 @@ def test_swap3_stops_subscriber_when_publisher_window_ends(
         system="ekuiper",
     )
     event_ns = 61_000_000_000
-    times = iter((0, 1_000_000_000, event_ns, event_ns, event_ns + 1_000_000))
+    times = iter((0, 500_000_000, 1_000_000_000, event_ns, event_ns, event_ns + 1_000_000))
     class Process:
         def __init__(self, returncode: int) -> None:
             self.returncode = returncode
@@ -1808,7 +1877,11 @@ def test_both_host_samplers_pin_themselves_to_the_support_cpus(tmp_path: Path, m
     ("state", "gctrace"), [("unprofiled-control", False), ("profiled", True)]
 )
 def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, gctrace: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    gctrace: bool,
+    ekuiper: FakeEkuiper,
 ) -> None:
     output = tmp_path / "attempt"
     config = tmp_path / "ekuiper.toml"
@@ -1878,7 +1951,7 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
 
 
 def test_profiled_ekuiper_run_reads_gctrace_after_ekuiper_stops(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ekuiper: FakeEkuiper
 ) -> None:
     output = tmp_path / "attempt"
     config = tmp_path / "ekuiper.toml"
@@ -5200,6 +5273,265 @@ def test_disruption_hot_swap_request_that_fails_is_a_failed_swap(
     receipt = json.loads((output / "canonical-status.json").read_text())
     assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["swap-failed"])
     assert json.loads((output / "swap_requests.json").read_text())[0]["http_status"] == 500
+
+
+def stub_ekuiper_run(monkeypatch: pytest.MonkeyPatch, ekuiper: FakeEkuiper) -> list[list[str]]:
+    """Stand in for the host of an eKuiper run; the load generator commands are recorded."""
+    stub_runner_host(monkeypatch, runtime_exit=0)
+    commands: list[list[str]] = []
+    stub_run = runner.subprocess.run
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if command == ["publish"]:
+            ekuiper.events.append("publish")
+        commands.append(command)
+        return stub_run(command, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active, gctrace=False: None)
+    monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_ekuiper_audit)
+    monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
+    monkeypatch.setattr(runner, "wait_for_subscriber", lambda process, timeout=30: 0)
+    return commands
+
+
+def ekuiper_item(experiment: str, condition: str) -> RunItem:
+    return next(
+        item
+        for item in build_schedule({experiment}, seed=1729)
+        if item.condition == condition and item.run_index == 1
+    )
+
+
+def test_ekuiper_run_waits_for_the_rule_before_warm_up_and_records_its_health(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    ekuiper.pending_statuses = ["starting", "starting"]
+    output = tmp_path / "ekuiper/run-01-attempt-01"
+
+    assert runner.run_ekuiper_item(
+        ROOT, ekuiper_item("e-perf-1", "ekuiper"), runner.AttemptSelection(output, False)
+    )
+
+    # Three polls until the rule runs, the snapshot before warm-up, two publish phases, and
+    # the snapshot after the run.
+    assert ekuiper.events == ["rule-status"] * 4 + ["publish", "publish", "rule-status"]
+    health = json.loads((output / "ekuiper-health.json").read_text())
+    assert (health["unit"], health["rule"]) == ("kuiper.service", "pipeline_a")
+    for snapshot in (health["before"], health["after"]):
+        assert snapshot["service"] == {"NRestarts": 0, "ExecMainStatus": 0, "MainPID": 4242}
+        assert snapshot["rule_status"]["status"] == "running"
+    assert health["before"]["captured_at_ns"] < health["after"]["captured_at_ns"]
+    assert json.loads((output / "metadata.json").read_text())["exit_codes"] == {"ekuiper": 0}
+    assert json.loads((output / "canonical-status.json").read_text())["status"] == "passed"
+
+
+def test_ekuiper_rule_that_already_failed_does_not_start_warm_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    ekuiper.retry_rule()
+    output = tmp_path / "ekuiper/run-01-attempt-01"
+
+    assert not runner.run_ekuiper_item(
+        ROOT, ekuiper_item("e-perf-1", "ekuiper"), runner.AttemptSelection(output, False)
+    )
+
+    assert "publish" not in ekuiper.events
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
+
+
+FAILURES = {
+    "unit restarted": (FakeEkuiper.crash, ["runtime-exit"], None),
+    "unit down": (lambda fake: fake.die(1), ["runtime-exit"], 1),
+    "rule stopped by error": (FakeEkuiper.fail_rule, ["rule-error"], 0),
+    "rule retrying after error": (FakeEkuiper.retry_rule, ["rule-error"], 0),
+}
+
+
+@pytest.mark.parametrize(("failure", "reasons", "exit_code"), FAILURES.values(), ids=FAILURES)
+def test_ekuiper_failure_during_a_target_load_run_is_an_admitted_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    failure: Callable[[FakeEkuiper], None],
+    reasons: list[str],
+    exit_code: int | None,
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    monkeypatch.setattr(
+        runner.subprocess,
+        "Popen",
+        lambda command, **kwargs: failure(ekuiper) or StoppedRuntime(0),
+    )
+    output = tmp_path / "ekuiper/run-01-attempt-01"
+
+    assert runner.run_ekuiper_item(
+        ROOT, ekuiper_item("e-perf-1", "ekuiper"), runner.AttemptSelection(output, False)
+    )
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", reasons)
+    metadata = json.loads((output / "metadata.json").read_text())
+    assert metadata["exit_codes"] == {"ekuiper": exit_code}
+
+
+@pytest.mark.parametrize(("failure", "reasons", "exit_code"), FAILURES.values(), ids=FAILURES)
+def test_ekuiper_failure_during_a_capacity_run_is_an_admitted_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    failure: Callable[[FakeEkuiper], None],
+    reasons: list[str],
+    exit_code: int | None,
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    monkeypatch.setattr(runner, "_running_sut_processes", lambda: [])
+
+    def launch(command: list[str], **kwargs: object) -> StoppedRuntime:
+        if command == ["publish"]:
+            failure(ekuiper)
+        return StoppedRuntime(0)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", launch)
+    output = tmp_path / "ekuiper/rate-04000/run-01-attempt-01"
+
+    assert runner.run_rate_sweep_item(
+        ROOT, ekuiper_item("e-perf-10", "ekuiper/rate-04000"), runner.AttemptSelection(output, False)
+    )
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", reasons)
+    metadata = json.loads((output / "metadata.json").read_text())
+    assert metadata["exit_codes"] == {"ekuiper": exit_code}
+    assert not (output / "capacity-run.json").exists()
+
+
+def test_ekuiper_failure_in_the_capacity_scout_fails_the_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    monkeypatch.setattr(runner, "_running_sut_processes", lambda: [])
+
+    def launch(command: list[str], **kwargs: object) -> StoppedRuntime:
+        if command == ["publish"]:
+            ekuiper.crash()
+        return StoppedRuntime(0)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", launch)
+    item = build_capacity_scout_rate_block(4_000, ("ekuiper",))[0]
+    output = tmp_path / "ekuiper/rate-04000/run-01-attempt-01"
+
+    assert not runner.run_rate_sweep_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
+    assert "eKuiper failed during the run: runtime-exit" in receipt["detail"]
+
+
+@pytest.mark.parametrize(("crash", "reasons"), [(False, None), (True, ["runtime-exit"])])
+def test_swap3_rule_restart_is_the_arm_action_not_an_ekuiper_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    crash: bool,
+    reasons: list[str] | None,
+) -> None:
+    commands = stub_ekuiper_run(monkeypatch, ekuiper)
+    clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
+    monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
+    output = tmp_path / "ekuiper-restart/run-01-attempt-01"
+    stub_run = runner.subprocess.run
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if command[0] == "curl" and command[-1].endswith("/start"):
+            ekuiper.restart_rule()
+        return stub_run(command, **kwargs)
+
+    def launch(command: list[str], **kwargs: object) -> StoppedRuntime:
+        if command == ["publish"]:
+            now = next(clock)
+            (output / "publisher-timing.json").write_text(
+                json.dumps(
+                    {
+                        "measurement_started_unix_epoch_ns": now,
+                        "event_unix_epoch_ns": now,
+                        "event_offset_ns": runner.SWAP3_EVENT_OFFSET_NS,
+                    }
+                )
+            )
+            if crash:
+                ekuiper.crash()
+        return StoppedRuntime(0)
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    monkeypatch.setattr(runner.subprocess, "Popen", launch)
+
+    assert runner.run_restart_item(
+        ROOT, ekuiper_item("e-swap-3", "ekuiper-restart"), runner.AttemptSelection(output, False)
+    )
+
+    assert [command[-1].rsplit("/", 1)[-1] for command in commands if command[0] == "curl"] == [
+        "stop",
+        "start",
+    ]
+    health = json.loads((output / "ekuiper-health.json").read_text())
+    assert (
+        health["after"]["rule_status"]["lastStartTimestamp"]
+        > health["before"]["rule_status"]["lastStartTimestamp"]
+    )
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert receipt.get("reasons") == reasons
+    exit_code = json.loads((output / "metadata.json").read_text())["exit_codes"]["ekuiper"]
+    assert exit_code == (None if crash else 0)
+
+
+def test_ekuiper_audit_hashes_the_engine_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = tmp_path / "etc/kuiper"
+    config.mkdir(parents=True)
+    shutil.copy(ROOT / "eval/ekuiper/mqtt-source-default.yaml", config / "mqtt_source.yaml")
+    (config / "kuiper.yaml").write_text("basic:\n  restPort: 9081\n")
+    receipt = tmp_path / "wafer-install-receipt.json"
+    receipt.write_text(json.dumps({"version": "2.1.5", "sha256": "a" * 64}))
+    monkeypatch.setattr(runner, "EKUIPER_CONFIG_DIR", config)
+    monkeypatch.setattr(runner, "EKUIPER_INSTALL_RECEIPT", receipt)
+    pid = os.getpid()
+    affinity = next(
+        line.split(":", 1)[1].strip()
+        for line in Path("/proc/self/status").read_text().splitlines()
+        if line.startswith("Cpus_allowed_list:")
+    )
+    real_check_output = subprocess.check_output
+
+    def check_output(command: list[str], **kwargs: object) -> str:
+        if command[:2] == ["systemctl", "show"]:
+            return f"MainPID={pid}\nEnvironment=HOME=/var/lib/kuiper\n"
+        if command[:2] == ["systemctl", "cat"]:
+            return "[Service]\nExecStart=/usr/bin/kuiperd\n"
+        if command[0] == "ps":
+            return f"{pid} 1 kuiperd /usr/bin/kuiperd\n"
+        if command[0] == "dpkg-query":
+            return "2.1.5"
+        return real_check_output(command, **kwargs)
+
+    def urlopen(url: str, timeout: float | None = None) -> io.BytesIO:
+        body = {"options": {"concurrency": 1}} if url.endswith("/rules/pipeline_a") else {}
+        return io.BytesIO(json.dumps(body).encode())
+
+    monkeypatch.setattr(runner.subprocess, "check_output", check_output)
+    monkeypatch.setattr(runner.urllib.request, "urlopen", urlopen)
+
+    audit = json.loads(runner.capture_ekuiper_audit(ROOT, tmp_path, affinity).read_text())
+
+    assert audit["kuiper_config"] == {
+        "path": str(config / "kuiper.yaml"),
+        "sha256": hashlib.sha256(b"basic:\n  restPort: 9081\n").hexdigest(),
+    }
+    assert audit["mqtt_source_config"]["path"] == str(config / "mqtt_source.yaml")
 
 
 def test_summaries_continue_past_one_a_system_outcome_left_incomplete(

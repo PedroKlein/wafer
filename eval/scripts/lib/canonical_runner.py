@@ -33,12 +33,16 @@ if str(RESULTS_LAYOUT_ROOT) not in sys.path:
 
 from attempts import (
     ADMITTED,
+    EKUIPER_UNIT_PROPERTIES,
     INCOMPLETE_RUN_REASONS,
     INFRASTRUCTURE,
     PASSED,
     SUT_OUTCOME,
     batch_units,
     condition_attempts,
+    ekuiper_exit_code,
+    ekuiper_health_reasons,
+    ekuiper_rule_running,
     infrastructure_retries,
     read_attempt,
     runtime_exit_is_outcome,
@@ -191,6 +195,8 @@ CANDIDATE_RATE_MSG_S = 1_000
 EKUIPER_PROFILE_RATES = (1_000, 4_000, 8_000)
 EKUIPER_PROFILE_STATES = ("profiled", "unprofiled-control")
 EKUIPER_GCTRACE_DROP_IN = Path("/run/systemd/system/kuiper.service.d/wafer-gctrace.conf")
+EKUIPER_CONFIG_DIR = Path("/etc/kuiper")
+EKUIPER_INSTALL_RECEIPT = Path("/var/lib/kuiper/wafer-install-receipt.json")
 EKUIPER_GCTRACE_PREFIX = re.compile(r"gc \d+ @")
 EKUIPER_GCTRACE_LINE = re.compile(
     r"gc (?P<cycle>\d+) @[0-9.]+s \d+%: "
@@ -3872,6 +3878,59 @@ def wait_for_ekuiper_rule_ready(rule_id: str, timeout_secs: float = 10.0) -> Non
     raise RuntimeError(f"eKuiper rule did not become ready: {rule_id}")
 
 
+def ekuiper_health_snapshot() -> dict:
+    """systemd's view of the kuiper unit and the rule's own status at one point of a run.
+
+    A rule status that cannot be read is recorded with its error, not raised: at the end
+    of a run it is evidence that eKuiper stopped serving the rule.
+    """
+    output = subprocess.check_output(
+        ["systemctl", "show", "kuiper.service", "-p", ",".join(EKUIPER_UNIT_PROPERTIES)],
+        text=True,
+    )
+    values = dict(line.split("=", maxsplit=1) for line in output.splitlines() if "=" in line)
+    missing = [name for name in EKUIPER_UNIT_PROPERTIES if not values.get(name, "").isdigit()]
+    if missing:
+        raise ValueError(f"systemctl show kuiper.service has no numeric {', '.join(missing)}")
+    snapshot = {
+        "captured_at_ns": time.time_ns(),
+        "service": {name: int(values[name]) for name in EKUIPER_UNIT_PROPERTIES},
+        "rule_status": None,
+        "rule_status_error": None,
+    }
+    try:
+        snapshot["rule_status"] = _url_value("http://127.0.0.1:9081/rules/pipeline_a/status")
+    except (OSError, ValueError, http.client.HTTPException) as error:
+        snapshot["rule_status_error"] = str(error)
+    return snapshot
+
+
+def ekuiper_run_start() -> dict:
+    """Wait until the rule runs and take the snapshot that the run's warm-up starts from.
+
+    A rule that does not run cleanly here never started the measured pipeline, so it fails
+    the attempt as infrastructure, like a WAFER runtime that refuses to start.
+    """
+    wait_for_ekuiper_rule_ready("pipeline_a")
+    before = ekuiper_health_snapshot()
+    if before["service"]["MainPID"] == 0 or not ekuiper_rule_running(before["rule_status"]):
+        raise RuntimeError(f"eKuiper is not running pipeline_a before warm-up: {before}")
+    return before
+
+
+def write_ekuiper_health(output: Path, before: dict) -> dict:
+    """Take the snapshot after the run and keep both in ``ekuiper-health.json``."""
+    health = {
+        "schema_version": 1,
+        "unit": "kuiper.service",
+        "rule": "pipeline_a",
+        "before": before,
+        "after": ekuiper_health_snapshot(),
+    }
+    write_json_atomic(output / "ekuiper-health.json", health)
+    return health
+
+
 def hot_swap_offsets(item: RunItem) -> list[float]:
     if item.experiment == "e-swap-4":
         return [60.0]
@@ -4184,6 +4243,8 @@ def run_restart_item(
     subscriber: subprocess.Popen | None = None
     runtime_exit = 0
     ekuiper_audit: Path | None = None
+    ekuiper_before: dict | None = None
+    ekuiper_health: dict | None = None
     is_ekuiper = item.system == "ekuiper"
     telemetry = start_pi_telemetry(root, output, item)
     try:
@@ -4206,6 +4267,7 @@ def run_restart_item(
         facts = json.loads(facts_path.read_text())
         if is_ekuiper:
             ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
+            ekuiper_before = ekuiper_run_start()
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = facts["git_sha"]
         environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
@@ -4359,6 +4421,10 @@ def run_restart_item(
                     f"loadgen failed: publisher={publisher_code}, subscriber={subscriber_code}"
                 )
             measurement_finished_ns = time.time_ns()
+            if ekuiper_before is not None:
+                # The rule stop and start above leave the unit's main process alone, so only
+                # a crash or a failed rule shows in this snapshot.
+                ekuiper_health = write_ekuiper_health(output, ekuiper_before)
 
         (output / "measurement-window.json").write_text(
             json.dumps(
@@ -4397,7 +4463,7 @@ def run_restart_item(
                 "config_path": item.config,
                 "config_sha256": config_sha,
                 "loadgen": {"profile_path": item.loadgen_profile, "warmup_secs": item.warmup_secs},
-                "exit_codes": {"ekuiper": 0},
+                "exit_codes": {"ekuiper": ekuiper_exit_code(ekuiper_health)},
                 "comparator_audit": {
                     "path": ekuiper_audit.name,
                     "sha256": hashlib.sha256(ekuiper_audit.read_bytes()).hexdigest(),
@@ -4564,14 +4630,14 @@ def capture_ekuiper_audit(
     unit_text = subprocess.check_output(
         ["systemctl", "cat", "kuiper.service"], text=True
     )
-    source_config = Path("/etc/kuiper/mqtt_source.yaml")
+    source_config = EKUIPER_CONFIG_DIR / "mqtt_source.yaml"
     source_text = source_config.read_text()
     expected_source_text = (root / "eval/ekuiper/mqtt-source-default.yaml").read_text()
     if source_text != expected_source_text:
         raise ValueError("eKuiper MQTT source configuration differs from the canonical file")
-    install_receipt = json.loads(
-        Path("/var/lib/kuiper/wafer-install-receipt.json").read_text()
-    )
+    kuiper_config = EKUIPER_CONFIG_DIR / "kuiper.yaml"
+    kuiper_text = kuiper_config.read_text()
+    install_receipt = json.loads(EKUIPER_INSTALL_RECEIPT.read_text())
     version = subprocess.check_output(
         ["dpkg-query", "-W", "-f=${Version}", "kuiper"], text=True
     ).strip()
@@ -4601,6 +4667,10 @@ def capture_ekuiper_audit(
                 "protocol_version": "3.1.1",
                 "insecure_skip_verify": False,
             },
+        },
+        "kuiper_config": {
+            "path": str(kuiper_config),
+            "sha256": hashlib.sha256(kuiper_text.encode()).hexdigest(),
         },
         "process_snapshot": snapshot,
         "stream": _url_value("http://127.0.0.1:9081/streams/wafer_telemetry"),
@@ -4702,6 +4772,7 @@ def run_ekuiper_item(
         profile_context, pids = build_ekuiper_profile_context(
             item, json.loads(ekuiper_audit.read_text())
         )
+        ekuiper_before = ekuiper_run_start()
         with (output / "stdout.log").open("ab") as log:
             subprocess.run(
                 loadgen_command(root, item, "publish", duration=item.warmup_secs),
@@ -4741,6 +4812,7 @@ def run_ekuiper_item(
             if process_sampler is not None:
                 process_sampler.stop()
                 process_sampler = None
+        ekuiper_health = write_ekuiper_health(output, ekuiper_before)
         if publisher.returncode != 0 or subscriber_code != 0:
             raise RuntimeError(
                 f"loadgen failed: publisher={publisher.returncode}, subscriber={subscriber_code}"
@@ -4777,7 +4849,7 @@ def run_ekuiper_item(
                 "profile_path": item.loadgen_profile,
                 "warmup_secs": item.warmup_secs,
             },
-            "exit_codes": {"ekuiper": 0},
+            "exit_codes": {"ekuiper": ekuiper_exit_code(ekuiper_health)},
             "comparator_audit": {
                 "path": ekuiper_audit.name,
                 "sha256": hashlib.sha256(ekuiper_audit.read_bytes()).hexdigest(),
@@ -5289,6 +5361,8 @@ def run_rate_sweep_item(
     ekuiper_active = False
     runtime_exit = 0
     ekuiper_audit: Path | None = None
+    ekuiper_before: dict | None = None
+    ekuiper_health: dict | None = None
     try:
         set_ekuiper_active(root, False)
         existing = _running_sut_processes()
@@ -5357,6 +5431,7 @@ def run_rate_sweep_item(
         elif item.system == "ekuiper":
             ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
             processes = json.loads(ekuiper_audit.read_text())["process_snapshot"]["processes"]
+            ekuiper_before = ekuiper_run_start()
         else:
             processes = []
         _write_process_audit(output, item, processes)
@@ -5419,6 +5494,8 @@ def run_rate_sweep_item(
             subscriber_code = subscriber.wait(timeout=10)
         sampler.stop()
         sampler = None
+        if ekuiper_before is not None:
+            ekuiper_health = write_ekuiper_health(output, ekuiper_before)
         if publisher_code != 0 or subscriber_code != 0:
             raise RuntimeError(
                 f"loadgen failed: publisher={publisher_code}, subscriber={subscriber_code}"
@@ -5446,6 +5523,12 @@ def run_rate_sweep_item(
                 item.experiment == "capacity-scout" or not runtime_exit_is_outcome(runtime_exit)
             ):
                 raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
+        if ekuiper_health is not None and item.experiment == "capacity-scout":
+            # The scout keeps its own stop rules, so a failed eKuiper run is not an outcome
+            # there, the same as a WAFER runtime exit.
+            reasons = ekuiper_health_reasons(ekuiper_health)
+            if reasons:
+                raise RuntimeError(f"eKuiper failed during the run: {', '.join(reasons)}")
         if ekuiper_active:
             set_ekuiper_active(root, False)
             ekuiper_active = False
@@ -5456,7 +5539,7 @@ def run_rate_sweep_item(
         config_sha = hashlib.sha256(config.read_bytes()).hexdigest()
         if item.system in {"ekuiper", "mqtt-loopback"}:
             exit_codes = (
-                {"ekuiper": 0}
+                {"ekuiper": ekuiper_exit_code(ekuiper_health)}
                 if item.system == "ekuiper"
                 else {"publisher": publisher_code, "subscriber": subscriber_code}
             )
