@@ -30,7 +30,7 @@ The runtime architecture *is* the contribution. No single feature is elevated; t
 ## Hardware Targets
 
 - **Primary:** Raspberry Pi 5 (4 GB RAM, Cortex-A76, aarch64).
-- **Secondary validation:** NVIDIA Jetson CPU and CUDA-provider execution of the MNIST path is verified on the restoration candidate. The run is diagnostic, not part of the final performance campaign, and CUDA teardown stability remains unresolved.
+- **Replication:** Jetson Orin Nano (CPU only) and an x86-64 Linux host run the same experiments as the Pi. The earlier CUDA-provider MNIST run on Jetson is a separate diagnostic, and its teardown stability remains unresolved.
 - **Development:** Apple Silicon / x86-64 Linux (any machine that runs `wasm32-wasip2` guests).
 
 ## Key Decisions

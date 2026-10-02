@@ -101,8 +101,8 @@ repository-local result trees remain unchanged.
 
 - `shakedown-macos` — MacBook laptop shakedown.
 - `rpi5` — Raspberry Pi 5 4 GB canonical run.
-- `jetson` — Jetson Orin Nano inference validation.
-- `x86` — x86 workstation cross-architecture validation.
+- `jetson` — Jetson Orin Nano replication run.
+- `x86` — x86-64 Linux replication run.
 
 **Timestamp format**: `YYYY-MM-DDTHH-MM-SSZ` — UTC, colons replaced with
 hyphens so the path is `mv`-safe on every filesystem.

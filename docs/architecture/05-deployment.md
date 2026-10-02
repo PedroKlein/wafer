@@ -2,9 +2,9 @@
 
 WAFER runs as a **single OS process** on a single machine. There is no
 Kubernetes, no container orchestration, and no message-bus split across
-nodes. The final performance method uses Raspberry Pi 5 plus a matched x86
-Linux block. Jetson inference is a separate diagnostic architecture-validation
-stratum. Both use the same `wafer-runtime` source and target-independent Wasm
+nodes. The Raspberry Pi 5 decides every verdict; a Jetson Orin Nano (CPU only)
+and an x86-64 Linux host repeat the same experiments as replication strata.
+Every host uses the same `wafer-runtime` source and target-independent Wasm
 components.
 
 ## Deployment targets
@@ -27,12 +27,15 @@ SSD. Network: Gigabit Ethernet. Canonical runs use Raspberry Pi OS Lite
   prerequisite, not admitted campaign evidence.
 - **RQ3 measurement.** Internal compile, instantiate, signal, replacement-adoption,
   and first-local-outcome timings are recorded separately from sink transition,
-  gap, throughput, and sequence evidence. The < 100 ms p95 pause budget is
-  evaluated from sink-owned artifacts on this hardware.
+  gap, throughput, and sequence evidence.
 
 **Operational notes.** The runtime is a native process; Mosquitto is co-located on CPU 0 when MQTT sources/sinks are exercised. CPUs 1-3 are assigned to exactly one active SUT; systemd and interrupts stay on CPU 0, and the kernel balances the SUT's threads across CPUs 1-3 (no `isolcpus`). Runtime fuel budgets and the epoch deadline default to `None`. Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, `epoch_deadline` to 100, and `epoch_tick_ms` to 10 except for matrix-declared cases. The compiled-component cache supports a disk directory, but the runtime binary uses only its in-memory layer, seeded at launch so a later hot-swap of an already loaded binary is a memory hit. E-Perf-9 startup runs therefore measure Linux filesystem page-cache state, not a persisted compile cache.
 
-### Jetson Orin: diagnostic inference target
+### Jetson Orin Nano: replication host
+
+The Jetson runs every experiment on its CPU in the 25 W power mode as a
+replication stratum; `docs/eval/jetson-host-setup.md` prepares it. The CUDA
+inference run below is a separate diagnostic.
 
 Candidate `92d86b0a511047988de5fbf6551b18b8a09ec455` ran the same MNIST model,
 input, and Wasm components on a Jetson Orin Nano under Ubuntu 22.04/L4T R36.5.
@@ -50,13 +53,13 @@ shutdown, production readiness, speedup, latency, throughput, or energy. It is
 diagnostic architecture validation with `thesis_evidence=false`, separate from
 the canonical Raspberry Pi 5 campaign.
 
-### x86_64 - cross-validation target
+### x86_64: replication host
 
 **Hardware:** Linux x86-64 host, 16+ GB RAM, `x86_64-unknown-linux-gnu`. Apple Silicon remains a development and diagnostic host, not the E-Perf-5 comparison target.
 
 **Role in the evaluation:**
 
-- A matched native-Rust and WAFER block is required here and on Raspberry Pi 5 for E-Perf-5. Until the x86 Linux block exists, E-Perf-5 remains `PENDING`.
+- Runs every experiment as a replication stratum, and supplies the x86 half of E-Perf-5. Until the x86 Linux block exists, E-Perf-5 remains `PENDING`.
 - Rapid iteration surface for plugin development and pre-flight
   benchmarks before spending scarce RPi/Jetson time.
 - Functional cache tests may run on x86, but they are separate from E-Perf-9 filesystem page-cache evidence.
