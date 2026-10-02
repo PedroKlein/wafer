@@ -73,14 +73,22 @@ def test_admitted_runs_reject_a_complete_run_without_its_artifact(tmp_path) -> N
         admitted_runs(tmp_path, "containment.json")
 
 
-def test_target_load_rows_reconcile_delivery_and_duplicates(tmp_path) -> None:
-    leaf = tmp_path / "wafer" / "run-01-attempt-01"
+def write_target_load_leaf(
+    batch,
+    *,
+    received_events: int,
+    received_unique: int,
+    duplicates: int,
+    sequence_end: int | None = 60_000,
+    sequence_csv: str = "event_type,seq_start,seq_end,count\n",
+):
+    leaf = batch / "wafer" / "run-01-attempt-01"
     leaf.mkdir(parents=True)
     (leaf / "canonical-status.json").write_text('{"status":"passed"}')
     (leaf / "percentiles.json").write_text(
         json.dumps(
             {
-                "total_count": 60_000,
+                "total_count": received_events,
                 "p50_ns": 1,
                 "p95_ns": 2,
                 "p99_ns": 3,
@@ -90,10 +98,34 @@ def test_target_load_rows_reconcile_delivery_and_duplicates(tmp_path) -> None:
     )
     (leaf / "throughput.csv").write_text(
         "timestamp_ns,messages_received,throughput_msg_s,duration_ns\n"
-        "1,60000,999.983333,60000000000\n"
+        f"1,{received_events},999.983333,60000000000\n"
     )
-    (leaf / "sequence.csv").write_text(
-        "event_type,seq_start,seq_end,count\ngap,42,42,1\nduplicate,7,7,1\n"
+    (leaf / "sequence.csv").write_text(sequence_csv)
+    expected = 60_000 if sequence_end else received_unique
+    (leaf / "subscriber-metadata.json").write_text(
+        json.dumps(
+            {
+                "sequence_end_exclusive": sequence_end,
+                "total_recorded": received_events,
+                "sequence": {
+                    "expected": expected,
+                    "total_received": received_events,
+                    "received_unique": received_unique,
+                    "total_gaps": expected - received_unique,
+                    "total_duplicates": duplicates,
+                },
+            }
+        )
+    )
+
+
+def test_target_load_rows_reconcile_delivery_and_duplicates(tmp_path) -> None:
+    write_target_load_leaf(
+        tmp_path,
+        received_events=60_000,
+        received_unique=59_999,
+        duplicates=1,
+        sequence_csv="event_type,seq_start,seq_end,count\ngap,42,42,1\nduplicate,7,7,1\n",
     )
 
     row = target_load_rows(tmp_path).iloc[0]
@@ -104,20 +136,36 @@ def test_target_load_rows_reconcile_delivery_and_duplicates(tmp_path) -> None:
     assert row["duplicates"] == 1
 
 
-def test_target_load_rows_reject_counter_mismatch(tmp_path) -> None:
-    leaf = tmp_path / "wafer" / "run-01-attempt-01"
-    leaf.mkdir(parents=True)
-    (leaf / "canonical-status.json").write_text('{"status":"passed"}')
-    (leaf / "percentiles.json").write_text(
-        json.dumps({"total_count": 59_999, "p50_ns": 1, "p95_ns": 2, "p99_ns": 3})
+def test_target_load_rows_count_declared_tail_loss_beyond_the_kept_examples(tmp_path) -> None:
+    write_target_load_leaf(
+        tmp_path,
+        received_events=58_000,
+        received_unique=58_000,
+        duplicates=0,
+        sequence_csv="event_type,seq_start,seq_end,count\ngap,1,1,1\n",
     )
-    (leaf / "throughput.csv").write_text(
-        "timestamp_ns,messages_received,throughput_msg_s,duration_ns\n"
-        "1,59999,999.983333,60000000000\n"
-    )
-    (leaf / "sequence.csv").write_text("event_type,seq_start,seq_end,count\n")
 
-    with pytest.raises(ValueError, match="gap total does not reconcile"):
+    row = target_load_rows(tmp_path).iloc[0]
+    assert row["received_unique"] == 58_000
+    assert row["loss_fraction"] == 2_000 / 60_000
+    assert row["achieved_ratio"] == 58_000 / 60_000
+
+
+def test_target_load_rows_reject_a_leaf_without_a_declared_range(tmp_path) -> None:
+    write_target_load_leaf(
+        tmp_path, received_events=59_999, received_unique=59_999, duplicates=0, sequence_end=None
+    )
+
+    with pytest.raises(ValueError, match="does not declare its measured sequence range"):
+        target_load_rows(tmp_path)
+
+
+def test_target_load_rows_reject_counter_mismatch(tmp_path) -> None:
+    write_target_load_leaf(
+        tmp_path, received_events=59_999, received_unique=59_998, duplicates=0
+    )
+
+    with pytest.raises(ValueError, match="counters do not reconcile"):
         target_load_rows(tmp_path)
 
 
