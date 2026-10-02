@@ -1752,7 +1752,8 @@ class FakeEkuiper:
     after which it publishes after ``update_quiet_polls`` status reads, and deletes rules.
     ``update_status`` and ``start_status`` are the HTTP statuses the update and the start
     answer with. ``broken_off`` names the calls whose answer ends early, ``timed_out`` the
-    calls that get no answer, and ``rule_list`` replaces the rule list with another body.
+    calls that get no answer, ``refused`` the calls whose connection is refused, and
+    ``rule_list`` replaces the rule list with another body.
     """
 
     def __init__(self) -> None:
@@ -1775,6 +1776,7 @@ class FakeEkuiper:
         self.start_status = 200
         self.broken_off: set[tuple[str, str]] = set()
         self.timed_out: set[tuple[str, str]] = set()
+        self.refused: set[tuple[str, str]] = set()
         self.rule_list: object | None = None
 
     def check_output(self, command: list[str], **kwargs: object) -> str:
@@ -1795,6 +1797,9 @@ class FakeEkuiper:
         if (method, path) in self.timed_out:
             self.events.append(f"{method} {path} timed out")
             raise TimeoutError("timed out")
+        if (method, path) in self.refused:
+            self.events.append(f"{method} {path} refused")
+            raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
         if (method, path) == ("GET", "/rules"):
             self.events.append("rule-list")
             if self.rule_list is not None:
@@ -6105,6 +6110,8 @@ def test_both_ekuiper_swap3_arms_wait_for_the_same_emission_signal(
         ),
         ("timed_out", ("PUT", "/rules/pipeline_a"), "timed out", []),
         ("timed_out", ("POST", "/rules/pipeline_a/start"), "timed out", ["PUT"]),
+        ("refused", ("PUT", "/rules/pipeline_a"), "Connection refused", []),
+        ("refused", ("POST", "/rules/pipeline_a/start"), "Connection refused", ["PUT"]),
     ],
 )
 def test_swap3_rule_update_whose_answer_breaks_off_or_never_comes_is_a_harness_failure(
