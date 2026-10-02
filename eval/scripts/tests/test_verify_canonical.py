@@ -1213,9 +1213,33 @@ def test_swap3_rule_update_start_time_outside_its_put_and_start_is_rejected(
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
                 leaf / "rule-update.json",
+                lambda record: record["calls"][0].update(http_status=200.0),
+            ),
+            "rule-update.json PUT /rules/pipeline_a did not return 200",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
                 lambda record: record["calls"][1].update(http_status=400),
             ),
             "rule-update.json POST /rules/pipeline_a/start did not return 200",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][1].update(http_status=200.0),
+            ),
+            "rule-update.json POST /rules/pipeline_a/start did not return 200",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][-1].update(http_status=200.0),
+            ),
+            "rule-update.json ends before the updated pipeline_a publishes",
         ),
         (
             "ekuiper-rule-update",
@@ -1293,6 +1317,30 @@ def test_swap3_rule_update_start_time_outside_its_put_and_start_is_rejected(
             lambda leaf: rewrite_json(
                 leaf / "rule-update.json",
                 lambda record: record["calls"][0]["request_body"].update(triggered=True),
+            ),
+            (
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised and triggered false"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][0]["request_body"].update(triggered=0),
+            ),
+            (
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised and triggered false"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][0]["request_body"]["actions"][0]["mqtt"].update(
+                    qos=True
+                ),
             ),
             (
                 "rule-update.json PUT does not send the audited pipeline_a rule "

@@ -877,10 +877,20 @@ def _audited_update_sql(leaf: Path) -> str | None:
     return None if rule is None else rule["sql"]
 
 
+def _answered_200(call: dict) -> bool:
+    """Whether a recorded REST call returned HTTP 200 as an integer status, not 200.0."""
+    return type(call["http_status"]) is int and call["http_status"] == 200
+
+
+def _same_json(left: object, right: object) -> bool:
+    """Equality of two JSON values that, unlike ``==``, tells false from 0 and 1 from 1.0."""
+    return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+
 def _rule_update_adopted(call: dict, metric: str) -> bool:
     """The make-before-break arm's signal: a 200 status read whose sink count is above zero."""
     try:
-        return call["http_status"] == 200 and json.loads(call["body"]).get(metric, 0) > 0
+        return _answered_200(call) and json.loads(call["body"]).get(metric, 0) > 0
     except (AttributeError, TypeError, ValueError):
         return False
 
@@ -926,13 +936,13 @@ def check_swap3_rule_update(leaf: Path) -> list[str]:
                 "one POST /rules/pipeline_a/start and the status reads after them"
             ]
         put, start = calls[:2]
-        if put["http_status"] != 200:
+        if not _answered_200(put):
             violations.append("rule-update.json PUT /rules/pipeline_a did not return 200")
-        if start["http_status"] != 200:
+        if not _answered_200(start):
             violations.append("rule-update.json POST /rules/pipeline_a/start did not return 200")
         if (
             updated_rule is None
-            or put["request_body"] != {**updated_rule, "triggered": False}
+            or not _same_json(put["request_body"], {**updated_rule, "triggered": False})
             or put["request_sql"] != record["updated_sql"]
         ):
             violations.append(
