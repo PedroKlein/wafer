@@ -90,6 +90,39 @@ def test_target_latency_uses_runs_and_reports_ci_effect_threshold_and_boundary()
     assert table["thesis_evidence"].eq(True).all()
 
 
+def test_target_latency_ratio_and_effect_resample_run_pairs() -> None:
+    block = {run: 100_000 * (1 + run % 5) for run in range(1, 31)}
+    records = percentile_runs(("wafer", "native", "ekuiper"))
+    for record in records:
+        scale = 1.9 if record["condition"] == "wafer" else 1.0
+        record["p95_ns"] = scale * block[record["run_index"]]
+
+    table = target_latency_table(records).set_index("condition")
+
+    wafer, native = table.loc["wafer"], table.loc["native"]
+    assert (wafer["p95_ratio_verdict"], wafer["verdict"]) == ("PASS", "PASS")
+    assert wafer["p95_ratio_ci_half_width"] == pytest.approx(0)
+    assert (wafer["ratio_ci95_low"], wafer["ratio_ci95_high"]) == pytest.approx((1.9, 1.9))
+    assert (native["ratio_ci95_low"], native["ratio_ci95_high"]) == pytest.approx((1, 1))
+    assert (native["cliffs_delta_ci95_low"], native["cliffs_delta_ci95_high"]) == (0.0, 0.0)
+    assert "over run pairs" in wafer["estimator"]
+
+
+def test_target_latency_diagnostic_table_pairs_the_run_indices_both_systems_have() -> None:
+    records = [
+        record
+        for record in percentile_runs(("wafer", "native", "ekuiper"), n=5)
+        if (record["condition"], record["run_index"]) != ("ekuiper", 5)
+    ]
+
+    table = target_latency_table(records, canonical=False).set_index("condition")
+
+    assert table["N_runs"].to_dict() == {"wafer": 5, "native": 5, "ekuiper": 4}
+    assert table["thesis_evidence"].eq(False).all()
+    assert table.loc["wafer", "p95_ratio_verdict"] == "PASS"
+    assert table.loc["wafer", "median_ratio_vs_reference"] == pytest.approx(120_002.5 / 122_002.5)
+
+
 def test_target_latency_rejects_missing_delivery_evidence() -> None:
     records = percentile_runs(("wafer", "native", "ekuiper"))
     del records[0]["achieved_ratio"]
@@ -2077,17 +2110,18 @@ def wafer_target_row(edit) -> pd.Series:
 
 
 @pytest.mark.parametrize(("factor", "verdict"), [(1.0, "PASS"), (2.0, "INCONCLUSIVE"), (3.0, "FAIL")])
-def test_target_latency_ratio_verdict_reads_one_sided_bounds_over_runs(factor: float, verdict: str) -> None:
+def test_target_latency_ratio_verdict_reads_one_sided_bounds_over_run_pairs(factor: float, verdict: str) -> None:
     wafer_p95 = [factor * EKUIPER_MEDIAN_P95_NS + (run - 15.5) * 4_000 for run in range(1, 31)]
     wafer = wafer_target_row(lambda record: record.update(p95_ns=wafer_p95[record["run_index"] - 1]))
     _, low, high = median_shift_ci(
-        wafer_p95, [122_000 + run for run in range(1, 31)], relative=True, ci=0.9
+        wafer_p95, [122_000 + run for run in range(1, 31)], relative=True, paired=True, ci=0.9
     )
     assert (wafer["p95_ratio_verdict"], wafer["verdict"]) == (verdict, verdict)
     assert wafer["p95_ratio_threshold"] == 2.0
     assert wafer["p95_ratio_ci_half_width"] == pytest.approx((high - low) / 2)
+    nearer = min((1 + low, 1 + high), key=lambda bound: abs(bound - 2.0))
     assert wafer["p95_ratio_flips_at"] == pytest.approx(
-        {"PASS": 1 + high, "INCONCLUSIVE": 1 + low, "FAIL": 1 + low}[verdict]
+        {"PASS": 1 + high, "INCONCLUSIVE": nearer, "FAIL": 1 + low}[verdict]
     )
 
 

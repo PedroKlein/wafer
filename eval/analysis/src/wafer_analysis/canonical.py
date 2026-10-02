@@ -70,16 +70,23 @@ def _nearest_rank_p95(values) -> float:
     return float(ordered[math.ceil(len(ordered) * 0.95) - 1])
 
 
-def target_latency_table(records: list[dict]) -> pd.DataFrame:
+def target_latency_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Perf-1 latency and delivery per system at the matched 1,000 msg/s target load.
+
+    The three systems run in one randomised block per run index, so every
+    comparison with eKuiper pairs each run with the eKuiper run of the same
+    index and resamples those pairs.
+    """
     conditions = ("wafer", "native", "ekuiper")
-    grouped = _require_runs(records, conditions)
+    grouped = _group_runs(records, conditions, canonical=canonical)
+    if not all(grouped.values()):
+        raise ValueError("target load needs runs of every system")
     rules = declared_thresholds()
     ratio_rule = rules["e-perf-1-p95-ratio"]
     loss_rule = rules["e-perf-1-pooled-loss"]
     achieved_rule = rules["e-perf-1-achieved-ratio"]
     duplicate_rule = rules["e-perf-1-duplicates"]
-    reference = np.asarray([run["p95_ns"] for run in grouped["ekuiper"]], dtype=float)
-    reference_median = float(np.median(reference))
+    reference = {int(run["run_index"]): float(run["p95_ns"]) for run in grouped["ekuiper"]}
     rows = []
     for condition in conditions:
         condition_runs = grouped[condition]
@@ -99,8 +106,17 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
         )
         low, high = bootstrap_ci(values)
         achieved_low, achieved_high = bootstrap_ci(achieved)
-        delta, magnitude = cliffs_delta(values, reference)
-        delta_low, delta_high = cliffs_delta_ci(values, reference)
+        pairs = sorted(reference.keys() & {int(run["run_index"]) for run in condition_runs})
+        if not pairs:
+            raise ValueError(f"{condition} shares no run index with ekuiper")
+        p95 = {int(run["run_index"]): float(run["p95_ns"]) for run in condition_runs}
+        paired = np.asarray([p95[index] for index in pairs])
+        paired_reference = np.asarray([reference[index] for index in pairs])
+        shift, shift_low, shift_high = median_shift_ci(
+            paired, paired_reference, relative=True, paired=True
+        )
+        delta, magnitude = cliffs_delta(paired, paired_reference)
+        delta_low, delta_high = cliffs_delta_ci(paired, paired_reference, paired=True)
         intended = sum(int(run["intended_messages"]) for run in condition_runs)
         received = sum(int(run["received_unique"]) for run in condition_runs)
         pooled_loss = (intended - received) / intended
@@ -125,7 +141,7 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
         )
         if condition == "wafer":
             _, ratio_low, ratio_high = median_shift_ci(
-                values, reference, relative=True, ci=ratio_rule.interval
+                paired, paired_reference, relative=True, paired=True, ci=ratio_rule.interval
             )
             ratio = bound_verdict("p95_ratio", ratio_rule, (1 + ratio_low, 1 + ratio_high))
             verdict = combined_verdict(ratio["p95_ratio_verdict"], delivery["delivery_verdict"])
@@ -153,8 +169,9 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 "mean_achieved_ratio": mean_achieved_ratio,
                 "total_duplicates": total_duplicates,
                 "reference_condition": "ekuiper",
-                "median_ratio_vs_reference": float(np.median(values))
-                / reference_median,
+                "median_ratio_vs_reference": 1 + shift,
+                "ratio_ci95_low": 1 + shift_low,
+                "ratio_ci95_high": 1 + shift_high,
                 "cliffs_delta_vs_reference": delta,
                 "cliffs_delta_ci95_low": delta_low,
                 "cliffs_delta_ci95_high": delta_high,
@@ -163,13 +180,13 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 **delivery,
                 "verdict": verdict,
                 "units": "nanoseconds, messages/second, fraction, messages",
-                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; mean achieved ratio; Cliff's delta with bootstrap 95% CI; verdicts from one-sided 95% bounds resampling runs, each system's runs apart for the p95 ratio",
+                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; mean achieved ratio; ratio of median run p95 to eKuiper's and Cliff's delta against eKuiper with bootstrap 95% CIs over run pairs, pairing runs by index within the randomised block; verdicts from one-sided 95% bounds, resampling run pairs for the p95 ratio and runs for delivery",
                 "threshold": (
                     f"one-sided 95% bounds: median(WAFER p95) / median(eKuiper p95) <= {ratio_rule.value:g}; "
                     f"pooled loss <= {loss_rule.value:g}; mean achieved/offered >= {achieved_rule.value:g}; zero duplicates"
                 ),
                 "claim_boundary": "matched 1,000 msg/s target load; not capacity",
-                "thesis_evidence": True,
+                "thesis_evidence": canonical,
             }
         )
     return pd.DataFrame(rows)
