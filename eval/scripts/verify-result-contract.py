@@ -861,40 +861,43 @@ def check_disruption_timeline(path: Path) -> list[str]:
     return violations
 
 
-def _audited_update_sql(leaf: Path) -> str | None:
-    """The pipeline_a SQL the audit recorded before warm-up, with threshold-filter-v2's bound."""
+def _audited_update_rule(leaf: Path) -> dict | None:
+    """The pipeline_a rule the audit recorded before warm-up, with threshold-filter-v2's bound."""
     audit = _load_json(leaf / "ekuiper-audit.json", "ekuiper-audit.json", [])
     rule = audit.get("rule") if isinstance(audit, dict) else None
     sql = rule.get("sql") if isinstance(rule, dict) else None
     retired_bound, updated_bound = SWAP3_RULE_BOUND_CHANGE
     if not isinstance(sql, str) or retired_bound not in sql:
         return None
-    return sql.replace(retired_bound, updated_bound)
+    return {**rule, "sql": sql.replace(retired_bound, updated_bound)}
+
+
+def _audited_update_sql(leaf: Path) -> str | None:
+    rule = _audited_update_rule(leaf)
+    return None if rule is None else rule["sql"]
 
 
 def _rule_update_adopted(call: dict, metric: str) -> bool:
+    """The make-before-break arm's signal: a 200 status read whose sink count is above zero."""
     try:
-        status = json.loads(call["body"])
-    except (TypeError, ValueError):
+        return call["http_status"] == 200 and json.loads(call["body"]).get(metric, 0) > 0
+    except (AttributeError, TypeError, ValueError):
         return False
-    emitted = status.get(metric) if isinstance(status, dict) else None
-    return (
-        call["http_status"] == 200
-        and ekuiper_rule_running(status)
-        and type(emitted) is int
-        and emitted > 0
-    )
 
 
 def check_swap3_rule_update(leaf: Path) -> list[str]:
-    """The REST calls of the in-place update: one PUT, then status reads until it publishes."""
+    """The REST calls of the in-place update: the PUT that is the action, then status reads.
+
+    The status reads stop at the first that shows output, and the runner reads again only
+    while less than 10 s have passed since the PUT returned, as the make-before-break arm does.
+    """
     violations: list[str] = []
     record = _load_json(leaf / "rule-update.json", "rule-update.json", violations)
     if record is None:
         return violations
     timeline = _load_json(leaf / "disruption-timeline.json", "disruption-timeline.json", [])
-    updated_sql = _audited_update_sql(leaf)
-    if updated_sql is None or record.get("updated_sql") != updated_sql:
+    updated_rule = _audited_update_rule(leaf)
+    if updated_rule is None or record.get("updated_sql") != updated_rule["sql"]:
         violations.append(
             "rule-update.json updated_sql is not the audited pipeline_a rule "
             f"with {SWAP3_RULE_BOUND_CHANGE[1]}"
@@ -921,16 +924,24 @@ def check_swap3_rule_update(leaf: Path) -> list[str]:
         put = calls[0]
         if put["http_status"] != 200:
             violations.append("rule-update.json PUT /rules/pipeline_a did not return 200")
-        if put["request_sql"] != record["updated_sql"] or any(
-            call["request_sql"] is not None for call in calls[1:]
+        if (
+            put["request_body"] != updated_rule
+            or put["request_sql"] != record["updated_sql"]
+            or any(
+                call["request_body"] is not None or call["request_sql"] is not None
+                for call in calls[1:]
+            )
         ):
-            violations.append("rule-update.json PUT does not send the updated SQL")
+            violations.append(
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised"
+            )
         adopted = [_rule_update_adopted(call, record["emission_metric"]) for call in calls[1:]]
         if not adopted[-1]:
             violations.append("rule-update.json ends before the updated pipeline_a publishes")
         elif any(adopted[:-1]):
             violations.append("rule-update.json reads the status after the update was adopted")
-        if calls[-1]["start_offset_ns"] - put["end_offset_ns"] > SWAP3_RULE_UPDATE_TIMEOUT_NS:
+        if calls[-2]["end_offset_ns"] - put["end_offset_ns"] >= SWAP3_RULE_UPDATE_TIMEOUT_NS:
             violations.append("rule-update.json sees the update adopted after the 10 s deadline")
         offsets = [
             int(call[key]) for call in calls for key in ("start_offset_ns", "end_offset_ns")
@@ -941,11 +952,11 @@ def check_swap3_rule_update(leaf: Path) -> list[str]:
         if offsets[0] < 0 or offsets != sorted(offsets) or stamps != sorted(stamps):
             violations.append("rule-update.json calls overlap or run out of order")
         if isinstance(timeline, dict) and (
-            offsets[-1] > int(timeline["action_duration_ns"])
-            or stamps[0] < int(timeline["action_start_timestamp_ns"])
-            or stamps[-1] > int(timeline["action_end_timestamp_ns"])
+            stamps[0] < int(timeline["action_start_timestamp_ns"])
+            or offsets[1] != int(timeline["action_duration_ns"])
+            or stamps[1] != int(timeline["action_end_timestamp_ns"])
         ):
-            violations.append("rule-update.json calls fall outside the E-Swap-3 action")
+            violations.append("rule-update.json PUT does not span the E-Swap-3 action")
     except (AttributeError, KeyError, TypeError, ValueError):
         violations.append("rule-update.json calls are malformed")
     return violations

@@ -3982,6 +3982,17 @@ def _ekuiper_request(method: str, path: str, payload: dict | None = None) -> tup
         return error.code, error.read().decode(errors="replace")
 
 
+def ekuiper_rule_emitted(status: int, body: str) -> bool:
+    """Whether one status read shows the rule's sink counting output since the rule started.
+
+    Both E-Swap-3 eKuiper arms wait for this signal.
+    """
+    try:
+        return status == 200 and json.loads(body).get(EKUIPER_EMISSION_METRIC, 0) > 0
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def ekuiper_replacement_rule(root: Path) -> dict:
     """The replacement rule the seed script declares next to pipeline_a."""
     rendered = json.loads(
@@ -4049,10 +4060,7 @@ def replace_ekuiper_rule(
         while True:
             polls += 1
             status, body = call("GET", f"/rules/{rule_id}/status")
-            try:
-                emitted = status == 200 and json.loads(body).get(EKUIPER_EMISSION_METRIC, 0) > 0
-            except (AttributeError, TypeError, ValueError):
-                emitted = False
+            emitted = ekuiper_rule_emitted(status, body)
             if emitted or time.monotonic() >= deadline:
                 break
             calls.pop()
@@ -4080,27 +4088,19 @@ def ekuiper_updated_rule(audit: Path) -> dict:
     return {**rule, "sql": rule["sql"].replace(retired_bound, updated_bound)}
 
 
-def ekuiper_update_adopted(status: int, body: str) -> bool:
-    """Whether one status read shows the updated pipeline_a running and publishing."""
-    try:
-        value = json.loads(body)
-    except ValueError:
-        return False
-    emitted = value.get(EKUIPER_EMISSION_METRIC) if isinstance(value, dict) else None
-    return status == 200 and ekuiper_rule_running(value) and type(emitted) is int and emitted > 0
-
-
 def update_ekuiper_rule(
     output: Path, rule: dict, started_monotonic_ns: int, timeout_secs: float = 10.0
-) -> None:
+) -> tuple[int, int]:
     """Update pipeline_a in place with one PUT and record each REST call in ``rule-update.json``.
 
     Unlike a stop and start, the update keeps the shared stream's MQTT subscription open; see
     docs/benchmarks/ekuiper-comparator.md. eKuiper answers the PUT once it has stopped the
-    rule and started it again on a new topology. That topology's sink counters start at zero,
-    so the update is adopted at the first status read that shows the rule running with a sink
-    count above zero, the signal the make-before-break arm waits for. A read that starts after
-    the deadline does not count.
+    rule and started it again on a new topology, so that answer ends the arm's action, as the
+    runtime's answer ends a WAFER hot swap. The status reads after it wait for the updated
+    rule's output with the make-before-break arm's signal and deadline. The new topology's
+    sink counters start at zero, so a count above zero is output of the updated rule.
+
+    Returns the monotonic and Unix-epoch times at which the PUT was answered.
     """
     calls: list[dict] = []
     record = {
@@ -4123,6 +4123,7 @@ def update_ekuiper_rule(
             {
                 "method": method,
                 "path": path,
+                "request_body": payload,
                 "request_sql": None if payload is None else payload["sql"],
                 "http_status": status,
                 "body": body,
@@ -4138,18 +4139,19 @@ def update_ekuiper_rule(
         status, body = call("PUT", "/rules/pipeline_a", rule)
         if status != 200:
             raise RuntimeError(f"eKuiper refused the pipeline_a update: {status} {body}")
-        deadline_offset_ns = calls[0]["end_offset_ns"] + int(timeout_secs * 1_000_000_000)
+        put = calls[0]
         while True:
             status, body = call("GET", "/rules/pipeline_a/status")
-            if calls[-1]["start_offset_ns"] > deadline_offset_ns:
+            if ekuiper_rule_emitted(status, body):
+                break
+            if calls[-1]["end_offset_ns"] - put["end_offset_ns"] >= timeout_secs * 1_000_000_000:
                 raise RuntimeError(
                     f"pipeline_a did not publish after its update within {timeout_secs:g} s"
                 )
-            if ekuiper_update_adopted(status, body):
-                break
             time.sleep(0.01)
     finally:
         write_json_atomic(output / "rule-update.json", record)
+    return started_monotonic_ns + put["end_offset_ns"], put["end_timestamp_ns"]
 
 
 def hot_swap_offsets(item: RunItem) -> list[float]:
@@ -4587,6 +4589,7 @@ def run_restart_item(
             action_started_ns = time.time_ns()
             action_started_monotonic_ns = time.monotonic_ns()
             alignment_error_ns = action_started_ns - scheduled_event_ns
+            action_finished: tuple[int, int] | None = None
             if item.condition == "wafer-hotswap":
                 plugin = root / SWAP3_REPLACEMENT_PLUGIN
                 response = post_hot_swap("filter", plugin)
@@ -4597,7 +4600,9 @@ def run_restart_item(
             elif replacement_rule is not None:
                 replace_ekuiper_rule(output, replacement_rule, action_started_monotonic_ns)
             elif updated_rule is not None:
-                update_ekuiper_rule(output, updated_rule, action_started_monotonic_ns)
+                action_finished = update_ekuiper_rule(
+                    output, updated_rule, action_started_monotonic_ns
+                )
             else:
                 assert runtime is not None
                 runtime.terminate()
@@ -4616,8 +4621,10 @@ def run_restart_item(
                         raise
                 if runtime.poll() is not None and not runtime_exit_is_outcome(runtime.returncode):
                     raise RuntimeError("wafer runtime failed to restart")
-            action_finished_monotonic_ns = time.monotonic_ns()
-            action_finished_ns = time.time_ns()
+            action_finished_monotonic_ns, action_finished_ns = action_finished or (
+                time.monotonic_ns(),
+                time.time_ns(),
+            )
             action_duration_ns = action_finished_monotonic_ns - action_started_monotonic_ns
             if action_finished_ns < action_started_ns:
                 raise RuntimeError("wall clock moved backwards during E-Swap-3 action")

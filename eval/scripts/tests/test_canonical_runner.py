@@ -5905,6 +5905,7 @@ def test_swap3_rule_update_puts_the_audited_rule_with_the_raised_bound_and_waits
     ] == [("PUT", "/rules/pipeline_a", 200, ekuiper.updated_rule["sql"])] + [
         ("GET", "/rules/pipeline_a/status", 200, None)
     ] * 3
+    assert [call["request_body"] for call in record["calls"]] == [ekuiper.updated_rule] + [None] * 3
     assert [
         json.loads(call["body"])["sink_mqtt_0_0_records_out_total"] for call in record["calls"][1:]
     ] == [0, 0, 1]
@@ -5913,8 +5914,14 @@ def test_swap3_rule_update_puts_the_audited_rule_with_the_raised_bound_and_waits
         call[key] for call in record["calls"] for key in ("start_timestamp_ns", "end_timestamp_ns")
     ]
     assert stamps == sorted(stamps)
-    assert timeline["action_start_timestamp_ns"] <= stamps[0]
-    assert stamps[-1] <= timeline["action_end_timestamp_ns"]
+    # eKuiper's answer to the PUT ends the action; the status reads come after it.
+    put = record["calls"][0]
+    assert timeline["action_start_timestamp_ns"] <= put["start_timestamp_ns"]
+    assert (timeline["action_end_timestamp_ns"], timeline["action_duration_ns"]) == (
+        put["end_timestamp_ns"],
+        put["end_offset_ns"],
+    )
+    assert timeline["action_end_timestamp_ns"] < stamps[-1]
     contract = load_contract()
     metadata = json.loads((output / "metadata.json").read_text())
     assert contract.check_ekuiper_health(output, metadata, "e-swap-3") == []
@@ -5956,7 +5963,29 @@ def test_swap3_rule_update_that_never_publishes_times_out(
     record = json.loads((tmp_path / "rule-update.json").read_text())
     put, *reads = record["calls"]
     assert put["method"] == "PUT" and reads and {call["method"] for call in reads} == {"GET"}
-    assert reads[-1]["start_offset_ns"] - put["end_offset_ns"] > 50_000_000
+    # As in the make-before-break arm, the deadline is checked after each read that sees no
+    # output, so the runner gives up at the first read that ends after it.
+    assert reads[-1]["end_offset_ns"] - put["end_offset_ns"] >= 50_000_000
+    assert all(call["end_offset_ns"] - put["end_offset_ns"] < 50_000_000 for call in reads[:-1])
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "emitted"),
+    [
+        (200, {"status": "running", "message": "", "sink_mqtt_0_0_records_out_total": 1}, True),
+        (200, {"status": "running", "message": "retrying", "sink_mqtt_0_0_records_out_total": 1}, True),
+        (200, {"status": "running", "message": "", "sink_mqtt_0_0_records_out_total": 0}, False),
+        (200, {"status": "running", "message": ""}, False),
+        (404, {"sink_mqtt_0_0_records_out_total": 1}, False),
+        (200, "Rule pipeline_a is not found", False),
+        (200, ["sink_mqtt_0_0_records_out_total"], False),
+    ],
+)
+def test_both_ekuiper_swap3_arms_wait_for_the_same_emission_signal(
+    status: int, body: object, emitted: bool
+) -> None:
+    text = body if isinstance(body, str) else json.dumps(body)
+    assert runner.ekuiper_rule_emitted(status, text) is emitted
 
 
 def test_swap3_rule_update_needs_the_audited_v1_rule(tmp_path: Path) -> None:
