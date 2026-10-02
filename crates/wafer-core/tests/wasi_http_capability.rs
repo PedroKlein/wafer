@@ -352,7 +352,7 @@ async fn redirect_is_returned_without_contacting_location() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "run via eval/scripts/test-http-security.sh after building the fixture"]
+#[ignore = "needs the built fixture; run `mise run test-http-security`"]
 async fn real_p2_component_default_denial_and_exact_allow() -> Result<()> {
     let denied_listener = TcpListener::bind("127.0.0.1:0").await?;
     let denied_port = denied_listener.local_addr()?.port();
@@ -405,7 +405,7 @@ async fn real_p2_component_default_denial_and_exact_allow() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "run via eval/scripts/test-http-security.sh after building the fixture"]
+#[ignore = "needs the built fixture; run `mise run test-http-security`"]
 async fn real_p2_component_rejects_authority_variations() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -435,7 +435,7 @@ async fn real_p2_component_rejects_authority_variations() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "run via eval/scripts/test-http-security.sh after building the fixture"]
+#[ignore = "needs the built fixture; run `mise run test-http-security`"]
 async fn real_p2_component_rejects_dns_loopback_and_connect() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -467,7 +467,7 @@ async fn real_p2_component_rejects_dns_loopback_and_connect() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "run via eval/scripts/test-http-security.sh after building the fixture"]
+#[ignore = "needs the built fixture; run `mise run test-http-security`"]
 async fn real_p2_component_does_not_expand_redirect_authority() -> Result<()> {
     let target = TcpListener::bind("127.0.0.1:0").await?;
     let target_port = target.local_addr()?.port();
@@ -516,7 +516,7 @@ async fn real_p2_component_does_not_expand_redirect_authority() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "run via eval/scripts/test-http-security.sh after building the fixture"]
+#[ignore = "needs the built fixture; run `mise run test-http-security`"]
 async fn real_p2_component_redacts_request_data_from_host_logs() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -568,7 +568,7 @@ async fn real_p2_component_redacts_request_data_from_host_logs() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "run via eval/scripts/test-http-security.sh after building the fixture"]
+#[ignore = "needs the built fixture; run `mise run test-http-security`"]
 async fn real_p2_component_preserves_grant_through_recovery_and_reconfigure() -> Result<()> {
     let allowed = TcpListener::bind("127.0.0.1:0").await?;
     let allowed_port = allowed.local_addr()?.port();
@@ -622,7 +622,7 @@ async fn real_p2_component_preserves_grant_through_recovery_and_reconfigure() ->
 }
 
 #[tokio::test]
-#[ignore = "run via eval/scripts/test-http-security.sh after building the fixture"]
+#[ignore = "needs the built fixture; run `mise run test-http-security`"]
 async fn real_p2_component_hot_swap_retains_original_grant() -> Result<()> {
     let allowed = TcpListener::bind("127.0.0.1:0").await?;
     let allowed_port = allowed.local_addr()?.port();

@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
 """Structural verifier for eval/RESULT-CONTRACT.md compliance.
 
-Confirms the F3 split-contract decision (option B) works in practice:
-- **Core artefacts** MUST exist in every leaf run directory.
-- **Optional artefacts** may exist per the per-experiment matrix; when
-  absent, this is contract-conformant, not a violation.
-
-Reviewer note: this replaces the AC F3.AC5 "run two fresh shakedowns"
-requirement with structural inspection of the existing post-decision
-shakedown dirs. Cheaper and reproducible; the reviewer's real question
-is 'does the split-contract hold?' which is best answered by walking
-the manifest.
+Walks every leaf run directory under the given experiment directories:
+- **Core artefacts** must exist in every leaf.
+- **Per-experiment artefacts** are checked where the contract requires
+  them; an artefact the contract marks optional may be absent.
 
 Exit codes:
     0  every leaf under the given experiment dirs conforms. A leaf whose
        system under test failed a criterion it measures (an OUTCOME line)
        still conforms: the failure is data, not a contract violation.
-    1  at least one leaf violates core or optional contract in a way
-       the split-contract permits (e.g. contract says memory.csv MUST
-       exist for E-Perf-6 but it is absent).
+    1  at least one leaf violates the contract.
     2  invocation error (bad args).
 
 Usage:
@@ -26,8 +18,7 @@ Usage:
 
 Example:
     verify-result-contract.py \\
-      eval/results/e-val-1/shakedown-macos-2026-07-22T16-19-29Z \\
-      eval/results/e-perf-6/shakedown-macos-2026-07-22T17-49-56Z
+      eval/results/e-val-1/rpi5-validation-2026-10-01T12-00-00Z
 """
 
 from __future__ import annotations

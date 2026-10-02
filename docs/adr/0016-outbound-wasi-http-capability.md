@@ -154,7 +154,12 @@ P2-T2 and P2-T3 must implement these tests against real P2 components and contro
 | H19 | Accepted hot-swap and process-time rollback | Replacement and rollback Stores both retain the exact original grant. |
 | H20 | Enable inference and outbound HTTP together | Both explicit grants survive recovery without enabling any unconfigured capability. |
 
-`eval/scripts/test-http-security.sh` builds and validates the mandatory P2 HTTP fixture, executes every row with hard outer timeouts, and writes a source-bound receipt. The gate fails on a missing fixture, missing row marker, skipped required test, invalid component, or non-zero command result.
+`mise run test-http-security` builds and validates the P2 HTTP fixture component, then runs the fixture-backed tests in `crates/wafer-core/tests/wasi_http_capability.rs`, which are `#[ignore]`d in the default test run because they need the fixture. The other rows run with the ordinary workspace tests.
+
+Each row's tests:
+
+- Fixture-backed, in `wasi_http_capability.rs`: H01-H03 and H09 `real_p2_component_default_denial_and_exact_allow`; H04-H07 `real_p2_component_rejects_authority_variations`; H10 and H14 `real_p2_component_rejects_dns_loopback_and_connect`; H13 `real_p2_component_does_not_expand_redirect_authority`; H15 `real_p2_component_redacts_request_data_from_host_logs`; H16 and H17 `real_p2_component_preserves_grant_through_recovery_and_reconfigure`; H18 and H19 `real_p2_component_hot_swap_retains_original_grant`.
+- Workspace tests: H08 the four `outbound_http` tests in `wafer-config` `validation::tests`; H11 `engine::http::tests::mixed_dns_answers_select_only_a_permitted_address`; H12 `wafer-types` `prohibited_ip_literals_cannot_be_granted`; H18 and H19 also `node::wasm::tests::accepted_hot_swap_preserves_outbound_http_grant`, `hot_swap_rejects_outbound_http_expansion` and the `hotswap_process_time_rollback` integration test; H20 `node::wasm::tests::inference_and_outbound_http_survive_recovery_together`.
 
 ## Native transport boundary
 

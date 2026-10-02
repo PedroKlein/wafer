@@ -123,6 +123,14 @@ run = [
   "cargo test --locked -p wafer-loadgen --test roundtrip -- --ignored",
 ]
 
+[tasks.test-http-security]
+description = "Build the outbound-HTTP fixture component, then run the ignored wasi:http capability tests"
+run = [
+  "cargo build --release --locked --manifest-path crates/wafer-core/tests/fixtures/http-transform/Cargo.toml --target wasm32-wasip2",
+  "wasm-tools validate --features component-model crates/wafer-core/tests/fixtures/http-transform/target/wasm32-wasip2/release/wafer_http_transform_fixture.wasm",
+  "cargo test --locked -p wafer-core --test wasi_http_capability -- --ignored",
+]
+
 [tasks.mandatory-attack-evidence]
 description = "Run the mandatory containment-attack evidence target"
 run = "mise run //plugins:attack-evidence"

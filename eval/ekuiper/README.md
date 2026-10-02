@@ -53,7 +53,6 @@ The smoke test publishes below-range, boundary, and above-range records. It requ
 systemctl is-active mosquitto kuiper
 curl -fsS http://127.0.0.1:9081/
 taskset -pc "$(systemctl show -p MainPID --value kuiper)"
-./eval/ekuiper/test-native-scripts.sh
 ```
 
 ## Files
