@@ -298,7 +298,12 @@ def build_complete_fixture(root: Path) -> None:
             }
         )
     )
-    for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart", "ekuiper-make-before-break"):
+    for strategy in (
+        "wafer-hotswap",
+        "wafer-restart",
+        "ekuiper-rule-update",
+        "ekuiper-make-before-break",
+    ):
         leaf = root / "e-swap-3" / strategy / "run-01"
         leaf.mkdir(parents=True, exist_ok=True)
         (leaf / "throughput-buckets.json").write_text(

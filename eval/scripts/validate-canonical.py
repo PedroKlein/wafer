@@ -440,7 +440,7 @@ def validate_matrix(matrix: dict) -> list[str]:
     if swap3.get("conditions") != [
         "wafer-hotswap",
         "wafer-restart",
-        "ekuiper-restart",
+        "ekuiper-rule-update",
         "ekuiper-make-before-break",
     ]:
         errors.append("e-swap-3 conditions differ from the frozen strategies")

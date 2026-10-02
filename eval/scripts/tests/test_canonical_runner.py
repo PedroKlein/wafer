@@ -1676,7 +1676,7 @@ def test_swap3_strategies_share_boundary_and_commands_except_strategy() -> None:
     invocations = [build_swap3_invocation(ROOT, item, Path("/tmp/swap3")) for item in items]
     assert all(invocation["controlled_factors"] == invocations[0]["controlled_factors"] for invocation in invocations)
     assert {invocation["strategy"] for invocation in invocations} == {
-        "wafer-hotswap", "wafer-restart", "ekuiper-restart", "ekuiper-make-before-break"
+        "wafer-hotswap", "wafer-restart", "ekuiper-rule-update", "ekuiper-make-before-break"
     }
     assert all("--timing-receipt" in invocation["publisher_command"] for invocation in invocations)
     assert all("--publisher-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
@@ -1732,11 +1732,24 @@ def test_swap3_postprocess_removes_publisher_timing_temporary(
     assert (tmp_path / "disruption-analysis.json").is_file()
 
 
+# Read before any test replaces subprocess.run, which check_output calls.
+SEEDED_RULES = REAL_CHECK_OUTPUT(
+    [str(ROOT / "eval/ekuiper/seed-pipeline-a.sh"), "--dry-run"], text=True
+)
+
+
+def seeded_rules() -> dict:
+    """The stream and rules the seed script declares, as its dry run prints them."""
+    return json.loads(SEEDED_RULES)
+
+
 class FakeEkuiper:
     """The kuiper unit as `systemctl show` reports it and pipeline_a as its REST API does.
 
     The REST API also lists the rules, creates the replacement rule, which starts emitting
-    after ``replacement_quiet_polls`` status reads, and deletes rules.
+    after ``replacement_quiet_polls`` status reads, updates pipeline_a in place, which then
+    publishes after ``update_quiet_polls`` status reads, and deletes rules. ``update_status``
+    is the HTTP status the update answers with.
     """
 
     def __init__(self) -> None:
@@ -1752,6 +1765,9 @@ class FakeEkuiper:
         self.leftover_rules: list[str] = []
         self.replacement: dict | None = None
         self.replacement_quiet_polls = 1
+        self.updated_rule: dict | None = None
+        self.update_quiet_polls = 1
+        self.update_status = 200
 
     def check_output(self, command: list[str], **kwargs: object) -> str:
         if str(command[0]).endswith("seed-pipeline-a.sh"):
@@ -1794,10 +1810,34 @@ class FakeEkuiper:
             self.events.append("delete-pipeline_a")
             self.rule = None
             return self._response(200, "Rule pipeline_a is dropped.")
+        if (method, path) == ("PUT", "/rules/pipeline_a"):
+            self.events.append("update-pipeline_a")
+            if self.update_status != 200:
+                raise runner.urllib.error.HTTPError(
+                    url,
+                    self.update_status,
+                    "Bad Request",
+                    None,
+                    io.BytesIO(b'{"error":1000,"message":"Update rule error"}'),
+                )
+            self.updated_rule = json.loads(request.data)
+            # The update stops the rule and starts it on a new topology with new counters.
+            self.rule = {
+                **self.rule,
+                "lastStartTimestamp": runner.time.time_ns() // 1_000_000,
+                "sink_mqtt_0_0_records_out_total": 0,
+            }
+            return self._response(200, "Rule pipeline_a was updated successfully.")
         assert (method, path) == ("GET", "/rules/pipeline_a/status"), (method, url)
         self.events.append("rule-status")
         if self.rule is None:
             raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        if self.updated_rule is not None:
+            if self.update_quiet_polls > 0:
+                self.update_quiet_polls -= 1
+            else:
+                self.rule["sink_mqtt_0_0_records_out_total"] += 1
+            return self._response(200, json.dumps(self.rule))
         if self.pending_statuses:
             return io.BytesIO(
                 json.dumps({**self.rule, "status": self.pending_statuses.pop(0)}).encode()
@@ -1843,9 +1883,12 @@ def fake_ekuiper_audit(
     root: Path, destination: Path, cpus: str, gctrace: bool = False
 ) -> Path:
     path = destination / "ekuiper-audit.json"
-    path.write_text(
-        '{"service":{"properties":{"MainPID":"4242"}},"process_snapshot":{"processes":[]}}\n'
-    )
+    audit = {
+        "service": {"properties": {"MainPID": "4242"}},
+        "process_snapshot": {"processes": []},
+        "rule": seeded_rules()["rule_payload"],
+    }
+    path.write_text(json.dumps(audit) + "\n")
     return path
 
 
@@ -1857,7 +1900,7 @@ def test_swap3_stops_subscriber_after_the_drain_grace(
     config.write_text("[comparator]\n")
     item = RunItem(
         experiment="e-swap-3",
-        condition="ekuiper-restart",
+        condition="ekuiper-rule-update",
         run_index=1,
         config=config.name,
         warmup_secs=30,
@@ -1910,17 +1953,13 @@ def test_swap3_stops_subscriber_after_the_drain_grace(
         drain_anchors.append(publisher_finished_ns)
         return subscriber.returncode
 
-    def fake_audit(root: Path, destination: Path, cpus: str) -> Path:
-        path = destination / "ekuiper-audit.json"
-        path.write_text("{}\n")
-        return path
-
     ekuiper_states: list[bool] = []
     commands: list[tuple[str, dict]] = []
     monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
     monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
     monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: ekuiper_states.append(active))
-    monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
+    monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_ekuiper_audit)
+    monkeypatch.setattr(runner, "update_ekuiper_rule", lambda *args: None)
     monkeypatch.setattr(
         runner,
         "loadgen_command",
@@ -5663,7 +5702,7 @@ def test_capacity_run_drains_before_sigint(
         ("e-perf-1", "ekuiper"),
         ("e-perf-10", "wafer/rate-04000"),
         ("e-swap-3", "wafer-hotswap"),
-        ("e-swap-3", "ekuiper-restart"),
+        ("e-swap-3", "ekuiper-rule-update"),
     ],
 )
 def test_every_mqtt_subscriber_declares_its_range_and_drain_grace(
@@ -5701,24 +5740,12 @@ def test_ekuiper_failure_in_the_capacity_scout_fails_the_attempt(
     assert "eKuiper failed during the run: runtime-exit" in receipt["detail"]
 
 
-@pytest.mark.parametrize(("crash", "reasons"), [(False, None), (True, ["runtime-exit"])])
-def test_swap3_rule_restart_is_the_arm_action_not_an_ekuiper_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    ekuiper: FakeEkuiper,
-    crash: bool,
-    reasons: list[str] | None,
+def stub_swap3_publisher(
+    monkeypatch: pytest.MonkeyPatch, output: Path, crash: Callable[[], None] | None = None
 ) -> None:
-    commands = stub_ekuiper_run(monkeypatch, ekuiper)
+    """Run E-Swap-3 on a fake clock whose publisher puts measured t=60 at once."""
     clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
     monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
-    output = tmp_path / "ekuiper-restart/run-01-attempt-01"
-    stub_run = runner.subprocess.run
-
-    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
-        if command[0] == "curl" and command[-1].endswith("/start"):
-            ekuiper.restart_rule()
-        return stub_run(command, **kwargs)
 
     def launch(command: list[str], **kwargs: object) -> StoppedRuntime:
         if command == ["publish"]:
@@ -5732,22 +5759,44 @@ def test_swap3_rule_restart_is_the_arm_action_not_an_ekuiper_failure(
                     }
                 )
             )
-            if crash:
-                ekuiper.crash()
+            if crash is not None:
+                crash()
         return StoppedRuntime(0)
 
-    monkeypatch.setattr(runner.subprocess, "run", run)
     monkeypatch.setattr(runner.subprocess, "Popen", launch)
 
+
+def load_contract() -> object:
+    spec = importlib.util.spec_from_file_location(
+        "verify_result_contract", ROOT / "eval/scripts/verify-result-contract.py"
+    )
+    assert spec is not None and spec.loader is not None
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    return contract
+
+
+@pytest.mark.parametrize(("crash", "reasons"), [(False, None), (True, ["runtime-exit"])])
+def test_swap3_rule_update_is_the_arm_action_not_an_ekuiper_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    crash: bool,
+    reasons: list[str] | None,
+) -> None:
+    commands = stub_ekuiper_run(monkeypatch, ekuiper)
+    output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output, ekuiper.crash if crash else None)
+
     assert runner.run_restart_item(
-        ROOT, ekuiper_item("e-swap-3", "ekuiper-restart"), runner.AttemptSelection(output, False)
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-rule-update"),
+        runner.AttemptSelection(output, False),
     )
 
-    assert [command[-1].rsplit("/", 1)[-1] for command in commands if command[0] == "curl"] == [
-        "stop",
-        "start",
-    ]
+    assert not [command for command in commands if command[0] == "curl"]
     health = json.loads((output / "ekuiper-health.json").read_text())
+    assert (health["rule"], health.get("replacement_rule")) == ("pipeline_a", None)
     assert (
         health["after"]["rule_status"]["lastStartTimestamp"]
         > health["before"]["rule_status"]["lastStartTimestamp"]
@@ -5758,6 +5807,105 @@ def test_swap3_rule_restart_is_the_arm_action_not_an_ekuiper_failure(
     assert exit_code == (None if crash else 0)
 
 
+def test_swap3_rule_update_puts_the_audited_rule_with_the_raised_bound_and_waits_for_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    ekuiper.update_quiet_polls = 2
+    output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output)
+
+    assert runner.run_restart_item(
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-rule-update"),
+        runner.AttemptSelection(output, False),
+    )
+
+    # Two status reads before the updated rule's new sink counts output, the one that sees it,
+    # and the health snapshot after the run.
+    action = ekuiper.events[ekuiper.events.index("update-pipeline_a") :]
+    assert action == ["update-pipeline_a"] + ["rule-status"] * 4
+    seeded = seeded_rules()["rule_payload"]
+    assert ekuiper.updated_rule == {
+        **seeded,
+        "sql": seeded["sql"].replace("temperature >= 50", "temperature >= 60"),
+    }
+    record = json.loads((output / "rule-update.json").read_text())
+    assert record["updated_sql"] == ekuiper.updated_rule["sql"]
+    assert [
+        (call["method"], call["path"], call["http_status"], call["request_sql"])
+        for call in record["calls"]
+    ] == [("PUT", "/rules/pipeline_a", 200, ekuiper.updated_rule["sql"])] + [
+        ("GET", "/rules/pipeline_a/status", 200, None)
+    ] * 3
+    assert [
+        json.loads(call["body"])["sink_mqtt_0_0_records_out_total"] for call in record["calls"][1:]
+    ] == [0, 0, 1]
+    timeline = json.loads((output / "disruption-timeline.json").read_text())
+    stamps = [
+        call[key] for call in record["calls"] for key in ("start_timestamp_ns", "end_timestamp_ns")
+    ]
+    assert stamps == sorted(stamps)
+    assert timeline["action_start_timestamp_ns"] <= stamps[0]
+    assert stamps[-1] <= timeline["action_end_timestamp_ns"]
+    contract = load_contract()
+    metadata = json.loads((output / "metadata.json").read_text())
+    assert contract.check_ekuiper_health(output, metadata, "e-swap-3") == []
+    assert contract.check_swap3_rule_update(output) == []
+    assert json.loads((output / "canonical-status.json").read_text())["status"] == "passed"
+
+
+def test_swap3_rule_update_that_ekuiper_refuses_is_a_harness_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    ekuiper.update_status = 400
+    output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output)
+
+    assert not runner.run_restart_item(
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-rule-update"),
+        runner.AttemptSelection(output, False),
+    )
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
+    assert "eKuiper refused the pipeline_a update: 400" in receipt["detail"]
+    record = json.loads((output / "rule-update.json").read_text())
+    assert [(call["method"], call["http_status"]) for call in record["calls"]] == [("PUT", 400)]
+
+
+def test_swap3_rule_update_that_never_publishes_times_out(
+    tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    ekuiper.update_quiet_polls = 1_000_000
+    seeded = seeded_rules()["rule_payload"]
+    rule = {**seeded, "sql": seeded["sql"].replace("temperature >= 50", "temperature >= 60")}
+
+    with pytest.raises(RuntimeError, match="did not publish after its update within 0.05 s"):
+        runner.update_ekuiper_rule(tmp_path, rule, runner.time.monotonic_ns(), timeout_secs=0.05)
+
+    record = json.loads((tmp_path / "rule-update.json").read_text())
+    put, *reads = record["calls"]
+    assert put["method"] == "PUT" and reads and {call["method"] for call in reads} == {"GET"}
+    assert reads[-1]["start_offset_ns"] - put["end_offset_ns"] > 50_000_000
+
+
+def test_swap3_rule_update_needs_the_audited_v1_rule(tmp_path: Path) -> None:
+    seeded = seeded_rules()["rule_payload"]
+    audit = tmp_path / "ekuiper-audit.json"
+    audit.write_text(json.dumps({"rule": seeded}))
+    assert runner.ekuiper_updated_rule(audit) == {
+        **seeded,
+        "sql": seeded["sql"].replace("temperature >= 50", "temperature >= 60"),
+    }
+
+    audit.write_text(json.dumps({"rule": runner.ekuiper_updated_rule(audit)}))
+    with pytest.raises(ValueError, match="does not filter on temperature >= 50"):
+        runner.ekuiper_updated_rule(audit)
+
+
 def test_swap3_make_before_break_deletes_pipeline_a_only_after_the_replacement_emits(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
 ) -> None:
@@ -5765,25 +5913,8 @@ def test_swap3_make_before_break_deletes_pipeline_a_only_after_the_replacement_e
     stub_ekuiper_run(monkeypatch, ekuiper)
     monkeypatch.setattr(runner, "ekuiper_replacement_rule", lambda root: replacement)
     ekuiper.replacement_quiet_polls = 2
-    clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
-    monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
     output = tmp_path / "ekuiper-make-before-break/run-01-attempt-01"
-
-    def launch(command: list[str], **kwargs: object) -> StoppedRuntime:
-        if command == ["publish"]:
-            now = next(clock)
-            (output / "publisher-timing.json").write_text(
-                json.dumps(
-                    {
-                        "measurement_started_unix_epoch_ns": now,
-                        "event_unix_epoch_ns": now,
-                        "event_offset_ns": runner.SWAP3_EVENT_OFFSET_NS,
-                    }
-                )
-            )
-        return StoppedRuntime(0)
-
-    monkeypatch.setattr(runner.subprocess, "Popen", launch)
+    stub_swap3_publisher(monkeypatch, output)
 
     assert runner.run_restart_item(
         ROOT,
@@ -5811,12 +5942,7 @@ def test_swap3_make_before_break_deletes_pipeline_a_only_after_the_replacement_e
     assert offsets == sorted(offsets)
     health = json.loads((output / "ekuiper-health.json").read_text())
     assert (health["rule"], health["replacement_rule"]) == ("pipeline_a", "pipeline_a_v2")
-    spec = importlib.util.spec_from_file_location(
-        "verify_result_contract", ROOT / "eval/scripts/verify-result-contract.py"
-    )
-    assert spec is not None and spec.loader is not None
-    contract = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(contract)
+    contract = load_contract()
     metadata = json.loads((output / "metadata.json").read_text())
     assert contract.check_ekuiper_health(output, metadata, "e-swap-3") == []
     receipt = json.loads((output / "canonical-status.json").read_text())

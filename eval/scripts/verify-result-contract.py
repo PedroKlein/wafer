@@ -42,6 +42,7 @@ from attempts import (
     EKUIPER_REPLACEMENT_RULE,
     EKUIPER_UNIT_PROPERTIES,
     INCOMPLETE_RUN_REASONS,
+    SWAP3_RULE_BOUND_CHANGE,
     ekuiper_exit_code,
     ekuiper_rule_running,
     ekuiper_unit_restarted,
@@ -102,13 +103,11 @@ DEPTH_EXTENSION_GRID = {1, 3, 5, 10, 20, 50}
 SWAP3_STRATEGIES = {
     "wafer-hotswap",
     "wafer-restart",
-    "ekuiper-restart",
+    "ekuiper-rule-update",
     "ekuiper-make-before-break",
 }
 SWAP3_REPLACEMENT_PLUGIN = "wafer_threshold_filter_v2.wasm"
-# threshold-filter-v2 raises Pipeline A's lower bound from 50 to 60, and the eKuiper
-# replacement rule must make the same change to the pipeline_a SQL the audit recorded.
-SWAP3_RULE_BOUND_CHANGE = ("temperature >= 50", "temperature >= 60")
+SWAP3_RULE_UPDATE_TIMEOUT_NS = 10_000_000_000
 SWAP3_PLACEBO_OFFSET_NS = -6_000_000_000
 PASS_THROUGH_PLUGIN = (
     "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
@@ -862,11 +861,102 @@ def check_disruption_timeline(path: Path) -> list[str]:
     return violations
 
 
+def _audited_update_sql(leaf: Path) -> str | None:
+    """The pipeline_a SQL the audit recorded before warm-up, with threshold-filter-v2's bound."""
+    audit = _load_json(leaf / "ekuiper-audit.json", "ekuiper-audit.json", [])
+    rule = audit.get("rule") if isinstance(audit, dict) else None
+    sql = rule.get("sql") if isinstance(rule, dict) else None
+    retired_bound, updated_bound = SWAP3_RULE_BOUND_CHANGE
+    if not isinstance(sql, str) or retired_bound not in sql:
+        return None
+    return sql.replace(retired_bound, updated_bound)
+
+
+def _rule_update_adopted(call: dict, metric: str) -> bool:
+    try:
+        status = json.loads(call["body"])
+    except (TypeError, ValueError):
+        return False
+    emitted = status.get(metric) if isinstance(status, dict) else None
+    return (
+        call["http_status"] == 200
+        and ekuiper_rule_running(status)
+        and type(emitted) is int
+        and emitted > 0
+    )
+
+
+def check_swap3_rule_update(leaf: Path) -> list[str]:
+    """The REST calls of the in-place update: one PUT, then status reads until it publishes."""
+    violations: list[str] = []
+    record = _load_json(leaf / "rule-update.json", "rule-update.json", violations)
+    if record is None:
+        return violations
+    timeline = _load_json(leaf / "disruption-timeline.json", "disruption-timeline.json", [])
+    updated_sql = _audited_update_sql(leaf)
+    if updated_sql is None or record.get("updated_sql") != updated_sql:
+        violations.append(
+            "rule-update.json updated_sql is not the audited pipeline_a rule "
+            f"with {SWAP3_RULE_BOUND_CHANGE[1]}"
+        )
+    calls = record.get("calls")
+    try:
+        if (
+            record.get("schema_version") != 1
+            or record.get("strategy") != "ekuiper-rule-update"
+            or record.get("rule") != "pipeline_a"
+            or record.get("emission_metric") != "sink_mqtt_0_0_records_out_total"
+            or record.get("offset_clock") != "monotonic"
+            or record.get("timestamp_clock") != "unix-epoch"
+            or not isinstance(calls, list)
+            or len(calls) < 2
+            or [(call["method"], call["path"]) for call in calls]
+            != [("PUT", "/rules/pipeline_a")]
+            + [("GET", "/rules/pipeline_a/status")] * (len(calls) - 1)
+        ):
+            return violations + [
+                "rule-update.json must record one PUT /rules/pipeline_a "
+                "and the status reads after it"
+            ]
+        put = calls[0]
+        if put["http_status"] != 200:
+            violations.append("rule-update.json PUT /rules/pipeline_a did not return 200")
+        if put["request_sql"] != record["updated_sql"] or any(
+            call["request_sql"] is not None for call in calls[1:]
+        ):
+            violations.append("rule-update.json PUT does not send the updated SQL")
+        adopted = [_rule_update_adopted(call, record["emission_metric"]) for call in calls[1:]]
+        if not adopted[-1]:
+            violations.append("rule-update.json ends before the updated pipeline_a publishes")
+        elif any(adopted[:-1]):
+            violations.append("rule-update.json reads the status after the update was adopted")
+        if calls[-1]["start_offset_ns"] - put["end_offset_ns"] > SWAP3_RULE_UPDATE_TIMEOUT_NS:
+            violations.append("rule-update.json sees the update adopted after the 10 s deadline")
+        offsets = [
+            int(call[key]) for call in calls for key in ("start_offset_ns", "end_offset_ns")
+        ]
+        stamps = [
+            int(call[key]) for call in calls for key in ("start_timestamp_ns", "end_timestamp_ns")
+        ]
+        if offsets[0] < 0 or offsets != sorted(offsets) or stamps != sorted(stamps):
+            violations.append("rule-update.json calls overlap or run out of order")
+        if isinstance(timeline, dict) and (
+            offsets[-1] > int(timeline["action_duration_ns"])
+            or stamps[0] < int(timeline["action_start_timestamp_ns"])
+            or stamps[-1] > int(timeline["action_end_timestamp_ns"])
+        ):
+            violations.append("rule-update.json calls fall outside the E-Swap-3 action")
+    except (AttributeError, KeyError, TypeError, ValueError):
+        violations.append("rule-update.json calls are malformed")
+    return violations
+
+
 def check_swap3_action(leaf: Path, condition: object) -> list[str]:
-    """The record of the arm's action: the swap request, or the rule replacement's REST calls."""
+    """The record of the arm's action: the swap request, or the REST calls of the rule change."""
     violations: list[str] = []
     records = {
         "wafer-hotswap": "swap_requests.json",
+        "ekuiper-rule-update": "rule-update.json",
         "ekuiper-make-before-break": "rule-replacement.json",
     }
     for arm, name in records.items():
@@ -887,24 +977,19 @@ def check_swap3_action(leaf: Path, condition: object) -> list[str]:
             violations.append(
                 f"swap_requests.json must record the one response to the {SWAP3_REPLACEMENT_PLUGIN} swap"
             )
+    if condition == "ekuiper-rule-update":
+        return violations + check_swap3_rule_update(leaf)
     if condition != "ekuiper-make-before-break":
         return violations
     record = _load_json(leaf / "rule-replacement.json", "rule-replacement.json", violations)
     timeline = _load_json(leaf / "disruption-timeline.json", "disruption-timeline.json", [])
     if record is None:
         return violations
-    audit = _load_json(leaf / "ekuiper-audit.json", "ekuiper-audit.json", [])
-    rule = audit.get("rule") if isinstance(audit, dict) else None
-    retired_sql = rule.get("sql") if isinstance(rule, dict) else None
-    retired_bound, replacement_bound = SWAP3_RULE_BOUND_CHANGE
-    if (
-        not isinstance(retired_sql, str)
-        or retired_bound not in retired_sql
-        or record.get("replacement_sql") != retired_sql.replace(retired_bound, replacement_bound)
-    ):
+    replacement_sql = _audited_update_sql(leaf)
+    if replacement_sql is None or record.get("replacement_sql") != replacement_sql:
         violations.append(
             "rule-replacement.json replacement_sql is not the audited pipeline_a rule "
-            f"with {replacement_bound}"
+            f"with {SWAP3_RULE_BOUND_CHANGE[1]}"
         )
     expected_calls = [
         ("POST", "/rules", 201),
@@ -1458,15 +1543,36 @@ def check_ekuiper_godebug(leaf: Path, metadata: dict, experiment: str) -> list[s
     return violations
 
 
+def _rule_update_restarted(leaf: Path, rule_after: dict) -> bool:
+    timeline = _load_json(leaf / "disruption-timeline.json", "disruption-timeline.json", [])
+    record = _load_json(leaf / "rule-update.json", "rule-update.json", [])
+    action_started_ns = (
+        timeline.get("action_start_timestamp_ns") if isinstance(timeline, dict) else None
+    )
+    try:
+        put_answered_ns = record["calls"][0]["end_timestamp_ns"]
+    except (IndexError, KeyError, TypeError):
+        put_answered_ns = None
+    started_at_ms = rule_after.get("lastStartTimestamp")
+    return (
+        all(type(value) is int for value in (action_started_ns, put_answered_ns, started_at_ms))
+        and action_started_ns - 1_000_000 <= started_at_ms * 1_000_000 <= put_answered_ns
+    )
+
+
 def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[str]:
     """The eKuiper snapshots must bracket the run and agree with the metadata and the audit.
 
     What they show about eKuiper is an outcome (``attempts.ekuiper_health_reasons``), not a
-    violation; evidence the harness could not have written for this run is. Only E-Swap-3
-    starts the rule again during the run, so elsewhere a new rule start time without a unit
-    restart means something outside the run started it. The make-before-break arm deletes
-    pipeline_a during the run, so its ``after`` snapshot is of the replacement rule, which
-    must have started at the action in ``disruption-timeline.json``.
+    violation; evidence the harness could not have written for this run is. Only the E-Swap-3
+    eKuiper arms start a rule during the run, so elsewhere a new rule start time without a
+    unit restart means something outside the run started it. eKuiper answers the rule
+    update's PUT only after it stopped pipeline_a and started it again, and both steps stamp
+    ``lastStartTimestamp`` with the current wall time in whole milliseconds, so the rule's
+    start time lies between the action start in ``disruption-timeline.json`` and the PUT's
+    answer in ``rule-update.json``. The make-before-break arm deletes pipeline_a during the
+    run, so its ``after`` snapshot is of the replacement rule, which must have started at the
+    action.
     """
     path = leaf / "ekuiper-health.json"
     if not path.is_file():
@@ -1479,6 +1585,7 @@ def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[st
         "e-swap-3",
         "ekuiper-make-before-break",
     )
+    updates_rule = (experiment, metadata.get("condition")) == ("e-swap-3", "ekuiper-rule-update")
     if (
         health.get("schema_version"),
         health.get("unit"),
@@ -1542,9 +1649,10 @@ def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[st
                 or started_at_ms * 1_000_000 < action_started_ns - 1_000_000
             ):
                 violations.append("the eKuiper replacement rule started before the E-Swap-3 action")
-        elif experiment == "e-swap-3" and not started_again:
-            violations.append("E-Swap-3 restarted the eKuiper rule but its start time did not move")
-        elif experiment != "e-swap-3" and started_again:
+        elif updates_rule:
+            if not _rule_update_restarted(leaf, rule_after):
+                violations.append("pipeline_a did not start again within the E-Swap-3 rule update")
+        elif started_again:
             violations.append("something outside the run started the eKuiper rule again")
     audit_path = leaf / "ekuiper-audit.json"
     if audit_path.is_file():

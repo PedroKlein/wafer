@@ -57,6 +57,9 @@ ROLLBACK_EXPERIMENTS = frozenset({"e-swap-5", "e-swap-rollback-sessions"})
 ZERO_LOSS_EXPERIMENTS = SWAP_EXPERIMENTS | ROLLBACK_EXPERIMENTS
 EKUIPER_UNIT_PROPERTIES = ("NRestarts", "ExecMainStatus", "MainPID")
 EKUIPER_REPLACEMENT_RULE = "pipeline_a_v2"
+# threshold-filter-v2 raises Pipeline A's lower bound from 50 to 60. Both E-Swap-3 eKuiper arms
+# make the same change to the pipeline_a SQL the audit recorded before warm-up.
+SWAP3_RULE_BOUND_CHANGE = ("temperature >= 50", "temperature >= 60")
 
 _ATTEMPT_NAME = re.compile(r"run-(\d+)(?:-attempt-(\d+))?")
 

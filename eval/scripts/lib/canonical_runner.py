@@ -39,6 +39,7 @@ from attempts import (
     INFRASTRUCTURE,
     PASSED,
     SUT_OUTCOME,
+    SWAP3_RULE_BOUND_CHANGE,
     batch_units,
     condition_attempts,
     ekuiper_exit_code,
@@ -254,15 +255,15 @@ CAPACITY_SCOUT_DISK_FLOOR_BYTES = 2 * 1024 * 1024 * 1024
 SWAP3_STRATEGIES = (
     "wafer-hotswap",
     "wafer-restart",
-    "ekuiper-restart",
+    "ekuiper-rule-update",
     "ekuiper-make-before-break",
 )
-SWAP3_EKUIPER_STRATEGIES = frozenset({"ekuiper-restart", "ekuiper-make-before-break"})
+SWAP3_EKUIPER_STRATEGIES = frozenset({"ekuiper-rule-update", "ekuiper-make-before-break"})
 SWAP3_REPLACEMENT_PLUGIN = (
     "plugins/threshold-filter-v2/target/wasm32-wasip2/release/wafer_threshold_filter_v2.wasm"
 )
-# Only the replacement rule's own sink counts its output; the source counters belong to the
-# shared stream that both rules read.
+# A rule's own sink counts only that rule's output; the source counters belong to the shared
+# stream, which every rule on it reads and which outlives a rule change.
 EKUIPER_EMISSION_METRIC = "sink_mqtt_0_0_records_out_total"
 SWAP3_EVENT_OFFSET_NS = 60_000_000_000
 SWAP3_BUCKET_WIDTH_NS = 100_000_000
@@ -4066,6 +4067,91 @@ def replace_ekuiper_rule(
         write_json_atomic(output / "rule-replacement.json", record)
 
 
+def ekuiper_updated_rule(audit: Path) -> dict:
+    """pipeline_a as the audit before warm-up read it, with threshold-filter-v2's bound."""
+    rule = json.loads(audit.read_text()).get("rule")
+    retired_bound, updated_bound = SWAP3_RULE_BOUND_CHANGE
+    if (
+        not isinstance(rule, dict)
+        or rule.get("id") != "pipeline_a"
+        or retired_bound not in str(rule.get("sql", ""))
+    ):
+        raise ValueError(f"the audited pipeline_a rule does not filter on {retired_bound}")
+    return {**rule, "sql": rule["sql"].replace(retired_bound, updated_bound)}
+
+
+def ekuiper_update_adopted(status: int, body: str) -> bool:
+    """Whether one status read shows the updated pipeline_a running and publishing."""
+    try:
+        value = json.loads(body)
+    except ValueError:
+        return False
+    emitted = value.get(EKUIPER_EMISSION_METRIC) if isinstance(value, dict) else None
+    return status == 200 and ekuiper_rule_running(value) and type(emitted) is int and emitted > 0
+
+
+def update_ekuiper_rule(
+    output: Path, rule: dict, started_monotonic_ns: int, timeout_secs: float = 10.0
+) -> None:
+    """Update pipeline_a in place with one PUT and record each REST call in ``rule-update.json``.
+
+    Unlike a stop and start, the update keeps the shared stream's MQTT subscription open; see
+    docs/benchmarks/ekuiper-comparator.md. eKuiper answers the PUT once it has stopped the
+    rule and started it again on a new topology. That topology's sink counters start at zero,
+    so the update is adopted at the first status read that shows the rule running with a sink
+    count above zero, the signal the make-before-break arm waits for. A read that starts after
+    the deadline does not count.
+    """
+    calls: list[dict] = []
+    record = {
+        "schema_version": 1,
+        "strategy": "ekuiper-rule-update",
+        "rule": "pipeline_a",
+        "updated_sql": rule["sql"],
+        "emission_metric": EKUIPER_EMISSION_METRIC,
+        "offset_clock": "monotonic",
+        "timestamp_clock": "unix-epoch",
+        "calls": calls,
+    }
+
+    def call(method: str, path: str, payload: dict | None = None) -> tuple[int, str]:
+        started_ns = time.time_ns()
+        started = time.monotonic_ns()
+        status, body = _ekuiper_request(method, path, payload)
+        ended = time.monotonic_ns()
+        calls.append(
+            {
+                "method": method,
+                "path": path,
+                "request_sql": None if payload is None else payload["sql"],
+                "http_status": status,
+                "body": body,
+                "start_offset_ns": started - started_monotonic_ns,
+                "end_offset_ns": ended - started_monotonic_ns,
+                "start_timestamp_ns": started_ns,
+                "end_timestamp_ns": time.time_ns(),
+            }
+        )
+        return status, body
+
+    try:
+        status, body = call("PUT", "/rules/pipeline_a", rule)
+        if status != 200:
+            raise RuntimeError(f"eKuiper refused the pipeline_a update: {status} {body}")
+        deadline_offset_ns = calls[0]["end_offset_ns"] + int(timeout_secs * 1_000_000_000)
+        while True:
+            status, body = call("GET", "/rules/pipeline_a/status")
+            if calls[-1]["start_offset_ns"] > deadline_offset_ns:
+                raise RuntimeError(
+                    f"pipeline_a did not publish after its update within {timeout_secs:g} s"
+                )
+            if ekuiper_update_adopted(status, body):
+                break
+            time.sleep(0.01)
+    finally:
+        write_json_atomic(output / "rule-update.json", record)
+
+
 def hot_swap_offsets(item: RunItem) -> list[float]:
     if item.experiment == "e-swap-4":
         return [60.0]
@@ -4387,6 +4473,7 @@ def run_restart_item(
     ekuiper_before: dict | None = None
     ekuiper_health: dict | None = None
     replacement_rule: dict | None = None
+    updated_rule: dict | None = None
     is_ekuiper = item.system == "ekuiper"
     telemetry = start_pi_telemetry(root, output, item)
     try:
@@ -4412,6 +4499,9 @@ def run_restart_item(
             ekuiper_before = ekuiper_run_start()
         if item.condition == "ekuiper-make-before-break":
             replacement_rule = ekuiper_replacement_rule(root)
+        elif item.condition == "ekuiper-rule-update":
+            assert ekuiper_audit is not None
+            updated_rule = ekuiper_updated_rule(ekuiper_audit)
         # The runtime answers a missing plugin like a refused swap, which would count as the
         # system's swap-failed outcome.
         if item.condition == "wafer-hotswap" and not (root / SWAP3_REPLACEMENT_PLUGIN).is_file():
@@ -4506,20 +4596,8 @@ def run_restart_item(
                 )
             elif replacement_rule is not None:
                 replace_ekuiper_rule(output, replacement_rule, action_started_monotonic_ns)
-            elif is_ekuiper:
-                subprocess.run(
-                    ["curl", "-fsS", "-X", "POST", "http://127.0.0.1:9081/rules/pipeline_a/stop"],
-                    stdout=log,
-                    stderr=log,
-                    check=True,
-                )
-                subprocess.run(
-                    ["curl", "-fsS", "-X", "POST", "http://127.0.0.1:9081/rules/pipeline_a/start"],
-                    stdout=log,
-                    stderr=log,
-                    check=True,
-                )
-                wait_for_ekuiper_rule_ready("pipeline_a")
+            elif updated_rule is not None:
+                update_ekuiper_rule(output, updated_rule, action_started_monotonic_ns)
             else:
                 assert runtime is not None
                 runtime.terminate()

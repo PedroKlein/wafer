@@ -1447,7 +1447,7 @@ def swap3_runs() -> list[dict]:
         for strategy in (
             "wafer-hotswap",
             "wafer-restart",
-            "ekuiper-restart",
+            "ekuiper-rule-update",
             "ekuiper-make-before-break",
         )
         for run in range(1, 31)
@@ -1477,17 +1477,17 @@ def test_swap3_table_separates_event_metrics_and_applies_hot_swap_threshold() ->
 def test_swap3_table_reports_the_placebo_dip_of_every_arm_without_judging_it() -> None:
     runs = swap3_runs()
     for run in runs:
-        if run["strategy"] == "ekuiper-restart":
+        if run["strategy"] == "ekuiper-rule-update":
             run["placebo_dip_percent"] = 40.0 + run["run_index"] % 3
     table = swap3_table(runs).set_index("strategy")
     assert table["median_placebo_dip_percent"].to_dict() == {
         "wafer-hotswap": 1.0,
         "wafer-restart": 1.0,
-        "ekuiper-restart": 41.0,
+        "ekuiper-rule-update": 41.0,
         "ekuiper-make-before-break": 1.0,
     }
-    restart = table.loc["ekuiper-restart"]
-    assert restart["placebo_dip_ci95_low_percent"] <= 41.0 <= restart["placebo_dip_ci95_high_percent"]
+    update = table.loc["ekuiper-rule-update"]
+    assert update["placebo_dip_ci95_low_percent"] <= 41.0 <= update["placebo_dip_ci95_high_percent"]
 
     noisy = [dict(run, placebo_dip_percent=90.0) for run in swap3_runs()]
     assert swap3_table(noisy).set_index("strategy").loc["wafer-hotswap", "verdict"] == "PASS"
@@ -2204,7 +2204,7 @@ def test_swap3_dip_verdict_reads_the_one_sided_upper_bound(verdict: str) -> None
     assert wafer["dip_threshold"] == 5.0
     assert wafer["dip_flips_at"] in (low, high)
     assert wafer["dip_ci_half_width"] == pytest.approx((high - low) / 2)
-    comparators = ["wafer-restart", "ekuiper-restart", "ekuiper-make-before-break"]
+    comparators = ["wafer-restart", "ekuiper-rule-update", "ekuiper-make-before-break"]
     assert table.loc[comparators, "verdict"].isna().all()
     assert table.loc[comparators, "dip_verdict"].isna().all()
 

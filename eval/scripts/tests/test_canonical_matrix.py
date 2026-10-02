@@ -96,7 +96,7 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     assert swap3["conditions"] == [
         "wafer-hotswap",
         "wafer-restart",
-        "ekuiper-restart",
+        "ekuiper-rule-update",
         "ekuiper-make-before-break",
     ]
     assert set(swap3["required_outputs"]) == {
