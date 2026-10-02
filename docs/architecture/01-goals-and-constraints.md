@@ -53,7 +53,7 @@ Does hot-swap achieve bounded pause duration and zero message loss when replacin
 | RQ3d | One stateless swap centered in a 1,000 to 2,000 to 1,000 msg/s burst | Across-run p95 sink gap < 100 ms, with zero loss and duplication |
 | RQ3e | Failed swap recovery (v2 traps on first message) | Pipeline survives, 0 messages lost |
 
-Baselines: full pipeline restart (naive) and eKuiper rule restart.
+Comparators: WAFER full pipeline restart (naive), eKuiper rule update (stop and start) and eKuiper make-before-break rule replacement.
 
 ## Stakeholders
 

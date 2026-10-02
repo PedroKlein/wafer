@@ -197,6 +197,7 @@ mise run preflight-pi5                               # or preflight-jetson / pre
 mise run plan-campaign -- --host rpi5                # Print the schedule (no runs)
 mise run run-campaign -- --host rpi5 --batch-id ID   # Run or resume a batch
 mise run run-campaign -- --host rpi5 --batch-id ID --repetitions 3   # Diagnostic batch, never thesis evidence
+mise run smoke-swap3 -- --host rpi5 --batch-id ID    # Every E-Swap-3 arm once before a batch, diagnostic
 mise run campaign-status -- --host rpi5 --batch-id ID
 mise run approve-batch -- --host rpi5 --batch-id ID  # Check a finished final batch, record it in eval/final-batches.json
 mise run idle-baseline-pi5                           # Diagnostic idle-power baseline

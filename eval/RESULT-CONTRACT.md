@@ -158,12 +158,12 @@ each system outcome and still exits 0 when nothing else is wrong. A runtime that
 before its control plane answers, or that dies when E-Swap-3 restarts it, is judged
 by its exit code like any other run. An eKuiper rule that does not run cleanly before
 warm-up never started the measured pipeline and fails the attempt as infrastructure,
-as a WAFER startup refusal does. Two paths still end as infrastructure failures
+as a WAFER startup refusal does. Three paths still end as infrastructure failures
 although the system under test may have caused them: an E-Swap-3 restart whose new
 runtime keeps running but never answers its control plane, an E-Swap-3 eKuiper
-rule restart whose REST calls fail or whose rule does not report `running` within
-10 seconds, and an E-Swap-3 make-before-break replacement whose REST calls fail or
-whose replacement rule does not count output within 10 seconds.
+rule update (stop and start) whose REST calls fail or whose rule does not report
+`running` within 10 seconds, and an E-Swap-3 make-before-break replacement whose
+REST calls fail or whose replacement rule does not count output within 10 seconds.
 
 `final_campaign.attempt_policy` in `canonical-matrix.json` sets the retry cap: one
 infrastructure retry per unit, and none for the experiments in `gate_experiments`
