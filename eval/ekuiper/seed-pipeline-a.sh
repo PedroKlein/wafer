@@ -3,7 +3,8 @@
 #
 # Idempotent: deletes the existing wafer_telemetry stream, pipeline_a rule and
 # the E-Swap-3 replacement rule pipeline_a_v2 before re-creating the stream
-# and pipeline_a. Safe to run repeatedly during shakedown.
+# and pipeline_a, which also restores the bound an E-Swap-3 rule update
+# raised. Safe to run repeatedly during shakedown.
 #
 # --dry-run also prints pipeline_a_v2, which the E-Swap-3 make-before-break
 # arm creates during its run: Pipeline A with the lower bound raised to 60,

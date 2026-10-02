@@ -24,7 +24,7 @@ The 4 GB memory constraint preserves WAFER's gateway-class scope, but Raspberry 
 
 ## Comparator boundary
 
-WAFER, the native Rust baseline, and eKuiper run directly on the same Raspberry Pi OS installation. eKuiper is pinned to version 2.1.5 and installed from its official Linux ARM64 release package. This record first pinned 2.1.0, the first release of the 2.1 line, and the 2026-08-29 shakedown below ran that version. The pin moved to 2.1.5, the last patch release of the same line, before any final batch, because its fixes include the rule stop and start path that E-Swap-3 uses. All three systems use the same native Mosquitto broker, payloads, topics, load profile, measurement subscriber, CPU allocation, warmup, run length, and repetition count.
+WAFER, the native Rust baseline, and eKuiper run directly on the same Raspberry Pi OS installation. eKuiper is pinned to version 2.1.5 and installed from its official Linux ARM64 release package. This record first pinned 2.1.0, the first release of the 2.1 line, and the 2026-08-29 shakedown below ran that version. The pin moved to 2.1.5, the last patch release of the same line, before any final batch, because its fixes include the rule update path that E-Swap-3 uses. All three systems use the same native Mosquitto broker, payloads, topics, load profile, measurement subscriber, CPU allocation, warmup, run length, and repetition count.
 
 Docker is excluded from the Pi because it would add a deployment and network boundary to only one system. Existing macOS Docker shakedowns remain development evidence and are not canonical results.
 

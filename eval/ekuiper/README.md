@@ -32,7 +32,7 @@ Pipeline A implements the comparator path:
 MQTT wafer/telemetry → JSON decode → 50 ≤ temperature ≤ 99999 → MQTT wafer/telemetry/hot
 ```
 
-The script first deletes any existing stream, `pipeline_a`, and `pipeline_a_v2`, the replacement rule that the E-Swap-3 `ekuiper-make-before-break` arm creates during its run. eKuiper keeps rules across restarts, so this returns every run to `pipeline_a` alone. `--dry-run` also prints that replacement as `replacement_rule_payload`: Pipeline A with the lower bound raised to 60, the change `threshold-filter-v2` makes on WAFER. See "E-Swap-3 rule changes" in `docs/benchmarks/ekuiper-comparator.md`.
+The script first deletes any existing stream, `pipeline_a`, and `pipeline_a_v2`, the replacement rule that the E-Swap-3 `ekuiper-make-before-break` arm creates during its run. eKuiper keeps rules across restarts, so this returns every run to `pipeline_a` alone. Creating `pipeline_a` again from the script's own payload also undoes the E-Swap-3 `ekuiper-rule-update` arm, which leaves `pipeline_a` with the raised bound, and the script fails if it cannot create the rule. `--dry-run` also prints that replacement as `replacement_rule_payload`: Pipeline A with the lower bound raised to 60, the change `threshold-filter-v2` makes on WAFER. See "E-Swap-3 rule changes" in `docs/benchmarks/ekuiper-comparator.md`.
 
 ## Diagnostic tail profiling
 
