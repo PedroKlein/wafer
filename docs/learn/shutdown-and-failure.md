@@ -121,19 +121,6 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 
 **Known drift:** Shutdown is cancel-all, not reverse-topological, and does not prove completion of every in-flight message; only sinks drain their own buffered queue. The guest `close()` export is never called. A failed DLQ enqueue (full or closed sink) is counted as `dlq_lost` but cannot recover the message; the validator rejects a `dlq` action with no `[dead_letter]` sink. The `teardown` action stops the node permanently and does not update its reported state.
 
-## Evidence
-
-- **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub async fn shutdown`, `pub async fn run_until_complete`, `self.tasks.shutdown().await`
-- **Source:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbols: `pub async fn run_source_loop`, `source.close().await`
-- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `let result = transform.process(envelope).await`, `policy.flush_to_dlq(&DlqReason::Shutdown, &metrics)`
-- **Source:** [`crates/wafer-core/src/runner/sink.rs`](../../crates/wafer-core/src/runner/sink.rs) | symbols: `pub async fn run_sink_loop`, `receiver.try_recv()`, `sink.flush().await`, `sink.close().await`
-- **Source:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbols: `pub(crate) fn handle`, `pub fn flush_to_dlq`, `DlqReason::Shutdown`
-- **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `async fn test_shutdown_completes_all_tasks()`, `async fn test_cancel_triggers_shutdown()`
-- **Test:** [`crates/wafer-core/src/runner/sink.rs`](../../crates/wafer-core/src/runner/sink.rs) | symbol: `async fn test_sink_loop_cancel_drains_and_flushes()`
-- **Test:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbol: `fn test_flush_to_dlq_drains_all_entries()`
-- **Test:** [`crates/wafer-runtime/tests/runtime_control_plane.rs`](../../crates/wafer-runtime/tests/runtime_control_plane.rs) | symbol: `async fn api_health_nodes_and_sigterm_shutdown()`
-- **Test:** [`crates/wafer-runtime/tests/shutdown_signals.rs`](../../crates/wafer-runtime/tests/shutdown_signals.rs) | symbol: `fn second_sigterm_exits_while_a_guest_blocks_the_graceful_shutdown()`
-
 ## Checkpoint
 
 Explain three separate endings: natural channel closure, cooperative cancellation, and deadline-driven task abort. Then identify what each node type cleans up, why a running guest call is not cancelled, and where a typed guest error becomes a retry, DLQ entry, recovery attempt, or task exit.

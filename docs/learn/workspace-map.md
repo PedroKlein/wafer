@@ -81,18 +81,6 @@ The remaining crates have one clear consumer boundary: guest authors use `wafer-
 
 **Known drift:** `docs/status/implementation-status.md` says `wafer-config` owns "Types + validator," but current source places the configuration types in `wafer-types`. Treat the source split above as authoritative. The core also contains a `dag` module used by orchestration, so `wafer-config::DagGraph` is not the only graph representation in the repository.
 
-## Evidence
-
-- **Source:** [`Cargo.toml`](../../Cargo.toml) | symbols: `[workspace]`, `members = [`
-- **Source:** [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) | symbols: `pub use loader::load_config`, `pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}`
-- **Source:** [`crates/wafer-types/src/lib.rs`](../../crates/wafer-types/src/lib.rs) | symbols: `pub mod config`, `pub use control::*`
-- **Source:** [`crates/wafer-core/src/lib.rs`](../../crates/wafer-core/src/lib.rs) | symbols: `pub mod orchestrator`, `pub mod runner`
-- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `use wafer_config::{load_config, validate}`, `fn main() -> ExitCode`
-- **Source:** [`crates/wafer-plugin/src/lib.rs`](../../crates/wafer-plugin/src/lib.rs) | symbol: `macro_rules! output_from`
-- **Source:** [`crates/wafer-loadgen/src/lib.rs`](../../crates/wafer-loadgen/src/lib.rs) | symbols: `pub mod publish`, `pub use publish::{PublishArgs, run_publisher}`
-- **Source:** [`crates/waferctl/src/main.rs`](../../crates/waferctl/src/main.rs) | symbol: `enum Commands`
-- **Test:** [`crates/wafer-config/tests/eval_configs_load.rs`](../../crates/wafer-config/tests/eval_configs_load.rs) | symbol: `fn every_eval_config_loads_and_validates()`
-
 ## Checkpoint
 
 Without opening implementation details, name the owner for a new config field, a queue-runner change, a plugin helper, a benchmark traffic change, a runtime flag, and an operator command. If any answer is unclear, follow that crate's `src/lib.rs` or `src/main.rs` before moving on.
