@@ -68,6 +68,7 @@ MQTT_DRAIN_GRACE_SECS = int(
     json.loads(CANONICAL_MATRIX.read_text())["final_campaign"]["mqtt_drain_grace_secs"]
 )
 TARGET_LOAD_EXPERIMENTS = frozenset({"e-perf-1", "e-perf-2", "e-perf-3"})
+MQTT_STOP_TOLERANCE_NS = 500_000_000
 LATENCY_HIGHEST_NS = 3_600_000_000_000
 FINAL_CAPACITY_REPETITIONS = 30
 FINAL_CAPACITY_MEASUREMENT_SECS = 60
@@ -256,6 +257,33 @@ def check_declared_sequence_range(leaf: Path) -> list[str]:
     ):
         violations.append(
             "subscriber-metadata.json does not declare the publisher's measured sequence range"
+        )
+    return violations
+
+
+def check_mqtt_run_end(leaf: Path) -> list[str]:
+    """The run used the matrix drain grace and the subscriber stopped within it."""
+    violations: list[str] = []
+    intervals = _load_json(leaf / "interval-metrics.json", "interval-metrics.json", [])
+    subscriber = _load_json(leaf / "subscriber-metadata.json", "subscriber-metadata.json", [])
+    window = _load_json(leaf / "measurement-window.json", "measurement-window.json", [])
+    if intervals is None or subscriber is None or window is None:
+        return violations
+    grace_ns = MQTT_DRAIN_GRACE_SECS * 1_000_000_000
+    if intervals.get("drain_grace_ns") != grace_ns:
+        violations.append(
+            f"interval-metrics.json drain_grace_ns is {intervals.get('drain_grace_ns')}, "
+            f"must be the matrix MQTT drain grace {grace_ns}"
+        )
+    ended_ns = subscriber.get("ended_at_ns")
+    finished_ns = window.get("finished_ns")
+    if (
+        type(ended_ns) is not int
+        or type(finished_ns) is not int
+        or ended_ns > finished_ns + grace_ns + MQTT_STOP_TOLERANCE_NS
+    ):
+        violations.append(
+            "subscriber stopped later than the MQTT drain grace after the publisher exit"
         )
     return violations
 
@@ -2017,9 +2045,11 @@ def check_leaf(
         violations.extend(check_publisher_summary(leaf / "publisher-summary.json"))
         violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
         violations.extend(check_declared_sequence_range(leaf))
+        violations.extend(check_mqtt_run_end(leaf))
     if experiment == "e-perf-10" and "capacity-run.json" in files:
         violations.extend(check_publisher_summary(leaf / "publisher-summary.json"))
         violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
+        violations.extend(check_mqtt_run_end(leaf))
         violations.extend(check_capacity_run_result(leaf / "capacity-run.json"))
         violations.extend(check_capacity_artifact_reconciliation(leaf))
     if experiment == "e-perf-capacity-knee" and "capacity-run.json" in files:
@@ -2071,6 +2101,7 @@ def check_leaf(
         violations.extend(check_publisher_summary(leaf / "publisher-summary.json"))
         violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
         violations.extend(check_declared_sequence_range(leaf))
+        violations.extend(check_mqtt_run_end(leaf))
         violations.extend(check_disruption_analysis(leaf / "disruption-analysis.json"))
         violations.extend(check_swap3_reconciliation(leaf, metadata))
     if experiment == "e-swap-4":

@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -687,6 +687,32 @@ def write_target_load_summaries(
             throughput_messages=received_unique,
         )
         (result / name).write_text(json.dumps(intervals))
+    declare_mqtt_run_end(result)
+
+
+def declare_mqtt_run_end(leaf: Path, drain_grace_ns: int = 5_000_000_000) -> None:
+    """Give the interval files the subscriber's publisher drain and the matrix drain grace."""
+    for name in ("interval-latency.json", "interval-metrics.json"):
+        intervals = json.loads((leaf / name).read_text())
+        intervals.update(
+            publisher_drain_ns=6_000_000_000,
+            drain_grace_ns=drain_grace_ns,
+            maximum_rows=1 + 6 + -(-drain_grace_ns // 1_000_000_000) + 2,
+        )
+        (leaf / name).write_text(json.dumps(intervals))
+
+
+def make_target_load_result(root: Path, experiment: str, condition: str) -> Path:
+    source = make_result(root)
+    result = root / experiment / "rpi5-2026-08-30T00-00-00Z" / condition / "run-01"
+    result.parent.mkdir(parents=True)
+    source.rename(result)
+    metadata_path = result / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(experiment=experiment, condition=condition, system="wafer")
+    metadata_path.write_text(json.dumps(metadata))
+    write_target_load_summaries(result)
+    return result
 
 
 def make_ekuiper_result(root: Path, exit_code: int | None = 0) -> Path:
@@ -752,6 +778,47 @@ def test_target_load_result_requires_bounded_summaries_and_a_declared_range(
     write_target_load_summaries(result, received_unique=59_000, sequence_end=None)
     if missing:
         (result / missing).unlink()
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert violation in completed.stdout
+
+
+@pytest.mark.parametrize(("experiment", "condition"), [("e-perf-1", "wafer"), ("e-perf-3", "depth-3")])
+def test_wafer_target_load_result_admits_tail_loss_and_requires_the_declared_range(
+    tmp_path: Path, experiment: str, condition: str
+) -> None:
+    result = make_target_load_result(tmp_path, experiment, condition)
+    write_target_load_summaries(result, received_unique=59_000)
+    assert run(result).returncode == 0
+
+    write_target_load_summaries(result, received_unique=59_000, sequence_end=None)
+    completed = run(result)
+    assert completed.returncode == 1
+    assert "does not declare the publisher's measured sequence range" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("mutate", "violation"),
+    [
+        (
+            lambda leaf: declare_mqtt_run_end(leaf, drain_grace_ns=0),
+            "drain_grace_ns is 0, must be the matrix MQTT drain grace 5000000000",
+        ),
+        (
+            lambda leaf: (leaf / "measurement-window.json").write_text(
+                json.dumps({"started_ns": 1, "finished_ns": 2 - 5_500_000_001})
+            ),
+            "subscriber stopped later than the MQTT drain grace after the publisher exit",
+        ),
+    ],
+)
+def test_target_load_result_must_end_at_the_matrix_drain_grace(
+    tmp_path: Path, mutate: Callable[[Path], None], violation: str
+) -> None:
+    result = make_target_load_result(tmp_path, "e-perf-1", "native")
+    mutate(result)
 
     completed = run(result)
 
@@ -1068,6 +1135,7 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
     interval_metrics["rows"][0]["throughput_messages"] = 120_000
     interval_metrics["rows"][0]["throughput_messages_per_second"] = 1_000.0
     (leaf / "interval-metrics.json").write_text(json.dumps(interval_metrics))
+    declare_mqtt_run_end(leaf)
     return leaf
 
 
@@ -1707,6 +1775,21 @@ def test_final_swap3_leaf_accepts_all_declared_strategies_and_rejects_legacy_tim
                 json.dumps({"schema_version": 1, "strategy": "invalid"})
             ),
             "disruption-analysis.json strategy is invalid",
+        ),
+        (
+            lambda leaf: (leaf / "subscriber-metadata.json").write_text(
+                json.dumps(
+                    {
+                        **json.loads((leaf / "subscriber-metadata.json").read_text()),
+                        "sequence_end_exclusive": None,
+                    }
+                )
+            ),
+            "subscriber-metadata.json does not declare the publisher's measured sequence range",
+        ),
+        (
+            lambda leaf: declare_mqtt_run_end(leaf, drain_grace_ns=6_000_000_000),
+            "must be the matrix MQTT drain grace 5000000000",
         ),
     ],
 )
