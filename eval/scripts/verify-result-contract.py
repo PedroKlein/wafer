@@ -92,10 +92,8 @@ PASS_THROUGH_PLUGIN = (
 
 # Runtime-provenance keys populated by `eval/scripts/lib/write_metadata.py`
 # when it merges `runtime-provenance.json` (emitted by wafer-runtime) into
-# `metadata.json`. T8 (thesis-hardening): shakedown dirs lacking these keys
-# get a WARN, not a violation — legacy shakedown scripts write bespoke
-# minimal metadata by design (see script header comments). Canonical
-# `run-experiment.sh` runs always merge these keys.
+# `metadata.json`. A non-canonical leaf without them gets a warning; under
+# `--canonical` it is a violation.
 MERGED_PROVENANCE_KEYS = (
     "wasmtime_version",
     "wafer_runtime_sha256",
@@ -1709,12 +1707,6 @@ def check_leaf(
             f"{export_errors.relative_to(leaf)} present: BenchSink could not write every artifact"
         )
 
-    # T8: warn (don't fail) when metadata.json is present but lacks the
-    # provenance keys that `write_metadata.py` merges from
-    # `runtime-provenance.json`. Legacy shakedown scripts write bespoke
-    # per-experiment metadata schemas by design and are documented as
-    # such in their headers; the WARN surfaces the gap without breaking
-    # existing baseline dirs.
     meta_path = leaf / "metadata.json"
     metadata: dict = {}
     if meta_path.is_file():
@@ -1730,8 +1722,7 @@ def check_leaf(
             if missing and metadata.get("system") not in {"ekuiper", "mqtt-loopback", "static"}:
                 message = (
                     f"metadata.json lacks merged provenance keys: {sorted(missing)} "
-                    f"(legacy shakedown script; canonical runs source "
-                    f"eval/scripts/lib/write_metadata.py)"
+                    f"(written by eval/scripts/lib/write_metadata.py)"
                 )
                 if canonical:
                     violations.append(message)
