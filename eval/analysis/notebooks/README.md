@@ -32,7 +32,7 @@ Saved verdict tables carry `<prefix>_verdict`, `<prefix>_estimate` (the point es
 
 ## Paired contrasts
 
-`09-saturation.ipynb` saves `e-perf-1-wafer-native-contrast`: WAFER and native run p95 and p50 paired by run index, with the median over pairs of WAFER minus native, its bootstrap 95% CI over run pairs and half-width, the ratio of medians with its CI, the paired SD and the minimum detectable difference `(z(0.975) + z(0.80)) * paired SD / sqrt(N pairs)`. `04-cross-arch.ipynb` saves `e-perf-5-wafer-native-contrast`, the same paired contrast of run p50 for each host it reads. Both are descriptive and carry no verdict; the E-Perf-5 rows make no cross-architecture claim. `eval/RESULT-CONTRACT.md` lists their columns.
+`09-saturation.ipynb` saves `e-perf-1-wafer-native-contrast`: WAFER and native run p95 and p50 paired by run index, with the median over pairs of WAFER minus native, its bootstrap 95% CI over run pairs and half-width, the ratio of medians with its CI, the paired SD and the minimum detectable difference `(z(0.975) + z(0.80)) * paired SD / sqrt(N pairs)`. `04-cross-arch.ipynb` saves `e-perf-5-wafer-native-contrast`, the same paired contrast of run p50 with one row per host, labelled with its host tag. A canonical run reads every host's approved E-Perf-5 batch from `eval/final-batches.json`; a diagnostic run reads `E_PERF_5_RPI_DIR`, `E_PERF_5_JETSON_DIR` and `E_PERF_5_X86_DIR`, and setting any of them makes every host diagnostic. Runs the system under test stopped early are left out with their partner runs and counted in `runs_stopped_early`. Both are descriptive and carry no verdict; the E-Perf-5 rows make no cross-architecture claim. `eval/RESULT-CONTRACT.md` lists their columns.
 
 ## Replication concordance
 

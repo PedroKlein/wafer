@@ -116,6 +116,36 @@ def approved_host_batches(
     return approved
 
 
+def resolve_host_batches(
+    experiment_id: str,
+    diagnostic_paths: Mapping[str, str | None],
+    results_root: pathlib.Path | str | None = None,
+) -> tuple[dict[str, pathlib.Path], bool]:
+    """Each host's batch of one experiment, by host tag, and whether canonical gates apply.
+
+    Explicit diagnostic paths, keyed by host tag, select diagnostic mode for every
+    host. Otherwise ``WAFER_EVAL_BATCH_ID`` selects canonical mode: the named batch
+    must be approved, and each host's batch is the one its own entry approves, so a
+    batch is never reported under another host's tag.
+    """
+    unknown = set(diagnostic_paths) - set(HOST_TAGS)
+    if unknown:
+        raise ValueError(f"unknown host tags: {sorted(unknown)}")
+    explicit = {host: path for host, path in diagnostic_paths.items() if path}
+    if explicit:
+        return {
+            host: resolve_result_batch(
+                experiment_id, diagnostic_path=path, results_root=results_root
+            )
+            for host, path in explicit.items()
+        }, False
+    batch_id = os.environ.get("WAFER_EVAL_BATCH_ID")
+    if not batch_id:
+        return {}, False
+    find_canonical_batch(experiment_id, batch_id, results_root)
+    return approved_host_batches(experiment_id, results_root), True
+
+
 def find_canonical_ledger(
     batch_id: str, results_root: pathlib.Path | str | None = None
 ) -> pathlib.Path:

@@ -489,6 +489,7 @@ def execute_notebooks(monkeypatch, fixture: Path, notebooks: list[Path] = NOTEBO
         "E_PERF_3_DIR": "e-perf-3",
         "E_PERF_4_DIR": "e-perf-4",
         "E_PERF_5_RPI_DIR": "e-perf-5",
+        "E_PERF_5_JETSON_DIR": "e-perf-5",
         "E_PERF_5_X86_DIR": "e-perf-5",
         "E_PERF_6_DIR": "e-perf-6",
         "E_PERF_7_DIR": "e-perf-7",
@@ -608,8 +609,10 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert concordance.concordance.eq("same-verdict").all()
     assert concordance.canonical_verdict.eq("PASS").all()
     overhead = pd.read_csv(rendered / "e-perf-5-wafer-native-contrast.csv")
-    assert overhead.host.tolist() == ["arm64-rpi5", "x86-linux"]
+    assert overhead.host.tolist() == ["rpi5", "jetson", "x86"]
+    assert overhead.columns[0] == "host" and "status" not in overhead
     assert overhead.median_ratio.eq(1.2).all()
+    assert overhead.runs_stopped_early.eq(0).all()
     assert (rendered / "e-perf-10-rate-estimates.csv").is_file()
     assert (rendered / "e-swap-4-burst.tex").is_file()
     assert (rendered / "rq3/swap-phases.pdf").stat().st_size > 1_000
