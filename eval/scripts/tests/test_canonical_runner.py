@@ -5302,6 +5302,9 @@ def test_disruption_hot_swap_counts_only_an_adopted_replacement(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, response: dict, reasons: list[str] | None
 ) -> None:
     stub_runner_host(monkeypatch, runtime_exit=0)
+    plugin = tmp_path / "wafer_threshold_filter_v2.wasm"
+    plugin.write_bytes(b"\0asm")
+    monkeypatch.setattr(runner, "SWAP3_REPLACEMENT_PLUGIN", str(plugin))
     clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
     monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
     item = next(
@@ -5355,6 +5358,34 @@ def test_disruption_hot_swap_counts_only_an_adopted_replacement(
     assert json.loads((output / "swap_requests.json").read_text()) == [
         {"event_index": 0, "plugin": "wafer_threshold_filter_v2.wasm", **response}
     ]
+
+
+def test_disruption_hot_swap_without_its_replacement_plugin_is_a_harness_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=0)
+    monkeypatch.setattr(
+        runner, "SWAP3_REPLACEMENT_PLUGIN", str(tmp_path / "wafer_threshold_filter_v2.wasm")
+    )
+    launched: list[list[str]] = []
+    monkeypatch.setattr(
+        runner.subprocess,
+        "Popen",
+        lambda command, **kwargs: launched.append(command) or StoppedRuntime(0),
+    )
+    monkeypatch.setattr(
+        runner, "post_hot_swap", lambda node, plugin: pytest.fail("swap posted without its plugin")
+    )
+    item = next(
+        item for item in build_schedule({"e-swap-3"}, seed=1729) if item.condition == "wafer-hotswap"
+    )
+    output = tmp_path / "wafer-hotswap/run-01-attempt-01"
+
+    assert not runner.run_restart_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    assert launched == []
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
 
 
 def stub_ekuiper_run(monkeypatch: pytest.MonkeyPatch, ekuiper: FakeEkuiper) -> list[list[str]]:

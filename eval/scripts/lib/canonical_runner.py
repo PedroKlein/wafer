@@ -4412,6 +4412,12 @@ def run_restart_item(
             ekuiper_before = ekuiper_run_start()
         if item.condition == "ekuiper-make-before-break":
             replacement_rule = ekuiper_replacement_rule(root)
+        # The runtime answers a missing plugin like a refused swap, which would count as the
+        # system's swap-failed outcome.
+        if item.condition == "wafer-hotswap" and not (root / SWAP3_REPLACEMENT_PLUGIN).is_file():
+            raise RuntimeError(
+                f"the E-Swap-3 replacement plugin is not built: {SWAP3_REPLACEMENT_PLUGIN}"
+            )
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = facts["git_sha"]
         environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
