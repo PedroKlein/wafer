@@ -200,6 +200,95 @@ def target_latency_table(records: list[dict], *, canonical: bool = True) -> pd.D
     return pd.DataFrame(rows)
 
 
+MDD_ALPHA = 0.05
+MDD_POWER = 0.80
+_MDD_Z = statistics.NormalDist().inv_cdf(1 - MDD_ALPHA / 2) + statistics.NormalDist().inv_cdf(
+    MDD_POWER
+)
+
+
+def _wafer_native_contrast(
+    records: list[dict],
+    conditions: tuple[str, ...],
+    percentiles: tuple[str, ...],
+    *,
+    canonical: bool,
+    claim_boundary: str,
+) -> pd.DataFrame:
+    grouped = _group_runs(records, conditions, canonical=canonical)
+    wafer_runs = {int(run["run_index"]): run for run in grouped["wafer"]}
+    native_runs = {int(run["run_index"]): run for run in grouped["native"]}
+    pairs = sorted(wafer_runs.keys() & native_runs.keys())
+    if not pairs:
+        return pd.DataFrame()
+    rows = []
+    for percentile in percentiles:
+        wafer = np.asarray([wafer_runs[index][f"{percentile}_ns"] for index in pairs], dtype=float)
+        native = np.asarray([native_runs[index][f"{percentile}_ns"] for index in pairs], dtype=float)
+        difference = wafer - native
+        low, high = bootstrap_ci(difference)
+        shift, shift_low, shift_high = median_shift_ci(wafer, native, relative=True, paired=True)
+        paired_sd = float(np.std(difference, ddof=1)) if len(pairs) > 1 else None
+        rows.append(
+            {
+                "statistic": percentile,
+                "condition": "wafer",
+                "reference_condition": "native",
+                "N_pairs": len(pairs),
+                "wafer_median_ns": float(np.median(wafer)),
+                "native_median_ns": float(np.median(native)),
+                "median_ratio": 1 + shift,
+                "ratio_ci95_low": 1 + shift_low,
+                "ratio_ci95_high": 1 + shift_high,
+                "difference_ns": float(np.median(difference)),
+                "difference_ci95_low_ns": low,
+                "difference_ci95_high_ns": high,
+                "difference_ci_half_width_ns": (high - low) / 2,
+                "paired_sd_ns": paired_sd,
+                "mdd_ns": None if paired_sd is None else _MDD_Z * paired_sd / math.sqrt(len(pairs)),
+                "units": "nanoseconds, ratio, run pairs",
+                "estimator": (
+                    f"WAFER and native run {percentile} paired by run index within the randomised block; "
+                    "median over pairs of WAFER minus native with a bootstrap 95% CI over pairs and its half-width; "
+                    "median WAFER over median native with a bootstrap 95% CI over pairs; "
+                    "minimum detectable difference (z(0.975) + z(0.80)) x paired SD / sqrt(N pairs), "
+                    f"two-sided alpha {MDD_ALPHA:g} and power {MDD_POWER:.2f}, normal approximation"
+                ),
+                "uncertainty": "bootstrap 95% CIs over run pairs",
+                "threshold": "none: descriptive contrast without a verdict",
+                "claim_boundary": claim_boundary,
+                "thesis_evidence": canonical,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def target_contrast_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Perf-1: paired WAFER minus native run p95 and p50 at the matched target load.
+
+    Each record is one run's ``p95_ns`` and ``p50_ns``; eKuiper runs may be
+    present and are not part of the contrast.
+    """
+    return _wafer_native_contrast(
+        records,
+        ("wafer", "native", "ekuiper"),
+        ("p95", "p50"),
+        canonical=canonical,
+        claim_boundary="matched 1,000 msg/s target load over MQTT; descriptive, no verdict",
+    )
+
+
+def overhead_contrast_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Perf-5 on one host: paired WAFER/native ratio and WAFER minus native run p50."""
+    return _wafer_native_contrast(
+        records,
+        ("wafer", "native"),
+        ("p50",),
+        canonical=canonical,
+        claim_boundary="in-process path on one host; descriptive, no verdict; no cross-architecture claim",
+    )
+
+
 def metering_table(records: list[dict]) -> pd.DataFrame:
     conditions = ("neither", "fuel-only", "epoch-only", "both")
     grouped = _require_runs(records, conditions)

@@ -4,6 +4,7 @@ import hashlib
 import json
 import random
 from pathlib import Path
+from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,7 @@ from wafer_analysis.canonical import (
     density_table,
     depth_tables,
     metering_table,
+    overhead_contrast_table,
     startup_table,
     payload_table,
     recovery_table,
@@ -33,6 +35,7 @@ from wafer_analysis.canonical import (
     swap4_table,
     swap_phase_table,
     swap_sequence_table,
+    target_contrast_table,
     target_latency_table,
     validation_gate_table,
 )
@@ -121,6 +124,72 @@ def test_target_latency_diagnostic_table_pairs_the_run_indices_both_systems_have
     assert table["thesis_evidence"].eq(False).all()
     assert table.loc["wafer", "p95_ratio_verdict"] == "PASS"
     assert table.loc["wafer", "median_ratio_vs_reference"] == pytest.approx(120_002.5 / 122_002.5)
+
+
+BLOCKS = {run: 100_000.0 * (1 + run % 5) for run in range(1, 31)}
+
+
+def contrast_runs(conditions: tuple[str, ...], wafer_p95_extra, n: int = 30) -> list[dict]:
+    """Runs whose latency follows a block effect shared by every system of a run index."""
+    return [
+        {
+            "condition": condition,
+            "run_index": run,
+            "p50_ns": (1.2 if condition == "wafer" else 1.0) * BLOCKS[run],
+            "p95_ns": 2 * BLOCKS[run] + (wafer_p95_extra(run) if condition == "wafer" else 0),
+        }
+        for condition in conditions
+        for run in range(1, n + 1)
+    ]
+
+
+def test_target_contrast_reports_the_paired_difference_and_its_minimum_detectable_size() -> None:
+    def extra(run: int) -> int:
+        return 10_000 if run % 2 else 30_000
+
+    table = target_contrast_table(contrast_runs(("wafer", "native", "ekuiper"), extra))
+
+    p95 = table.set_index("statistic").loc["p95"]
+    differences = np.asarray([extra(run) for run in range(1, 31)], dtype=float)
+    z = NormalDist().inv_cdf(0.975) + NormalDist().inv_cdf(0.8)
+    assert table["statistic"].tolist() == ["p95", "p50"]
+    assert (p95["condition"], p95["reference_condition"], p95["N_pairs"]) == ("wafer", "native", 30)
+    assert p95["difference_ns"] == 20_000
+    assert (p95["difference_ci95_low_ns"], p95["difference_ci95_high_ns"]) == bootstrap_ci(differences)
+    assert p95["difference_ci_half_width_ns"] == pytest.approx(
+        (p95["difference_ci95_high_ns"] - p95["difference_ci95_low_ns"]) / 2
+    )
+    assert p95["paired_sd_ns"] == pytest.approx(np.std(differences, ddof=1))
+    assert p95["mdd_ns"] == pytest.approx(z * np.std(differences, ddof=1) / np.sqrt(30))
+    assert "verdict" not in table and table["thesis_evidence"].eq(True).all()
+    assert "power 0.80" in p95["estimator"]
+
+
+def test_overhead_contrast_resamples_run_pairs_for_the_ratio() -> None:
+    row = overhead_contrast_table(contrast_runs(("wafer", "native"), lambda run: 0)).iloc[0]
+
+    assert (row["statistic"], row["N_pairs"]) == ("p50", 30)
+    assert row["median_ratio"] == pytest.approx(1.2)
+    assert (row["ratio_ci95_low"], row["ratio_ci95_high"]) == pytest.approx((1.2, 1.2))
+    assert row["difference_ns"] == pytest.approx(0.2 * np.median(list(BLOCKS.values())))
+    assert "no cross-architecture claim" in row["claim_boundary"]
+
+
+def test_contrasts_need_complete_canonical_runs_but_pair_what_a_diagnostic_batch_has() -> None:
+    with pytest.raises(ValueError, match="30 independent runs"):
+        overhead_contrast_table(contrast_runs(("wafer", "native"), lambda run: 0, n=29))
+
+    runs = [
+        run
+        for run in contrast_runs(("wafer", "native"), lambda run: 0, n=3)
+        if (run["condition"], run["run_index"]) != ("native", 3)
+    ]
+    row = overhead_contrast_table(runs, canonical=False).iloc[0]
+    assert (row["N_pairs"], row["thesis_evidence"]) == (2, False)
+    single = overhead_contrast_table(runs[:1] + runs[3:4], canonical=False).iloc[0]
+    assert single["N_pairs"] == 1
+    assert pd.isna(single["paired_sd_ns"]) and pd.isna(single["mdd_ns"])
+    assert overhead_contrast_table(runs[:2], canonical=False).empty
 
 
 def test_target_latency_rejects_missing_delivery_evidence() -> None:
