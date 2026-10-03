@@ -59,6 +59,7 @@ Cpus_allowed_list:	0"
     write "$sysroot/proc/irq/30/effective_affinity_list" "0"
     for cpu in 0 1 2 3; do
         write "$sysroot/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_governor" "performance"
+        write "$sysroot/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_min_freq" "1728000"
         write "$sysroot/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_cur_freq" "1728000"
         write "$sysroot/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_max_freq" "1728000"
     done
@@ -129,6 +130,15 @@ grep -q '^PASS  turbo: off' "$log"
 grep -q '^PASS  CPU temperature sensor: k10temp' "$log"
 grep -q '^PASS  RAPL package energy readable: /sys/class/powercap/intel-rapl:0/energy_uj' "$log"
 assert_cpu_affinity_passed "$log"
+
+write "$x86/sys/devices/system/cpu/cpu1/cpufreq/scaling_min_freq" "400000"
+if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" \
+    WAFER_PREFLIGHT_SYSROOT="$x86" "$ROOT/eval/scripts/preflight-x86.sh" >"$log" 2>&1; then
+    echo 'x86 preflight passed with an unpinned minimum clock' >&2
+    exit 1
+fi
+grep -q '^FAIL  cpu1 clock pinned — minimum 400000 kHz, max 1728000 kHz' "$log"
+write "$x86/sys/devices/system/cpu/cpu1/cpufreq/scaling_min_freq" "1728000"
 
 write "$x86/sys/devices/system/cpu/smt/control" "on"
 write "$x86/sys/devices/system/cpu/cpufreq/boost" "1"

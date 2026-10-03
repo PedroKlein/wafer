@@ -31,7 +31,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from host_facts import cpu_policy_facts, platform_facts  # noqa: E402
+from host_facts import cpu_governors, cpu_policy_facts, platform_facts  # noqa: E402
 from pi_telemetry import host_snapshot  # noqa: E402
 
 
@@ -85,13 +85,7 @@ def _hardware_metadata() -> dict:
     except (OSError, ValueError, IndexError):
         pass
 
-    governors = sorted({
-        path.read_text().strip()
-        for path in pathlib.Path("/sys/devices/system/cpu").glob(
-            "cpu[0-9]*/cpufreq/scaling_governor"
-        )
-        if path.is_file()
-    })
+    governors = cpu_governors()
 
     raw_temperature, throttled = host_snapshot()
     temperature: int | str = raw_temperature or "unknown"

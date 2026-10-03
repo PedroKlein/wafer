@@ -12,7 +12,7 @@ import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from host_facts import cpu_policy_facts, platform_facts  # noqa: E402
+from host_facts import cpu_governors, cpu_policy_facts, platform_facts  # noqa: E402
 from host_profiles import HostProfile, host_profile, host_profiles  # noqa: E402
 from pi_telemetry import host_snapshot  # noqa: E402
 
@@ -114,23 +114,9 @@ def source_facts(root: Path) -> tuple[str, bool, list[str]]:
     return str(state.get("git_sha", "unknown")), state.get("git_dirty") is True, tags
 
 
-def read_text(path: Path, default: str = "unknown") -> str:
-    try:
-        return path.read_text().replace("\x00", "").strip() or default
-    except OSError:
-        return default
-
-
 def collect_host_facts(root: Path, host: str = "rpi5") -> dict:
     sha, dirty, tags = source_facts(root)
-    governors = sorted(
-        {
-            read_text(path)
-            for path in Path("/sys/devices/system/cpu").glob(
-                "cpu[0-9]*/cpufreq/scaling_governor"
-            )
-        }
-    )
+    governors = cpu_governors()
     broker_ready = False
     try:
         with socket.create_connection(("127.0.0.1", 1883), timeout=1):

@@ -12,12 +12,17 @@ Read-only preflight: `mise run preflight-x86` or `./eval/scripts/preflight-x86.s
 | CPU 0 for everything but the SUT | systemd affinity `0`; no isolated CPUs (cores 1-3 run the SUT, core 0 the broker, load generator and samplers) | `CPUAffinity=0` under `[Manager]` in `/etc/systemd/system.conf`, then reboot; drop any `isolcpus=` from the kernel command line |
 | IRQs on CPU 0 | `/proc/irq/default_smp_affinity` is CPU 0 only | add `irqaffinity=0` to `GRUB_CMDLINE_LINUX` in `/etc/default/grub`, run `sudo update-grub`, then reboot |
 | SUT CPUs balanced | three busy loops under `taskset -c 1-3` run on three CPUs | follows from the two rows above |
-| Governor | `performance` on every CPU | `sudo cpupower frequency-set -g performance` |
-| Clocks | `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 | follows from the governor and turbo settings |
+| Governor | `performance` on every online CPU | `sudo cpupower -c 0-3 frequency-set -g performance` |
+| Clocks | `scaling_min_freq` and `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 | after disabling SMT and turbo, set `max=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq)` and run `sudo cpupower -c 0-3 frequency-set -d "${max}kHz" -u "${max}kHz"` |
 | Temperature | `x86_pkg_temp` thermal zone (Intel) or `k10temp`/`coretemp` hwmon | kernel modules `coretemp` or `k10temp` |
 | Power | RAPL package `energy_uj` readable by the user that runs the batch; without it every run fails its power check | `sudo chmod a+r /sys/class/powercap/intel-rapl:*/energy_uj`, again after each reboot |
 | Binaries | built on this host | `mise run build-release-x86` |
 | Services | Mosquitto and native eKuiper 2.1.5 | `eval/ekuiper/install-native.sh` picks the `amd64` package |
+
+Repeat the governor and minimum/maximum frequency commands after every boot. On
+some `intel_pstate` systems the `performance` governor still reports the hardware's
+idle frequency through `scaling_cur_freq`; pinning the minimum prevents those idle
+samples from being misclassified as throttling before a run starts.
 
 The runner starts WAFER and the native baseline with `taskset -c 1-3` and pins
 `wafer-loadgen` and both telemetry samplers to CPU 0; the eKuiper unit sets

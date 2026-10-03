@@ -8,7 +8,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
-from host_facts import CPU_POLICY_KEYS, PLATFORM_KEYS, cpu_policy_facts, platform_facts  # noqa: E402
+from host_facts import (  # noqa: E402
+    CPU_POLICY_KEYS,
+    PLATFORM_KEYS,
+    cpu_governors,
+    cpu_policy_facts,
+    platform_facts,
+)
 import canonical_runner  # noqa: E402
 
 KEYS = {
@@ -96,6 +102,26 @@ def test_intel_no_turbo_and_jetson_power_mode() -> None:
     assert facts["hardware_model"] == "NVIDIA Jetson Orin Nano Developer Kit"
     assert facts["physical_cores"] == 4
     assert facts["power_mode"] == "25W"
+
+
+def test_cpu_governors_ignore_offline_cpu_policies() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write(root, "sys/devices/system/cpu/online", "0-3\n")
+        for cpu in range(4):
+            write(
+                root,
+                f"sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_governor",
+                "performance\n",
+            )
+        for cpu in range(4, 8):
+            write(
+                root,
+                f"sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_governor",
+                "unknown\n",
+            )
+
+        assert cpu_governors(root) == ["performance"]
 
 
 def test_cpu_model_uses_first_compatible_entry_when_cpuinfo_names_none() -> None:

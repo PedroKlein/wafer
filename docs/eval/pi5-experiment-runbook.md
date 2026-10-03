@@ -100,6 +100,12 @@ Deploy the verified commit with `./eval/scripts/deploy-pi5.sh --host USER@wafer-
 
 Do not continue if preflight reports a dirty source, a non-performance governor, a failed CPU affinity or load-balancing check, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
 
+On x86, repeat the governor and minimum/maximum frequency pinning commands from
+[x86 host setup](x86-host-setup.md) after every boot. The performance governor alone
+can leave idle `intel_pstate` cores reporting their minimum frequency; because host
+admission and telemetry run before the SUT is busy, those samples would otherwise be
+recorded as throttling.
+
 Before the final batch, record the idle-power baseline once on the same host state (broker up, no pipeline):
 
 ```sh

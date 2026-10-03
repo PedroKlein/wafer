@@ -154,16 +154,19 @@ check_governor() {
 }
 
 check_clocks_pinned() {
-    local cpus="$1" cpu current max
+    local cpus="$1" cpu minimum current max
     for cpu in $cpus; do
+        minimum="$(sysread "/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_min_freq")"
         current="$(sysread "/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_cur_freq")"
         max="$(sysread "/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_max_freq")"
-        if [ -z "$current" ] || [ -z "$max" ]; then
+        if [ -z "$minimum" ] || [ -z "$current" ] || [ -z "$max" ]; then
             fail "cpu$cpu clock pinned" "cpufreq not readable"
+        elif [ "$minimum" -lt $((max * 95 / 100)) ]; then
+            fail "cpu$cpu clock pinned" "minimum $minimum kHz, max $max kHz"
         elif [ "$current" -lt $((max * 95 / 100)) ]; then
             fail "cpu$cpu clock pinned" "running at $current kHz, max $max kHz"
         else
-            pass "cpu$cpu clock: $current kHz (max $max kHz)"
+            pass "cpu$cpu clock: $current kHz (min $minimum kHz, max $max kHz)"
         fi
     done
 }

@@ -75,17 +75,33 @@ def _cpu_model(root: Path, processors: list[dict[str, str]]) -> str | None:
     return first or None
 
 
-def _count_cpus(spec: str | None) -> int | None:
+def _cpu_ids(spec: str | None) -> list[int]:
     if not spec:
-        return None
-    total = 0
+        return []
+    cpus = []
     for part in spec.split(","):
         if "-" in part:
-            low, high = part.split("-", 1)
-            total += int(high) - int(low) + 1
+            low, high = (int(value) for value in part.split("-", 1))
+            cpus.extend(range(low, high + 1))
         else:
-            total += 1
-    return total
+            cpus.append(int(part))
+    return cpus
+
+
+def _count_cpus(spec: str | None) -> int | None:
+    cpus = _cpu_ids(spec)
+    return len(cpus) if cpus else None
+
+
+def cpu_governors(root: Path = Path("/")) -> list[str]:
+    cpu_root = root / "sys/devices/system/cpu"
+    online = _cpu_ids(_read(cpu_root / "online"))
+    paths = (
+        [cpu_root / f"cpu{cpu}/cpufreq/scaling_governor" for cpu in online]
+        if online
+        else cpu_root.glob("cpu[0-9]*/cpufreq/scaling_governor")
+    )
+    return sorted({governor for path in paths if (governor := _read(path)) is not None})
 
 
 def _physical_cores(processors: list[dict[str, str]], online: str | None) -> int | None:
