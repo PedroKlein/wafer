@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "base": "scratch",
+  "platform": "linux/amd64",
+  "build_image": "rust:1.98.1-alpine@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f",
+  "rust_toolchain": "1.98.1",
+  "inputs_sha256": {
+    "Dockerfile": "9da13d03d509bae869d197f2944164382f1666f6e7c88126dbe474570a162b65",
+    "worker/Cargo.toml": "0c55b7067814bfbdb3600c3d7fd6a66027c5cca40b6f6ba5dcd1fa47fa1dc9cc",
+    "worker/Cargo.lock": "4ae3e1d345e4242ee1514d67552074fd9229d57ce98acda1ef65da9f990ae4f4",
+    "worker/src/main.rs": "27dce743ab265281f47adffb593ceeff3b82fc82c0ac34a96d6f5eaabac02ad9"
+  },
+  "smoke_test": "passed stdin through unchanged",
+  "layer_count": 1,
+  "layer_diff_id": "sha256:82a30082fea4b349f6c44b8487cb34dce4c9f098da3e3b24e0d9bb5a40319db7",
+  "image_bytes": 488960,
+  "binary_bytes": 487320,
+  "docker_server_version": "26.1.5+dfsg1",
+  "measured_at": "2026-10-02T22:48:50Z"
+}
