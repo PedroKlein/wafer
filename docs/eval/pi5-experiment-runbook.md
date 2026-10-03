@@ -102,9 +102,11 @@ Do not continue if preflight reports a dirty source, a non-performance governor,
 
 On x86, repeat the governor and minimum/maximum frequency pinning commands from
 [x86 host setup](x86-host-setup.md) after every boot. The performance governor alone
-can leave idle `intel_pstate` cores reporting their minimum frequency; because host
-admission and telemetry run before the SUT is busy, those samples would otherwise be
-recorded as throttling.
+does not pin the policy limits. Preflight checks current frequency while CPUs 1-3
+are busy; runtime admission checks that every online policy remains `performance`
+with equal minimum/maximum limits and that the hardware core/package throttle
+counters do not increase. Active-mode `intel_pstate` per-core `scaling_cur_freq` is
+retained as audit data, not used as an idle-core throttle verdict.
 
 Before the final batch, record the idle-power baseline once on the same host state (broker up, no pipeline):
 

@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -178,6 +179,7 @@ def _write(path: Path, text: str) -> None:
 def _cpufreq(root: Path, cpu: int, current_khz: int, max_khz: int = 2_000_000) -> None:
     cpufreq = root / f"sys/devices/system/cpu/cpu{cpu}/cpufreq"
     _write(cpufreq / "scaling_cur_freq", f"{current_khz}\n")
+    _write(cpufreq / "scaling_min_freq", f"{max_khz}\n")
     _write(cpufreq / "scaling_max_freq", f"{max_khz}\n")
     _write(cpufreq / "scaling_governor", "performance\n")
 
@@ -201,6 +203,7 @@ def _jetson_sysroot(root: Path) -> Path:
 
 
 def _x86_sysroot(root: Path) -> Path:
+    _write(root / "sys/devices/system/cpu/online", "0-3\n")
     package = root / "sys/class/powercap/intel-rapl:0"
     _write(package / "name", "package-0\n")
     _write(package / "energy_uj", "1000000\n")
@@ -214,6 +217,7 @@ def _x86_sysroot(root: Path) -> Path:
     for cpu in range(4):
         _cpufreq(root, cpu, 3_400_000, 3_400_000)
         _write(root / f"sys/devices/system/cpu/cpu{cpu}/thermal_throttle/core_throttle_count", "0\n")
+    _write(root / "sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count", "0\n")
     return root
 
 
@@ -256,17 +260,70 @@ def test_x86_backend_derives_package_power_from_rapl_energy_deltas(tmp_path: Pat
     assert abs(float(wrapped[0]["power_w"]) - (262143328850 - 11000000) / 1e6) < 1e-6
 
 
-def test_x86_backend_reports_thermal_throttle_counter_increments(tmp_path: Path) -> None:
+def test_x86_backend_ignores_idle_average_pstate_and_offline_policies(
+    tmp_path: Path,
+) -> None:
+    from pi_telemetry import make_backend, sample
+
+    root = _x86_sysroot(tmp_path)
+    _cpufreq(root, 0, 400_000, 3_400_000)
+    _cpufreq(root, 4, 400_000, 3_400_000)
+    _write(root / "sys/devices/system/cpu/cpu4/cpufreq/scaling_governor", "powersave\n")
+    summary, _ = sample(make_backend("x86", root))
+    assert summary["throttled"] == "0x0"
+
+
+def test_x86_backend_fails_closed_on_clock_policy_drift(tmp_path: Path) -> None:
     from pi_telemetry import make_backend, sample
 
     root = _x86_sysroot(tmp_path)
     backend = make_backend("x86", root)
+
+    policy = root / "sys/devices/system/cpu/cpu2/cpufreq"
+    _write(policy / "scaling_governor", "powersave\n")
+    summary, _ = sample(backend)
+    assert summary["throttled"] == "cpu2-governor-not-performance"
+
+    _write(policy / "scaling_governor", "performance\n")
+    _write(policy / "scaling_min_freq", "400000\n")
+    summary, _ = sample(backend)
+    assert summary["throttled"] == "cpu2-clock-not-pinned"
+
+    (policy / "scaling_min_freq").unlink()
+    summary, _ = sample(backend)
+    assert summary["throttled"] == "cpu2-clock-limits-unreadable"
+
+
+def test_x86_backend_fails_when_a_clock_policy_disappears(tmp_path: Path) -> None:
+    from pi_telemetry import make_backend, sample
+
+    root = _x86_sysroot(tmp_path)
+    backend = make_backend("x86", root)
+    shutil.rmtree(root / "sys/devices/system/cpu/cpu3/cpufreq")
+    summary, _ = sample(backend)
+    assert summary["throttled"] == "cpu3-clock-policy-missing"
+
+
+def test_x86_backend_reports_thermal_throttle_counter_increments(tmp_path: Path) -> None:
+    from pi_telemetry import make_backend, sample
+
+    root = _x86_sysroot(tmp_path)
+    core_counter = root / "sys/devices/system/cpu/cpu1/thermal_throttle/core_throttle_count"
+    package_counter = root / "sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count"
+    _write(core_counter, "7\n")
+    _write(package_counter, "11\n")
+    backend = make_backend("x86", root)
     summary, _ = sample(backend)
     assert summary["throttled"] == "0x0"
     assert summary["temperature_millicelsius"] == 61000
-    _write(root / "sys/devices/system/cpu/cpu1/thermal_throttle/core_throttle_count", "3\n")
+    _write(core_counter, "8\n")
     summary, _ = sample(backend)
     assert summary["throttled"] == "cpu1-thermal-throttle"
+    summary, _ = sample(backend)
+    assert summary["throttled"] == "0x0"
+    _write(package_counter, "12\n")
+    summary, _ = sample(backend)
+    assert summary["throttled"] == "package-thermal-throttle"
     summary, _ = sample(backend)
     assert summary["throttled"] == "0x0"
 

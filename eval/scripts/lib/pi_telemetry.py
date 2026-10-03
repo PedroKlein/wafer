@@ -120,9 +120,29 @@ def read_int(path: Path) -> int | None:
         return None
 
 
+def _cpu_ids(spec: str | None) -> list[int]:
+    if not spec:
+        return []
+    cpus = []
+    for part in spec.split(","):
+        if "-" in part:
+            low, high = (int(value) for value in part.split("-", 1))
+            cpus.extend(range(low, high + 1))
+        else:
+            cpus.append(int(part))
+    return cpus
+
+
 def cpufreq_dirs(sysroot: Path) -> list[Path]:
+    cpu_root = sysroot / "sys/devices/system/cpu"
+    online = _cpu_ids(read_text(cpu_root / "online"))
+    paths = (
+        [cpu_root / f"cpu{cpu}/cpufreq" for cpu in online]
+        if online
+        else cpu_root.glob("cpu[0-9]*/cpufreq")
+    )
     return sorted(
-        sysroot.glob("sys/devices/system/cpu/cpu[0-9]*/cpufreq"),
+        (path for path in paths if path.is_dir()),
         key=lambda path: int(path.parent.name[3:]),
     )
 
@@ -198,6 +218,23 @@ def cpus_below_pinned_clock(sysroot: Path) -> list[str]:
     return below
 
 
+def x86_clock_policy_reasons(sysroot: Path, expected_cpus: set[str]) -> list[str]:
+    policies = {path.parent.name: path for path in cpufreq_dirs(sysroot)}
+    reasons = [f"{cpu}-clock-policy-missing" for cpu in sorted(expected_cpus - policies.keys())]
+    reasons.extend(f"{cpu}-clock-policy-unexpected" for cpu in sorted(policies.keys() - expected_cpus))
+    for cpu in sorted(expected_cpus & policies.keys()):
+        policy = policies[cpu]
+        if read_text(policy / "scaling_governor") != "performance":
+            reasons.append(f"{cpu}-governor-not-performance")
+        minimum = read_int(policy / "scaling_min_freq")
+        maximum = read_int(policy / "scaling_max_freq")
+        if not minimum or not maximum:
+            reasons.append(f"{cpu}-clock-limits-unreadable")
+        elif minimum != maximum:
+            reasons.append(f"{cpu}-clock-not-pinned")
+    return reasons
+
+
 def throttle_token(reasons: list[str]) -> str:
     return "+".join(reasons) if reasons else NOT_THROTTLED
 
@@ -270,6 +307,7 @@ class X86Backend:
         )
         self.boundary = X86_RAPL_BOUNDARY if self.domains else X86_NO_POWER_BOUNDARY
         self.previous: dict[str, tuple[int, int]] = {}
+        self.clock_policy_cpus = {path.parent.name for path in cpufreq_dirs(sysroot)}
         self.throttle_counts: dict[str, int] = {}
 
     def rails(self, timestamp_ns: int) -> list[dict[str, float | str]]:
@@ -303,17 +341,27 @@ class X86Backend:
         return rails
 
     def throttled(self) -> str:
-        reasons = cpus_below_pinned_clock(self.sysroot)
-        for counter in sorted(
-            self.sysroot.glob("sys/devices/system/cpu/cpu[0-9]*/thermal_throttle/core_throttle_count")
-        ):
+        reasons = x86_clock_policy_reasons(self.sysroot, self.clock_policy_cpus)
+        counters = [
+            (counter, f"{counter.parent.parent.name}-thermal-throttle")
+            for counter in sorted(
+                self.sysroot.glob(
+                    "sys/devices/system/cpu/cpu[0-9]*/thermal_throttle/core_throttle_count"
+                )
+            )
+        ]
+        package = self.sysroot / "sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count"
+        if package.is_file():
+            counters.append((package, "package-thermal-throttle"))
+        for counter, reason in counters:
             count = read_int(counter)
             if count is None:
                 continue
-            cpu = counter.parent.parent.name
-            if count > self.throttle_counts.get(cpu, count):
-                reasons.append(f"{cpu}-thermal-throttle")
-            self.throttle_counts[cpu] = count
+            key = str(counter)
+            previous = self.throttle_counts.get(key)
+            if previous is not None and count > previous:
+                reasons.append(reason)
+            self.throttle_counts[key] = count
         return throttle_token(reasons)
 
 
