@@ -15,6 +15,7 @@ from typing import Callable
 
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+_MOUNTINFO_PATH = Path("/proc/self/mountinfo")
 CANONICAL_ALIASES = {
     "e-perf-2": "e-perf-1",
     "e-perf-8": "e-perf-6",
@@ -47,6 +48,25 @@ def _reject_symlink_chain(path: Path) -> None:
     for part in (candidate, *candidate.parents):
         if part.is_symlink():
             raise ValueError(f"managed path must not use symlinks: {part}")
+
+
+def _decode_mountinfo_path(value: str) -> str:
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), value)
+
+
+def _is_mountpoint(path: Path) -> bool:
+    if os.path.ismount(path):
+        return True
+    try:
+        lines = _MOUNTINFO_PATH.read_text().splitlines()
+    except OSError:
+        return False
+    target = os.fspath(path)
+    return any(
+        len(fields) > 4 and _decode_mountinfo_path(fields[4]) == target
+        for line in lines
+        if (fields := line.split())
+    )
 
 
 def _child(root: Path, *parts: str) -> Path:
@@ -118,7 +138,7 @@ class ResultsLayout:
         if not volume.is_dir():
             raise FileNotFoundError(f"explicit results root is absent or not a directory: {volume}")
         volume = volume.resolve()
-        is_mount = mount_check or os.path.ismount
+        is_mount = mount_check or _is_mountpoint
         if require_mount and not is_mount(volume):
             raise ValueError(f"explicit results root is not a mounted filesystem: {volume}")
         layout = cls(

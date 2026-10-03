@@ -54,8 +54,9 @@ The runner accepts `--results-root PATH` or `WAFER_RESULTS_ROOT`; a CLI value wi
 No platform path is inferred. `/mnt/wafer-results` on Pi/Jetson and
 `/Volumes/WAF_RESULTS` on macOS are documented operator mount paths. An explicit
 root must already exist and be a mounted filesystem before the runner creates any
-managed directory. Paths containing spaces are supported. Stored paths are relative
-to the volume root.
+managed directory. Linux bind mounts count when the exact root appears in
+`/proc/self/mountinfo`; an ordinary child directory on that filesystem does not.
+Paths containing spaces are supported. Stored paths are relative to the volume root.
 
 Generated path segments use a conservative exFAT-safe ASCII set. The layout rejects
 reserved DOS names, separators, control characters, trailing dots or spaces,

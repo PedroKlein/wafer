@@ -79,6 +79,32 @@ def test_explicit_layout_supports_spaces_and_separates_managed_trees(tmp_path: P
     assert all(path.is_dir() for path in (layout.raw, layout.manifests, layout.derived, layout.reports))
 
 
+def test_explicit_layout_accepts_an_exact_linux_bind_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = tmp_path / "mounted results\tline\nback\\slash"
+    volume.mkdir()
+    mountinfo = tmp_path / "mountinfo"
+    escaped = (
+        str(volume)
+        .replace("\\", "\\134")
+        .replace(" ", "\\040")
+        .replace("\t", "\\011")
+        .replace("\n", "\\012")
+    )
+    mountinfo.write_text(f"36 25 0:32 / {escaped} rw,relatime - ext4 /dev/root rw\n")
+    monkeypatch.setattr(storage, "_MOUNTINFO_PATH", mountinfo)
+    monkeypatch.setattr(storage.os.path, "ismount", lambda _: False)
+
+    layout = ResultsLayout.resolve(tmp_path, volume)
+    assert layout.volume == volume.resolve()
+
+    child = volume / "ordinary-child"
+    child.mkdir()
+    with pytest.raises(ValueError, match="not a mounted filesystem"):
+        ResultsLayout.resolve(tmp_path, child)
+
+
 def test_explicit_layout_rejects_absent_and_unmounted_roots(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="absent"):
         ResultsLayout.resolve(tmp_path, tmp_path / "missing", mount_check=mounted)
