@@ -1144,6 +1144,58 @@ def test_swap5_rollback_and_post_rollback_continuity_reconcile() -> None:
         runner.validate_swap5_artifacts(requests, rollback, missing_output, sequence)
 
 
+def test_swap5_postprocess_composes_intervals_before_continuity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    requests = swap5_requests_fixture()
+    sequence = {"expected": 300_000, "received": 300_000, "gaps": 0, "duplicates": 0}
+    item = next(
+        item
+        for item in build_schedule({"e-swap-5"}, seed=1729)
+        if item.run_index == 1
+    )
+    (tmp_path / "metadata.json").write_text("{}")
+    (tmp_path / "swap_requests.json").write_text(json.dumps(requests))
+    (tmp_path / "rollback.json").write_text(
+        json.dumps(runner.build_swap5_rollback(requests, sequence))
+    )
+    (tmp_path / "sequence.csv").write_text(
+        "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+        "300000,300000,0,0,0\n"
+    )
+    calls = 0
+
+    def compose(output: Path, *, required: bool) -> Path:
+        nonlocal calls
+        calls += 1
+        destination = output / "interval-metrics.json"
+        destination.write_text(
+            json.dumps(
+                {
+                    "rows": [
+                        {
+                            "interval_start_unix_epoch_ns": requests[-1][
+                                "request_finished_ns"
+                            ],
+                            "interval_end_unix_epoch_ns": requests[-1]["request_finished_ns"]
+                            + 1_000_000_000,
+                            "throughput_messages": 1_000,
+                        }
+                    ]
+                }
+            )
+        )
+        return destination
+
+    monkeypatch.setattr(runner, "compose_interval_metrics", compose)
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    assert calls == 1
+    continuity = json.loads((tmp_path / "post-rollback-continuity.json").read_text())
+    assert continuity["output_observed_after_final_rollback"] is True
+
+
 def candidate_swap_summary_fixture(experiment: str) -> dict:
     rollback = experiment == runner.ROLLBACK_SESSIONS_EXPERIMENT
     records = []

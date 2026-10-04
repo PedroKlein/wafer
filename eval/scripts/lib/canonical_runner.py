@@ -6232,6 +6232,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             ],
             check=True,
         )
+    compose_interval_metrics(output, required=True)
 
     loadgen = root / "target/release/wafer-loadgen"
     if item.experiment == "e-iso-7":
@@ -6478,7 +6479,6 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             ],
             check=True,
         )
-    compose_interval_metrics(output, required=True)
     if item.experiment == EKUIPER_PROFILE_EXPERIMENT:
         context = metadata.get("profile")
         if not isinstance(context, dict):
