@@ -43,19 +43,7 @@ pub fn write_startup(
     launch_completed: Instant,
     launch_timings: LaunchTimings,
 ) -> Result<()> {
-    let cache_state = std::env::var(CACHE_STATE_ENV).with_context(|| {
-        format!("{CACHE_STATE_ENV} is required when {STARTUP_OUTPUT_ENV} is set")
-    })?;
-    let preparation = std::env::var(CACHE_PREPARATION_ENV).with_context(|| {
-        format!("{CACHE_PREPARATION_ENV} is required when {STARTUP_OUTPUT_ENV} is set")
-    })?;
-    if !matches!(cache_state.as_str(), "cold" | "warm") {
-        bail!("invalid startup cache state: {cache_state}");
-    }
-    let expected_preparation = if cache_state == "cold" { "drop-linux-page-cache" } else { "none" };
-    if preparation != expected_preparation {
-        bail!("startup cache preparation {preparation:?} does not match {cache_state:?}");
-    }
+    let (cache_state, preparation) = validated_cache_state()?;
 
     let sink_metrics = orchestrator
         .config()
@@ -94,11 +82,15 @@ pub fn write_startup(
     }
 
     let process_config_ns = duration_ns(launch_started.duration_since(process_started));
+    let component_load_compile_ns = launch_timings.component_load_compile_ns();
+    let instantiation_ns = launch_timings.instantiation_ns();
+    let pipeline_setup_ns =
+        accounted_pipeline_setup_ns(launch_started, launch_completed, launch_timings);
     let first_process_ns = duration_ns(first_process);
     let phase_total = process_config_ns
-        .saturating_add(launch_timings.component_load_compile_ns())
-        .saturating_add(launch_timings.instantiation_ns())
-        .saturating_add(launch_timings.pipeline_setup_ns())
+        .saturating_add(component_load_compile_ns)
+        .saturating_add(instantiation_ns)
+        .saturating_add(pipeline_setup_ns)
         .saturating_add(first_process_ns);
     let total_wall_duration_ns = duration_ns(total_wall);
     if phase_total > total_wall_duration_ns {
@@ -126,9 +118,9 @@ pub fn write_startup(
         "processed_messages": processed_messages,
         "phases_ns": {
             "process_config": process_config_ns,
-            "component_load_compile": launch_timings.component_load_compile_ns(),
-            "instantiation": launch_timings.instantiation_ns(),
-            "pipeline_setup": launch_timings.pipeline_setup_ns(),
+            "component_load_compile": component_load_compile_ns,
+            "instantiation": instantiation_ns,
+            "pipeline_setup": pipeline_setup_ns,
             "first_process": first_process_ns,
         },
         "total_wall_duration_ns": total_wall_duration_ns,
@@ -150,6 +142,58 @@ pub fn write_startup(
         .with_context(|| format!("write startup timings to {}", path.display()))
 }
 
+fn validated_cache_state() -> Result<(String, String)> {
+    let cache_state = std::env::var(CACHE_STATE_ENV).with_context(|| {
+        format!("{CACHE_STATE_ENV} is required when {STARTUP_OUTPUT_ENV} is set")
+    })?;
+    let preparation = std::env::var(CACHE_PREPARATION_ENV).with_context(|| {
+        format!("{CACHE_PREPARATION_ENV} is required when {STARTUP_OUTPUT_ENV} is set")
+    })?;
+    if !matches!(cache_state.as_str(), "cold" | "warm") {
+        bail!("invalid startup cache state: {cache_state}");
+    }
+    let expected_preparation = if cache_state == "cold" { "drop-linux-page-cache" } else { "none" };
+    if preparation != expected_preparation {
+        bail!("startup cache preparation {preparation:?} does not match {cache_state:?}");
+    }
+    Ok((cache_state, preparation))
+}
+
+fn accounted_pipeline_setup_ns(
+    launch_started: Instant,
+    launch_completed: Instant,
+    launch_timings: LaunchTimings,
+) -> u64 {
+    duration_ns(launch_completed.saturating_duration_since(launch_started))
+        .saturating_sub(launch_timings.component_load_compile_ns())
+        .saturating_sub(launch_timings.instantiation_ns())
+}
+
 fn duration_ns(duration: Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn e_perf_9_accounts_outer_launch_boundary_gap() {
+        let launch_started = Instant::now();
+        std::thread::sleep(Duration::from_millis(10));
+        let launch_completed = Instant::now();
+        let launch_timings = LaunchTimings::default();
+        let outer_launch_ns = duration_ns(launch_completed.duration_since(launch_started));
+
+        assert!(
+            outer_launch_ns.saturating_sub(launch_timings.pipeline_setup_ns())
+                > HARNESS_OVERHEAD_TOLERANCE_NS,
+            "fixture must exceed the fixed unexplained-overhead tolerance"
+        );
+        assert_eq!(
+            accounted_pipeline_setup_ns(launch_started, launch_completed, launch_timings),
+            outer_launch_ns,
+            "the caller-observed launch boundary must be charged to pipeline_setup"
+        );
+    }
 }
