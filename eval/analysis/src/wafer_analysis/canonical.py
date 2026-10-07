@@ -2077,8 +2077,10 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
 
     ``runs`` are ``hotswap-analysis.json`` documents with ``run_index`` added.
     Each run is first reduced to the median of its events in a class, and its
-    cached swaps also to their p95 phase total and sink gap; the table gives the
-    median of those run values with a bootstrap 95% CI over runs. A run the system
+    cached swaps also to their p95 swap work, phase total and sink gap; the table
+    gives the median of those run values with a bootstrap 95% CI over runs. It
+    also gives the mean over runs of each run's mean phases, swap work and phase
+    total, with a bootstrap 95% CI for the mean phase total. A run the system
     under test stopped early (a failed swap, a runtime exit) has no phases and is
     counted in its own row, so the failure is reported rather than dropped.
     """
@@ -2131,10 +2133,13 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
                 metric,
                 [float(np.median([event[metric] for event in events])) for events in runs_events],
             )
-        for metric in SWAP_MEAN_METRICS:
-            row[f"mean_{metric}"] = float(
-                np.mean([np.mean([event[metric] for event in events]) for events in runs_events])
-            )
+        run_means = {
+            metric: [float(np.mean([event[metric] for event in events])) for events in runs_events]
+            for metric in SWAP_MEAN_METRICS
+        }
+        row |= {f"mean_{metric}": float(np.mean(values)) for metric, values in run_means.items()}
+        low, high = bootstrap_ci(np.asarray(run_means["phase_total_ns"]), statistic=np.mean)
+        row |= {"mean_phase_total_ci95_low_ns": low, "mean_phase_total_ci95_high_ns": high}
         if event_class == "cached":
             for metric in SWAP_TAIL_METRICS:
                 row |= _median_over_runs(
@@ -2146,7 +2151,7 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
             | {
                 "sut_outcome_reasons": reasons,
                 "units": "nanoseconds, runs, swap events",
-                "estimator": "median over runs of each run's median per compile-cache class and of each run's p95 cached swap work, phase total and sink gap, each with a bootstrap 95% CI over runs, and mean over runs of each run's mean, where the phase means add up to the mean total and the phase medians need not add up to the median total; swap work is compile, instantiate, signal and adoption, and the phase total adds the first post-replacement outcome, which is mostly the wait for the next input message and so depends on the offered rate; the first-use class holds the one compiling swap of each run",
+                "estimator": "median over runs of each run's median per compile-cache class and of each run's p95 cached swap work, phase total and sink gap, each with a bootstrap 95% CI over runs, and mean over runs of each run's mean with a bootstrap 95% CI for the mean total, where the phase means add up to the mean total and the phase medians need not add up to the median total; swap work is compile, instantiate, signal and adoption, and the phase total adds the first post-replacement outcome, which is mostly the wait for the next input message and so depends on the offered rate; the first-use class holds the one compiling swap of each run",
                 "claim_boundary": "internal phases, HTTP duration and sink-observed gap are separate measurements; queued output can hide internal disruption from the sink",
                 "thesis_evidence": canonical,
             }

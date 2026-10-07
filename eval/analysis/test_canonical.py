@@ -922,6 +922,11 @@ def test_swap_phase_table_reports_mean_phases_that_add_up_to_the_mean_total() ->
     assert cached["mean_compile_ns"] == pytest.approx((700_000 * slow + 10_000 * (490 - slow)) / 490)
     assert sum(cached[f"mean_{phase}"] for phase in phases[:-1]) == pytest.approx(cached["mean_swap_work_ns"])
     assert sum(cached[f"mean_{phase}"] for phase in phases) == pytest.approx(cached["mean_phase_total_ns"])
+    assert (
+        cached["mean_phase_total_ci95_low_ns"]
+        < cached["mean_phase_total_ns"]
+        < cached["mean_phase_total_ci95_high_ns"]
+    )
 
 
 def test_swap_phase_table_requires_ten_full_runs_unless_diagnostic() -> None:
