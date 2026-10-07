@@ -1889,6 +1889,24 @@ def test_branch_isolation_arrival_span_is_missing_when_a_run_lacks_it() -> None:
     pd.testing.assert_frame_equal(table.reset_index()[unchanged], window[unchanged])
 
 
+def test_branch_isolation_arrival_span_is_missing_only_for_the_attack_that_lacks_it() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 900})
+    for record in records:
+        record["branches"]["branch_a"]["throughput"]["total_messages"] = 60_000
+        record["branch_a_arrival_span_ns"] = 60_000_000_000
+    next(record for record in records if record["condition"] == "panic-attack")[
+        "branch_a_arrival_span_ns"
+    ] = None
+
+    table = branch_isolation_table(records).set_index("condition")
+
+    assert table.loc["control", "median_arrival_span_throughput_msg_s"] == 1_000
+    arrival_span = [column for column in table.columns if "arrival_span" in column]
+    assert table.loc["panic-attack", arrival_span].isna().all()
+    assert table.loc["epoch-loop-attack", "arrival_span_drop_percent"] == 0
+    assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
+
+
 def test_branch_isolation_table_requires_full_n_unless_diagnostic() -> None:
     records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 995}, runs=2)
     with pytest.raises(ValueError, match="30 independent runs"):

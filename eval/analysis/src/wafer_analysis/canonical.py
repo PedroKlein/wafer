@@ -439,7 +439,9 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
 
     ``records`` are the runs' ``branch-isolation.json`` documents. A run the runtime did not
     survive has no branch measurement; it counts in ``N_runs`` and an attack condition with
-    such a run fails its condition.
+    such a run fails its condition. A record may carry ``branch_a_arrival_span_ns`` (see
+    ``focused.branch_isolation_runs``); unless every completed run of a condition has it, that
+    condition's arrival-span columns are empty.
     """
     grouped = _group_runs(records, BRANCH_ISOLATION_CONDITIONS, canonical=canonical)
     if not grouped["control"]:
