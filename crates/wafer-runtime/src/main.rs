@@ -240,8 +240,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     let launched = launch_pipeline_timed(config.clone(), Some(&args.config))
         .await
         .context("Failed to launch pipeline")?;
-    let launch_completed = Instant::now();
-    let (mut orchestrator, launch_timings) = launched.into_parts();
+    let (mut orchestrator, launch_timings, task_activation_started) = launched.into_parts();
 
     info!(
         tasks = orchestrator.task_count(),
@@ -425,7 +424,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
             process_entry,
             process_started,
             launch_started,
-            launch_completed,
+            task_activation_started,
             launch_timings,
         )
         .inspect(|()| info!(path = %path.display(), "Startup phases written"))

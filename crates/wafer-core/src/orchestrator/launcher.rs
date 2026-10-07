@@ -47,7 +47,7 @@ impl LaunchTimings {
         duration_ns(self.instantiation)
     }
 
-    /// Remaining launch time spent creating the engine, topology, I/O, and tasks.
+    /// Remaining pre-activation launch time spent creating the engine, topology, and I/O.
     #[must_use]
     pub fn pipeline_setup_ns(self) -> u64 {
         duration_ns(self.pipeline_setup)
@@ -58,13 +58,15 @@ impl LaunchTimings {
 pub struct TimedPipelineLaunch {
     orchestrator: PipelineOrchestrator,
     timings: LaunchTimings,
+    task_activation_started: Instant,
 }
 
 impl TimedPipelineLaunch {
-    /// Split the running orchestrator from its immutable launch timing snapshot.
+    /// Split the running orchestrator from its immutable launch timing snapshot
+    /// and the boundary captured immediately before its tasks became runnable.
     #[must_use]
-    pub fn into_parts(self) -> (PipelineOrchestrator, LaunchTimings) {
-        (self.orchestrator, self.timings)
+    pub fn into_parts(self) -> (PipelineOrchestrator, LaunchTimings, Instant) {
+        (self.orchestrator, self.timings, self.task_activation_started)
     }
 }
 
@@ -201,16 +203,17 @@ pub async fn launch_pipeline_timed(
 
     mark_replacement_eligible(&mut build_output);
 
+    let task_activation_started = Instant::now();
     let orchestrator = PipelineOrchestrator::from_build_output(build_output, config, engine);
     let handle = orchestrator.handle();
     for (node_id, hash) in plugin_hashes {
         handle.record_plugin_hash(&node_id, hash);
     }
-    timings.pipeline_setup = launch_started
-        .elapsed()
+    timings.pipeline_setup = task_activation_started
+        .duration_since(launch_started)
         .saturating_sub(timings.component_load_compile)
         .saturating_sub(timings.instantiation);
-    Ok(TimedPipelineLaunch { orchestrator, timings })
+    Ok(TimedPipelineLaunch { orchestrator, timings, task_activation_started })
 }
 
 fn mark_replacement_eligible(build_output: &mut crate::orchestrator::builder::BuildOutput) {
@@ -797,6 +800,49 @@ mod tests {
         BenchSinkConfigToml, BenchSourceConfigToml, HttpHost, HttpScheme, OutboundHttpDestination,
     };
     use crate::node::Lifecycle;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn task_activation_boundary_handles_processing_before_caller_return() {
+        let config: Config = toml::from_str(
+            r#"
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000000.0
+total_messages = 1
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = false
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "sink"
+"#,
+        )
+        .expect("config");
+
+        let launched = Box::pin(launch_pipeline_timed(config, None)).await.expect("launch");
+        let (mut orchestrator, _timings, task_activation_started) = launched.into_parts();
+        orchestrator.run_until_complete().await.expect("one-message pipeline");
+        let simulated_caller_return = Instant::now();
+        let first_processed_at = orchestrator
+            .node_metrics("sink")
+            .and_then(|metrics| metrics.first_processed_at())
+            .expect("sink first processing timestamp");
+
+        assert!(
+            first_processed_at.checked_duration_since(simulated_caller_return).is_none(),
+            "fixture must model processing before the caller regains control"
+        );
+        assert!(
+            first_processed_at.checked_duration_since(task_activation_started).is_some(),
+            "the launch result must anchor timing before any task can process"
+        );
+    }
 
     #[tokio::test]
     async fn invalid_bench_source_fails_launch_before_spawning() {

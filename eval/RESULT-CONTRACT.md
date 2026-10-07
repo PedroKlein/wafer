@@ -799,10 +799,17 @@ runtime exists, for alignment with the harness's pre-exec `runtime_started_ns`;
 Neither value is part of `phases_ns` or `total_wall_duration_ns`, and exec,
 dynamic loading and static constructors before `main` remain outside both.
 
-The runtime performs no provenance work between `launch_completed` and the
-first sink collection: during the probe `runtime-provenance.json` is written
-only at shutdown, and the runtime-binary hash is computed on the blocking pool
-after the run.
+`pipeline_setup` ends at the internal `task_activation_started` boundary,
+captured immediately before any DLQ or node task can be spawned, after
+subtracting component loading/compilation and instantiation. `first_process`
+begins at that same boundary and ends at the first successful sink collection.
+Pipeline tasks may process the first message before the launch future returns
+to its caller; caller-return time is therefore not a phase boundary.
+
+The runtime performs no provenance work between task activation and the first
+sink collection: during the probe `runtime-provenance.json` is written only at
+shutdown, and the runtime-binary hash is computed on the blocking pool after
+the run.
 
 ## `metadata.json` schema
 

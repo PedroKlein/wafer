@@ -40,7 +40,7 @@ pub fn write_startup(
     process_entry: ProcessEntry,
     process_started: Instant,
     launch_started: Instant,
-    launch_completed: Instant,
+    task_activation_started: Instant,
     launch_timings: LaunchTimings,
 ) -> Result<()> {
     let (cache_state, preparation) = validated_cache_state()?;
@@ -65,8 +65,8 @@ pub fn write_startup(
         bail!("startup probe processed {processed_messages} sink messages; expected exactly one");
     }
     let first_process = first_processed_at
-        .checked_duration_since(launch_completed)
-        .context("first sink processing preceded pipeline launch completion")?;
+        .checked_duration_since(task_activation_started)
+        .context("first sink processing preceded pipeline task activation")?;
     let total_wall = first_processed_at
         .checked_duration_since(process_started)
         .context("first sink processing preceded process start")?;
@@ -84,8 +84,12 @@ pub fn write_startup(
     let process_config_ns = duration_ns(launch_started.duration_since(process_started));
     let component_load_compile_ns = launch_timings.component_load_compile_ns();
     let instantiation_ns = launch_timings.instantiation_ns();
-    let pipeline_setup_ns =
-        accounted_pipeline_setup_ns(launch_started, launch_completed, launch_timings);
+    let pipeline_setup_ns = accounted_pipeline_setup_ns(
+        launch_started,
+        task_activation_started,
+        launch_timings.component_load_compile_ns(),
+        launch_timings.instantiation_ns(),
+    )?;
     let first_process_ns = duration_ns(first_process);
     let phase_total = process_config_ns
         .saturating_add(component_load_compile_ns)
@@ -161,12 +165,18 @@ fn validated_cache_state() -> Result<(String, String)> {
 
 fn accounted_pipeline_setup_ns(
     launch_started: Instant,
-    launch_completed: Instant,
-    launch_timings: LaunchTimings,
-) -> u64 {
-    duration_ns(launch_completed.saturating_duration_since(launch_started))
-        .saturating_sub(launch_timings.component_load_compile_ns())
-        .saturating_sub(launch_timings.instantiation_ns())
+    task_activation_started: Instant,
+    component_load_compile_ns: u64,
+    instantiation_ns: u64,
+) -> Result<u64> {
+    let launch_before_activation =
+        task_activation_started
+            .checked_duration_since(launch_started)
+            .context("pipeline task activation preceded pipeline launch start")?;
+    duration_ns(launch_before_activation)
+        .checked_sub(component_load_compile_ns)
+        .and_then(|remaining| remaining.checked_sub(instantiation_ns))
+        .context("component loading and instantiation exceeded pre-activation launch time")
 }
 
 fn duration_ns(duration: Duration) -> u64 {
@@ -178,22 +188,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn e_perf_9_accounts_outer_launch_boundary_gap() {
-        let launch_started = Instant::now();
-        std::thread::sleep(Duration::from_millis(10));
-        let launch_completed = Instant::now();
-        let launch_timings = LaunchTimings::default();
-        let outer_launch_ns = duration_ns(launch_completed.duration_since(launch_started));
+    fn e_perf_9_activation_boundary_tiles_non_overlapping_startup_phases() {
+        let process_started = Instant::now();
+        let launch_started = process_started + Duration::from_millis(3);
+        let task_activation_started = launch_started + Duration::from_millis(50);
+        let first_processed_at = task_activation_started + Duration::from_millis(7);
+        let simulated_caller_return = task_activation_started + Duration::from_millis(10);
+        let component_load_compile_ns = 11_000_000;
+        let instantiation_ns = 17_000_000;
 
         assert!(
-            outer_launch_ns.saturating_sub(launch_timings.pipeline_setup_ns())
-                > HARNESS_OVERHEAD_TOLERANCE_NS,
-            "fixture must exceed the fixed unexplained-overhead tolerance"
+            first_processed_at.checked_duration_since(simulated_caller_return).is_none(),
+            "the old caller-return boundary must fail for this regression fixture"
         );
+        let pipeline_setup_ns = accounted_pipeline_setup_ns(
+            launch_started,
+            task_activation_started,
+            component_load_compile_ns,
+            instantiation_ns,
+        )
+        .expect("valid pre-activation phase accounting");
+        let first_process_ns = duration_ns(
+            first_processed_at
+                .checked_duration_since(task_activation_started)
+                .expect("processing follows task activation"),
+        );
+        let phase_total = duration_ns(launch_started.duration_since(process_started))
+            + component_load_compile_ns
+            + instantiation_ns
+            + pipeline_setup_ns
+            + first_process_ns;
+
+        assert_eq!(pipeline_setup_ns, 22_000_000);
+        assert_eq!(first_process_ns, 7_000_000);
         assert_eq!(
-            accounted_pipeline_setup_ns(launch_started, launch_completed, launch_timings),
-            outer_launch_ns,
-            "the caller-observed launch boundary must be charged to pipeline_setup"
+            phase_total,
+            duration_ns(first_processed_at.duration_since(process_started)),
+            "startup phases must tile process start through first processing without overlap"
         );
     }
 }
