@@ -678,7 +678,7 @@ def test_all_notebooks_execute_against_complete_fixture(
         ["wafer", 1_000, 1],
         ["wafer", 4_000, 1],
     ]
-    assert loss.pooled_sut_missed_share.eq(0).all()
+    assert loss.pooled_sut_missed_share_of_accepted.eq(0).all()
     assert (rendered / "campaign/temperature.pdf").stat().st_size > 1_000
     assert (rendered / "campaign-attempts.csv").is_file()
     assert (rendered / "campaign-timing.csv").is_file()

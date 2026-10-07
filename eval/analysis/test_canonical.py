@@ -752,6 +752,8 @@ def write_capacity_leaf(
         publisher_log(intended // 2, warmup_acked) + publisher_log(intended, acked)
     )
     if system == "ekuiper":
+        before = (50, 40)
+        after = tuple(start + count for start, count in zip(before, sut))
         snapshots = {
             name: {
                 "rule_status": {
@@ -759,7 +761,7 @@ def write_capacity_leaf(
                     "sink_mqtt_0_0_records_out_total": sink,
                 }
             }
-            for name, (source, sink) in (("before", (0, 0)), ("after", sut))
+            for name, (source, sink) in (("before", before), ("after", after))
         }
         (leaf / "ekuiper-health.json").write_text(json.dumps(snapshots))
     elif sut is not None:
@@ -779,6 +781,15 @@ def test_capacity_loss_location_reports_where_each_cell_lost_its_messages(tmp_pa
             tmp_path, "wafer", run,
             intended=900, rejected=0, received=received, warmup_acked=300, sut=(1_200, 1_200),
         )
+    # A run the SUT failed holds no capacity result, as in the rate table.
+    failed = write_capacity_leaf(
+        tmp_path, "wafer", 4,
+        intended=900, rejected=0, received=0, warmup_acked=300, sut=(600, 0),
+    )
+    (failed / "canonical-status.json").write_text(
+        '{"status":"failed","failure_class":"sut_outcome","reasons":["runtime-exit"]}'
+    )
+    # eKuiper's rule counters stand above zero in the snapshot taken before the run.
     write_capacity_leaf(
         tmp_path, "ekuiper", 1,
         intended=480, rejected=0, received=440, warmup_acked=240, sut=(715, 690),
@@ -795,16 +806,18 @@ def test_capacity_loss_location_reports_where_each_cell_lost_its_messages(tmp_pa
     assert wafer["pooled_loss"] == pytest.approx(1_200 / 2_700)
     assert wafer["pooled_accepted_undelivered_share"] == pytest.approx(1_200 / 2_700)
     assert wafer["median_accepted_undelivered_share"] == pytest.approx(500 / 900)
-    for stage in ("publisher_rejected", "sut_missed", "sut_dropped"):
-        assert wafer[f"pooled_{stage}_share"] == wafer[f"median_{stage}_share"] == 0
+    for share in (
+        "publisher_rejected_share", "sut_missed_share_of_accepted", "sut_dropped_share_of_accepted"
+    ):
+        assert wafer[f"pooled_{share}"] == wafer[f"median_{share}"] == 0
     assert ekuiper["pooled_accepted_undelivered_share"] == pytest.approx(40 / 480)
-    assert ekuiper["pooled_sut_missed_share"] == pytest.approx(5 / 720)
-    assert ekuiper["pooled_sut_dropped_share"] == pytest.approx(25 / 720)
+    assert ekuiper["pooled_sut_missed_share_of_accepted"] == pytest.approx(5 / 720)
+    assert ekuiper["pooled_sut_dropped_share_of_accepted"] == pytest.approx(25 / 720)
     assert loopback["pooled_publisher_rejected_share"] == pytest.approx(100 / 900)
     assert loopback["pooled_accepted_undelivered_share"] == pytest.approx(100 / 900)
-    for stage in ("sut_missed", "sut_dropped"):
-        assert pd.isna(loopback[f"pooled_{stage}_share"])
-        assert pd.isna(loopback[f"median_{stage}_share"])
+    for share in ("sut_missed_share_of_accepted", "sut_dropped_share_of_accepted"):
+        assert pd.isna(loopback[f"pooled_{share}"])
+        assert pd.isna(loopback[f"median_{share}"])
     assert np.allclose(
         table["pooled_publisher_rejected_share"] + table["pooled_accepted_undelivered_share"],
         table["pooled_loss"],
@@ -820,6 +833,19 @@ def test_capacity_loss_location_rejects_a_log_without_the_warmup_publisher(tmp_p
     (leaf / "stdout.log").write_text(publisher_log(900, 900))
 
     with pytest.raises(ValueError, match="warm-up publisher"):
+        capacity_loss_records(tmp_path)
+
+
+def test_capacity_loss_location_rejects_a_run_without_the_acked_count(tmp_path) -> None:
+    leaf = write_capacity_leaf(
+        tmp_path, "native", 1,
+        intended=900, rejected=0, received=900, warmup_acked=450, sut=(1_350, 1_350),
+    )
+    run = json.loads((leaf / "capacity-run.json").read_text())
+    del run["messages"]["acked"]
+    (leaf / "capacity-run.json").write_text(json.dumps(run))
+
+    with pytest.raises(ValueError, match="capacity-run.json lacks acked"):
         capacity_loss_records(tmp_path)
 
 

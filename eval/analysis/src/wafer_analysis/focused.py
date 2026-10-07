@@ -13,6 +13,7 @@ from .attempts import INCOMPLETE_RUN_REASONS, PASSED, batch_units
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 _PUBLISHER_DONE = re.compile(r"Load generation complete total=\d+ errors=\d+ acked=(\d+)")
+_CAPACITY_COUNTERS = ("intended", "rejected", "acked", "received_unique")
 _EKUIPER_SUT_COUNTERS = (
     "source_wafer_telemetry_0_records_in_total",
     "sink_mqtt_0_0_records_out_total",
@@ -220,14 +221,14 @@ def capacity_loss_records(batch: Path) -> list[dict]:
             continue
         run = json.loads((leaf / "capacity-run.json").read_text())
         messages = run["messages"]
+        missing = [name for name in _CAPACITY_COUNTERS if name not in messages]
+        if missing:
+            raise ValueError(f"capacity-run.json lacks {', '.join(missing)}: {leaf}")
         record = {
             "system": run["system"],
             "offered_rate_msg_s": int(run["rate_msg_s"]),
             "run_index": int(run["run_index"]),
-            **{
-                name: int(messages[name])
-                for name in ("intended", "rejected", "acked", "received_unique")
-            },
+            **{name: int(messages[name]) for name in _CAPACITY_COUNTERS},
             "warmup_acked": None,
             "sut_input": None,
             "sut_output": None,

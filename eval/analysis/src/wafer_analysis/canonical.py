@@ -1861,19 +1861,24 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(rate_rows), pd.DataFrame(boundary_rows)
 
 
-_CAPACITY_LOSS_STAGES = ("publisher_rejected", "accepted_undelivered", "sut_missed", "sut_dropped")
+_CAPACITY_LOSS_SHARES = (
+    "publisher_rejected_share",
+    "accepted_undelivered_share",
+    "sut_missed_share_of_accepted",
+    "sut_dropped_share_of_accepted",
+)
 
 
 def _capacity_loss_counts(run: dict) -> dict[str, tuple[int, int]]:
     counts = {
-        "publisher_rejected": (run["rejected"], run["intended"]),
-        "accepted_undelivered": (run["acked"] - run["received_unique"], run["intended"]),
+        "publisher_rejected_share": (run["rejected"], run["intended"]),
+        "accepted_undelivered_share": (run["acked"] - run["received_unique"], run["intended"]),
     }
     if run["sut_input"] is not None:
         # The SUT counters run from before the warm-up, and no snapshot splits the warm-up off.
         accepted = run["warmup_acked"] + run["acked"]
-        counts["sut_missed"] = (accepted - run["sut_input"], accepted)
-        counts["sut_dropped"] = (run["sut_input"] - run["sut_output"], accepted)
+        counts["sut_missed_share_of_accepted"] = (accepted - run["sut_input"], accepted)
+        counts["sut_dropped_share_of_accepted"] = (run["sut_input"] - run["sut_output"], accepted)
     return counts
 
 
@@ -1884,10 +1889,13 @@ def capacity_loss_location_table(records: list[dict], *, canonical: bool = True)
     messages are the ones the publisher rejected plus the ones the broker accepted that never
     reached the subscriber. For WAFER, native and eKuiper the SUT counters then show how many
     of the messages the broker accepted the SUT never counted in, and how many it counted in but
-    never out. When both are zero, every accepted but undelivered message was lost after the SUT;
-    otherwise the counters, which include the warm-up, cannot split the measured loss between
-    the SUT and the path after it. MQTT loopback has no SUT. The table only reports:
-    ``capacity_tables`` keeps every delivery classification and bound.
+    never out. These two are over the accepted messages, not the intended ones, so they do not
+    add up with the first two. When both are zero, every accepted but undelivered message was
+    lost after the SUT; otherwise the counters, which include the warm-up, cannot split the
+    measured loss between the SUT and the path after it. The table shows where messages were lost, not why: a
+    message the SUT dropped can still have been dropped because the broker was slow to take its
+    output. MQTT loopback has no SUT. The table only reports: ``capacity_tables`` keeps every
+    delivery classification and bound.
     """
     cells: dict[tuple[str, int], list[dict]] = {}
     for run in records:
@@ -1902,30 +1910,31 @@ def capacity_loss_location_table(records: list[dict], *, canonical: bool = True)
             "N_runs": len(runs),
             "pooled_loss": sum(run["intended"] - run["received_unique"] for run in runs) / intended,
         }
-        for stage in _CAPACITY_LOSS_STAGES:
-            if stage not in counts[0]:
-                row[f"pooled_{stage}_share"] = row[f"median_{stage}_share"] = None
+        for share in _CAPACITY_LOSS_SHARES:
+            if share not in counts[0]:
+                row[f"pooled_{share}"] = row[f"median_{share}"] = None
                 continue
-            lost, base = np.asarray([count[stage] for count in counts], dtype=float).T
-            row[f"pooled_{stage}_share"] = float(lost.sum() / base.sum())
-            row[f"median_{stage}_share"] = float(np.median(lost / base))
+            lost, base = np.asarray([count[share] for count in counts], dtype=float).T
+            row[f"pooled_{share}"] = float(lost.sum() / base.sum())
+            row[f"median_{share}"] = float(np.median(lost / base))
         rows.append(
             {
                 **row,
                 "units": "fraction of messages",
                 "estimator": (
-                    "publisher_rejected and accepted_undelivered are measured messages over the "
-                    "intended count and add up to the loss; sut_missed (accepted by the broker, "
-                    "never counted into the SUT) and sut_dropped (counted into the SUT, never "
-                    "out) are over the messages the broker accepted in warm-up and measurement, "
-                    "the span of the SUT counters, and when both are zero every accepted but "
-                    "undelivered message was lost after the SUT; pooled over the cell's runs and "
-                    "median over runs"
+                    "publisher_rejected_share and accepted_undelivered_share are measured "
+                    "messages over the intended count and add up to the loss; "
+                    "sut_missed_share_of_accepted (accepted by the broker, never counted into the "
+                    "SUT) and sut_dropped_share_of_accepted (counted into the SUT, never out) are "
+                    "over the messages the broker accepted in warm-up and measurement, the span "
+                    "of the SUT counters, and when both are zero every accepted but undelivered "
+                    "message was lost after the SUT; pooled over the cell's runs and median over "
+                    "runs"
                 ),
                 "uncertainty": "descriptive; no interval",
                 "claim_boundary": (
-                    "locates loss on the MQTT delivery path; reporting only, it changes no "
-                    "delivery classification or ceiling bound"
+                    "locates loss on the MQTT delivery path, not its cause; reporting only, it "
+                    "changes no delivery classification or ceiling bound"
                 ),
                 "thesis_evidence": canonical,
             }
