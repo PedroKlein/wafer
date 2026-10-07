@@ -76,7 +76,8 @@ def _zigzag_varints(payload: bytes):
 def _hdr_summary(path: Path) -> dict:
     """The ``total_count`` and ``p50_ns`` to ``p999_ns`` of a BenchSink interval log.
 
-    The values equal what ``wafer-loadgen hdr-summary`` writes for the same file.
+    For a log with at least one sample the values equal what ``wafer-loadgen hdr-summary``
+    writes for the same file; a log without samples raises instead of reporting zeros.
     """
     counts: dict[int, int] = {}
     layout = None
@@ -115,10 +116,10 @@ def _hdr_summary(path: Path) -> dict:
 def admitted_runs(batch: Path, artifact: str) -> list[dict]:
     """One record per admitted unit: its artifact, run identity and outcome reasons.
 
-    A BenchSink ``.hdr`` artifact contributes the ``total_count`` and ``p50_ns`` to
-    ``p999_ns`` that ``wafer-loadgen hdr-summary`` writes for it. The record of a unit
-    whose system under test stopped the run early holds only ``condition``,
-    ``run_index`` and ``sut_outcome_reasons`` when the artifact is absent.
+    A BenchSink ``.hdr`` artifact with at least one sample contributes the ``total_count``
+    and ``p50_ns`` to ``p999_ns`` that ``wafer-loadgen hdr-summary`` writes for it. The
+    record of a unit whose system under test stopped the run early holds only
+    ``condition``, ``run_index`` and ``sut_outcome_reasons`` when the artifact is absent.
     """
     records = []
     for unit in batch_units(batch, None):
