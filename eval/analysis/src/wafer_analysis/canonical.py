@@ -1904,6 +1904,28 @@ def backpressure_table(records: list[dict], *, canonical: bool = True) -> pd.Dat
     return pd.DataFrame(rows)
 
 
+def swap3_outage(run: dict) -> dict:
+    """Output outage of one E-Swap-3 run, measured finer than its 100 ms buckets.
+
+    ``fine_buckets`` holds the ``buckets`` of the run's ``throughput-buckets-10ms.json``.
+    ``zero_output_ns`` is the longest stretch of 10 ms buckets without a new message
+    from the action start to the end of that series at +2 s, and
+    ``loss_equivalent_outage_ns`` is how long the run's lost messages last at its
+    baseline rate.
+    """
+    longest = current = 0
+    for bucket in run["fine_buckets"]:
+        if bucket["start_offset_ns"] < 0:
+            continue
+        empty = float(bucket["rate_msg_s"]) == 0
+        current = current + bucket["end_offset_ns"] - bucket["start_offset_ns"] if empty else 0
+        longest = max(longest, current)
+    return {
+        "zero_output_ns": longest,
+        "loss_equivalent_outage_ns": int(run["loss"]) * 1e9 / float(run["baseline_rate_msg_s"]),
+    }
+
+
 def swap3_table(runs: list[dict]) -> pd.DataFrame:
     strategies = (
         "wafer-hotswap",
@@ -1930,12 +1952,15 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
         placebo_dips = [float(run["placebo_dip_percent"]) for run in values]
         interruptions = [float(run["interruption_ns"]) for run in values]
         actions = [float(run["action_duration_ns"]) for run in values]
-        recoveries = [float(run["recovery_ns"]) for run in values]
+        outages = [swap3_outage(run) for run in values]
+        zero_outputs = [float(outage["zero_output_ns"]) for outage in outages]
+        loss_outages = [outage["loss_equivalent_outage_ns"] for outage in outages]
         dip_low, dip_high = _ci(dips) if values else (None, None)
         placebo_low, placebo_high = _ci(placebo_dips) if values else (None, None)
         interruption_low, interruption_high = _ci(interruptions) if values else (None, None)
         action_low, action_high = _ci(actions) if values else (None, None)
-        recovery_low, recovery_high = _ci(recoveries) if values else (None, None)
+        zero_output_low, zero_output_high = _ci(zero_outputs) if values else (None, None)
+        loss_outage_low, loss_outage_high = _ci(loss_outages) if values else (None, None)
         lossless_runs = sum(
             int(run["loss"]) == 0 and int(run["duplicates"]) == 0 for run in values
         )
@@ -1967,9 +1992,12 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
                 "median_action_duration_ns": _median(actions),
                 "action_duration_ci95_low_ns": action_low,
                 "action_duration_ci95_high_ns": action_high,
-                "median_recovery_ns": _median(recoveries),
-                "recovery_ci95_low_ns": recovery_low,
-                "recovery_ci95_high_ns": recovery_high,
+                "median_zero_output_ns": _median(zero_outputs),
+                "zero_output_ci95_low_ns": zero_output_low,
+                "zero_output_ci95_high_ns": zero_output_high,
+                "median_loss_equivalent_outage_ns": _median(loss_outages),
+                "loss_equivalent_outage_ci95_low_ns": loss_outage_low,
+                "loss_equivalent_outage_ci95_high_ns": loss_outage_high,
                 "right_censored_runs": sum(
                     bool(run["recovery_right_censored"]) for run in values
                 ),
@@ -1981,7 +2009,7 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
                 **dip,
                 "verdict": verdict,
                 "units": "percent, nanoseconds, messages",
-                "estimator": "run-level median with bootstrap 95% CI over runs that kept running; lossless runs out of all admitted runs; dip verdict from the one-sided 95% upper bound over runs; placebo dip is the same estimator 6 s before the action, a descriptive noise floor with no verdict",
+                "estimator": "run-level median with bootstrap 95% CI over runs that kept running; lossless runs out of all admitted runs; dip verdict from the one-sided 95% upper bound over runs; placebo dip is the same estimator 6 s before the action, a descriptive noise floor with no verdict; zero output is the longest stretch of 10 ms buckets without a new message from the action start to +2 s and the loss-equivalent outage is the run's lost messages at its baseline rate, both descriptive",
                 "threshold": (
                     f"one-sided 95% upper bound of the median dip < {dip_rule.value:g} percent; zero loss; zero duplication"
                     if strategy == "wafer-hotswap"
@@ -2002,8 +2030,15 @@ SWAP_PHASES = (
     "first_post_replacement_local_outcome_ns",
 )
 SWAP_EVENT_CLASSES = {"compiled": "first-use", "memory_hit": "cached", "disk_hit": "cached"}
-SWAP_METRICS = (*SWAP_PHASES, "phase_total_ns", "http_total_ns", "sink_observed_output_gap_ns")
-SWAP_TAIL_METRICS = ("phase_total_ns", "sink_observed_output_gap_ns")
+SWAP_METRICS = (
+    *SWAP_PHASES,
+    "swap_work_ns",
+    "phase_total_ns",
+    "http_total_ns",
+    "sink_observed_output_gap_ns",
+)
+SWAP_TAIL_METRICS = ("swap_work_ns", "phase_total_ns", "sink_observed_output_gap_ns")
+SWAP_MEAN_METRICS = (*SWAP_PHASES, "swap_work_ns", "phase_total_ns")
 SWAP_SESSION_RUNS = 10
 SWAP_SESSION_EVENTS = 50
 
@@ -2063,8 +2098,10 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
         first_use = []
         for event in run["events"]:
             values = {phase: event[phase] for phase in SWAP_PHASES}
+            total = sum(values.values())
             values |= {
-                "phase_total_ns": sum(values.values()),
+                "swap_work_ns": total - values["first_post_replacement_local_outcome_ns"],
+                "phase_total_ns": total,
                 "http_total_ns": event["http_total_ns"],
                 "sink_observed_output_gap_ns": event["sink_observed_output_gap_ns"],
             }
@@ -2094,6 +2131,10 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
                 metric,
                 [float(np.median([event[metric] for event in events])) for events in runs_events],
             )
+        for metric in SWAP_MEAN_METRICS:
+            row[f"mean_{metric}"] = float(
+                np.mean([np.mean([event[metric] for event in events]) for events in runs_events])
+            )
         if event_class == "cached":
             for metric in SWAP_TAIL_METRICS:
                 row |= _median_over_runs(
@@ -2105,7 +2146,7 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
             | {
                 "sut_outcome_reasons": reasons,
                 "units": "nanoseconds, runs, swap events",
-                "estimator": "median over runs of each run's median per compile-cache class and of each run's p95 cached phase total and sink gap, each with a bootstrap 95% CI over runs; the first-use class holds the one compiling swap of each run",
+                "estimator": "median over runs of each run's median per compile-cache class and of each run's p95 cached swap work, phase total and sink gap, each with a bootstrap 95% CI over runs, and mean over runs of each run's mean, where the phase means add up to the mean total and the phase medians need not add up to the median total; swap work is compile, instantiate, signal and adoption, and the phase total adds the first post-replacement outcome, which is mostly the wait for the next input message and so depends on the offered rate; the first-use class holds the one compiling swap of each run",
                 "claim_boundary": "internal phases, HTTP duration and sink-observed gap are separate measurements; queued output can hide internal disruption from the sink",
                 "thesis_evidence": canonical,
             }
