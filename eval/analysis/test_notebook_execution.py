@@ -391,11 +391,19 @@ def build_complete_fixture(root: Path) -> None:
                         "branch_a": {
                             "offered_messages": 60_000,
                             "lost_messages": 0,
-                            "throughput": {"mean_messages_per_second": 1_000 - run},
+                            "throughput": {
+                                "total_messages": 60_000,
+                                "mean_messages_per_second": 1_000 - run,
+                            },
                             "latency_ns": {"p95": 120_000 + run},
                         }
                     },
                 },
+            )
+            branch_a = root / "e-iso-7" / condition / f"run-{run:02d}" / "branch-a"
+            branch_a.mkdir()
+            (branch_a / "interval-latency.json").write_text(
+                json.dumps({"rows": [{"interval_start_ns": 0, "interval_end_ns": 60_000_000_000}]})
             )
     for run in (1, 2):
         leaf = root / "e-iso-8" / "panic-recovery" / f"run-{run:02d}-attempt-02"
@@ -619,7 +627,9 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert (rendered / "rq1/depth-rss.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-depth-rss-slope.csv").is_file()
     assert (rendered / "rq2/branch-isolation.pdf").stat().st_size > 1_000
-    assert (rendered / "rq2-branch-isolation.csv").is_file()
+    branch = pd.read_csv(rendered / "rq2-branch-isolation.csv").set_index("condition")
+    assert branch.median_arrival_span_throughput_msg_s.eq(1_000).all()
+    assert branch.loc[["panic-attack", "epoch-loop-attack"], "arrival_span_drop_percent"].eq(0).all()
     assert (rendered / "rq2/recovery.pdf").stat().st_size > 1_000
     assert (rendered / "rq2-recovery.csv").is_file()
     assert (rendered / "e-perf-1-target-load.csv").is_file()

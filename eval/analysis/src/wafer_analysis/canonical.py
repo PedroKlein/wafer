@@ -469,7 +469,19 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
             np.asarray([branch_a(run, "latency_ns", "p95") for run in runs]),
         )
 
+    def arrival_span_throughput(runs: list[dict]) -> np.ndarray | None:
+        spans = [run.get("branch_a_arrival_span_ns") for run in runs]
+        if not runs or not all(spans):
+            return None
+        return np.asarray(
+            [
+                branch_a(run, "throughput", "total_messages") * 1e9 / span
+                for run, span in zip(runs, spans, strict=True)
+            ]
+        )
+
     control_throughput, control_p95 = metrics(grouped["control"])
+    control_arrival = arrival_span_throughput(grouped["control"])
     rows = []
     for condition in BRANCH_ISOLATION_CONDITIONS:
         runs = grouped[condition]
@@ -498,6 +510,7 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
             )
             continue
         throughput, p95 = metrics(runs)
+        arrival = arrival_span_throughput(runs)
         offered = [int(run["branches"]["branch_a"]["offered_messages"]) for run in runs]
         lost = [int(run["branches"]["branch_a"]["lost_messages"]) for run in runs]
         throughput_low, throughput_high = bootstrap_ci(throughput)
@@ -510,6 +523,7 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
             "median_throughput_msg_s": float(np.median(throughput)),
             "throughput_ci95_low_msg_s": throughput_low,
             "throughput_ci95_high_msg_s": throughput_high,
+            "median_arrival_span_throughput_msg_s": None if arrival is None else float(np.median(arrival)),
             "median_p95_ns": float(np.median(p95)),
             "p95_ci95_low_ns": p95_low,
             "p95_ci95_high_ns": p95_high,
@@ -522,6 +536,9 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     "throughput_drop_percent",
                     "drop_ci95_low_percent",
                     "drop_ci95_high_percent",
+                    "arrival_span_drop_percent",
+                    "arrival_span_drop_ci95_low_percent",
+                    "arrival_span_drop_ci95_high_percent",
                     "p95_increase_percent",
                     "increase_ci95_low_percent",
                     "increase_ci95_high_percent",
@@ -567,10 +584,21 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
             row["verdict"] = combined_verdict(
                 row["drop_verdict"], count_verdict(stopped_rule, stopped)
             )
+            if arrival is not None and control_arrival is not None:
+                arrival_drop, arrival_low, arrival_high = median_shift_ci(
+                    arrival, control_arrival, relative=True
+                )
+                row.update(
+                    {
+                        "arrival_span_drop_percent": -100 * arrival_drop,
+                        "arrival_span_drop_ci95_low_percent": -100 * arrival_high,
+                        "arrival_span_drop_ci95_high_percent": -100 * arrival_low,
+                    }
+                )
         row.update(
             {
                 "units": "messages/second, nanoseconds, percent, fraction",
-                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs over the runs that completed; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; verdict from the one-sided 95% upper bound of the drop, resampling each condition's runs apart; a run the runtime did not survive fails its condition",
+                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs over the runs that completed; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; verdict from the one-sided 95% upper bound of the drop, resampling each condition's runs apart; a run the runtime did not survive fails its condition; reported only, not used by the verdict: arrival-span throughput, the same messages over the time from the first post-warmup arrival to the end of the last interval row, which leaves out the sink's file export, and its drop against the control computed the same way",
                 "threshold": threshold,
                 "claim_boundary": "independently sourced branch A on the same runtime; no claim about branch B",
                 "thesis_evidence": canonical,
