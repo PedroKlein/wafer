@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import json
+import math
 import re
+import struct
+from bisect import bisect_left
+from itertools import accumulate
 from pathlib import Path
 
 import pandas as pd
@@ -46,11 +51,74 @@ def admitted_artifacts(batch: Path, artifact: str) -> list[tuple[Path, dict]]:
     return results
 
 
+_V2_HISTOGRAM = struct.Struct(">IIiIqqd")
+_V2_COOKIE = 0x1C849313
+_HDR_PERCENTILES = {"p50_ns": 0.5, "p95_ns": 0.95, "p99_ns": 0.99, "p999_ns": 0.999}
+
+
+def _zigzag_varints(payload: bytes):
+    offset = 0
+    while offset < len(payload):
+        value = shift = 0
+        while True:
+            byte = payload[offset]
+            offset += 1
+            if shift == 56:
+                value |= byte << 56
+                break
+            value |= (byte & 0x7F) << shift
+            if byte < 0x80:
+                break
+            shift += 7
+        yield (value >> 1) ^ -(value & 1)
+
+
+def _hdr_summary(path: Path) -> dict:
+    """The ``total_count`` and ``p50_ns`` to ``p999_ns`` of a BenchSink interval log.
+
+    The values equal what ``wafer-loadgen hdr-summary`` writes for the same file.
+    """
+    counts: dict[int, int] = {}
+    layout = None
+    for line in path.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        histogram = base64.b64decode(line.rsplit(",", 1)[1])
+        cookie, length, _, digits, lowest, _, _ = _V2_HISTOGRAM.unpack_from(histogram)
+        if cookie != _V2_COOKIE or layout not in (None, (digits, lowest)):
+            raise ValueError(f"unsupported histogram encoding in {path}")
+        layout = (digits, lowest)
+        index = 0
+        for value in _zigzag_varints(histogram[_V2_HISTOGRAM.size : _V2_HISTOGRAM.size + length]):
+            if value < 0:
+                index -= value
+            else:
+                counts[index] = counts.get(index, 0) + value
+                index += 1
+    total = sum(counts.values())
+    if total == 0:
+        raise ValueError(f"{path} holds no samples")
+    digits, lowest = layout
+    half_magnitude = math.ceil(math.log2(2 * 10**digits)) - 1
+    unit_magnitude = math.floor(math.log2(lowest))
+    indices = sorted(counts)
+    cumulative = list(accumulate(counts[index] for index in indices))
+    summary = {"total_count": total}
+    for name, quantile in _HDR_PERCENTILES.items():
+        index = indices[bisect_left(cumulative, max(1, math.ceil(quantile * total)))]
+        bucket = max(0, (index >> half_magnitude) - 1)
+        # HdrHistogram reports a percentile as the highest value its counts index stands for.
+        summary[name] = ((index - (bucket << half_magnitude) + 1) << (bucket + unit_magnitude)) - 1
+    return summary
+
+
 def admitted_runs(batch: Path, artifact: str) -> list[dict]:
     """One record per admitted unit: its artifact, run identity and outcome reasons.
 
-    The record of a unit whose system under test stopped the run early holds only
-    ``condition``, ``run_index`` and ``sut_outcome_reasons`` when the artifact is absent.
+    A BenchSink ``.hdr`` artifact contributes the ``total_count`` and ``p50_ns`` to
+    ``p999_ns`` that ``wafer-loadgen hdr-summary`` writes for it. The record of a unit
+    whose system under test stopped the run early holds only ``condition``,
+    ``run_index`` and ``sut_outcome_reasons`` when the artifact is absent.
     """
     records = []
     for unit in batch_units(batch, None):
@@ -59,7 +127,7 @@ def admitted_runs(batch: Path, artifact: str) -> list[dict]:
             continue
         path = attempt.path / artifact
         if path.is_file():
-            value = json.loads(path.read_text())
+            value = _hdr_summary(path) if path.suffix == ".hdr" else json.loads(path.read_text())
         elif INCOMPLETE_RUN_REASONS & set(attempt.reasons):
             value = {}
         else:
@@ -111,9 +179,10 @@ def target_load_rows(
     for path, values in admitted_artifacts(batch, "percentiles.json"):
         throughput_path = path.parent / "throughput.csv"
         subscriber_path = path.parent / "subscriber-metadata.json"
-        if not throughput_path.is_file() or not subscriber_path.is_file():
+        publisher_path = path.parent / "publisher-summary.json"
+        if not all(evidence.is_file() for evidence in (throughput_path, subscriber_path, publisher_path)):
             raise ValueError(
-                f"target-load leaf lacks throughput or subscriber evidence: {path.parent}"
+                f"target-load leaf lacks throughput, subscriber or publisher evidence: {path.parent}"
             )
         with throughput_path.open(newline="") as stream:
             throughput_rows = list(csv.DictReader(stream))
@@ -146,6 +215,7 @@ def target_load_rows(
             raise ValueError(f"target-load counters do not reconcile: {path.parent}")
         if intended - received_unique != gaps:
             raise ValueError(f"target-load gap total does not reconcile: {path.parent}")
+        source_lag = json.loads(publisher_path.read_text())["source_lag_ns"]
         relative = path.relative_to(batch)
         rows.append(
             {
@@ -164,6 +234,8 @@ def target_load_rows(
                 "achieved_rate_msg_s": received_unique / measurement_secs,
                 "achieved_ratio": received_unique / intended,
                 "duplicates": duplicates,
+                "publisher_lag_p50_ns": source_lag["p50"],
+                "publisher_lag_p99_ns": source_lag["p99"],
             }
         )
     return pd.DataFrame(rows)

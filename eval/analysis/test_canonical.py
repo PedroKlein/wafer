@@ -60,6 +60,8 @@ def percentile_runs(conditions: tuple[str, ...], n: int = 30) -> list[dict]:
             "achieved_rate_msg_s": 1_000.0,
             "achieved_ratio": 1.0,
             "duplicates": 0,
+            "publisher_lag_p50_ns": 150_000 - index * 10_000 + run,
+            "publisher_lag_p99_ns": 300_000 + run,
         }
         for index, condition in enumerate(conditions)
         for run in range(1, n + 1)
@@ -93,6 +95,17 @@ def test_target_latency_uses_runs_and_reports_ci_effect_threshold_and_boundary()
     assert "pooled loss <= 0.01" in wafer["threshold"]
     assert wafer["claim_boundary"] == "matched 1,000 msg/s target load; not capacity"
     assert table["thesis_evidence"].eq(True).all()
+
+
+def test_target_latency_reports_the_median_publisher_lag_of_each_system() -> None:
+    table = target_latency_table(percentile_runs(("wafer", "native", "ekuiper"))).set_index("condition")
+
+    assert table["median_publisher_lag_p50_ns"].to_dict() == {
+        "wafer": 150_015.5,
+        "native": 140_015.5,
+        "ekuiper": 130_015.5,
+    }
+    assert table["median_publisher_lag_p99_ns"].eq(300_015.5).all()
 
 
 def test_target_latency_ratio_and_effect_resample_run_pairs() -> None:
@@ -139,6 +152,7 @@ def contrast_runs(conditions: tuple[str, ...], wafer_p95_extra, n: int = 30) -> 
             "run_index": run,
             "p50_ns": (1.2 if condition == "wafer" else 1.0) * BLOCKS[run],
             "p95_ns": 2 * BLOCKS[run] + (wafer_p95_extra(run) if condition == "wafer" else 0),
+            "service_p50_ns": (8.0 if condition == "wafer" else 1.0) * BLOCKS[run] / 50,
         }
         for condition in conditions
         for run in range(1, n + 1)
@@ -175,6 +189,20 @@ def test_overhead_contrast_resamples_run_pairs_for_the_ratio() -> None:
     assert (row["ratio_ci95_low"], row["ratio_ci95_high"]) == pytest.approx((1.2, 1.2))
     assert row["difference_ns"] == pytest.approx(0.2 * np.median(list(BLOCKS.values())))
     assert "no cross-architecture claim" in row["claim_boundary"]
+
+
+def test_overhead_contrast_adds_the_service_time_contrast_next_to_the_latency_ratio() -> None:
+    table = overhead_contrast_table(contrast_runs(("wafer", "native"), lambda run: 0))
+    row = table.iloc[0]
+
+    block = np.median(list(BLOCKS.values()))
+    assert row["median_ratio"] == pytest.approx(1.2)
+    assert (row["service_wafer_median_ns"], row["service_native_median_ns"]) == pytest.approx((8 * block / 50, block / 50))
+    assert row["service_median_ratio"] == pytest.approx(8)
+    assert (row["service_ratio_ci95_low"], row["service_ratio_ci95_high"]) == pytest.approx((8, 8))
+    assert row["service_difference_ns"] == pytest.approx(7 * block / 50)
+    assert list(table.columns).index("service_wafer_median_ns") == list(table.columns).index("mdd_ns") + 1
+    assert "service_median_ratio" not in target_contrast_table(contrast_runs(("wafer", "native", "ekuiper"), lambda run: 0))
 
 
 def test_contrasts_need_complete_canonical_runs_but_pair_what_a_diagnostic_batch_has() -> None:

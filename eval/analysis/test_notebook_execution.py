@@ -8,6 +8,7 @@ import pandas as pd
 from nbclient import NotebookClient
 
 from wafer_analysis.rollback import SWAP5_PLUGIN, build_post_rollback_continuity, build_swap5_rollback
+from test_focused import benchsink_hdr_log
 
 NOTEBOOKS = sorted((Path(__file__).parent / "notebooks").glob("*.ipynb"))
 
@@ -200,6 +201,9 @@ def build_complete_fixture(root: Path) -> None:
                         }
                     )
                 )
+                (leaf / "publisher-summary.json").write_text(json.dumps({"source_lag_ns": {"p50": 150_000, "p99": 320_000}}))
+            if experiment == "e-perf-5":
+                (leaf / "service.hdr").write_text(benchsink_hdr_log({32 if condition == "wafer" else 4: 60_000}))
             if experiment == "e-perf-4":
                 (leaf / "service-percentiles.json").write_text(
                     json.dumps(
@@ -636,6 +640,7 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert overhead.host.tolist() == ["rpi5", "jetson", "x86"]
     assert overhead.columns[0] == "host" and "status" not in overhead
     assert overhead.median_ratio.eq(1.2).all()
+    assert overhead.service_difference_ns.eq(16_895 - 2_559).all()
     assert overhead.runs_stopped_early.eq(0).all()
     assert (rendered / "e-perf-10-rate-estimates.csv").is_file()
     assert (rendered / "e-swap-4-burst.tex").is_file()
