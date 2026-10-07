@@ -16,7 +16,7 @@ The notebooks consume one explicitly identified result batch. They never select 
 | `07-metering-decomp.ipynb` | E-Perf-7 | Fuel and epoch metering decomposition |
 | `08-depth-scaling.ipynb` | E-Perf-3, E-Perf-8 | MQTT-bookended and in-process depth scaling |
 | `09-backpressure.ipynb` | E-Backpressure | Bounded-channel occupancy and flow rates |
-| `09-saturation.ipynb` | E-Perf-10, E-Perf-1 | Offered-load sweep; E-Perf-1 target-load delivery, paired WAFER minus native contrast and replication concordance |
+| `09-saturation.ipynb` | E-Perf-10, E-Perf-1 | Offered-load sweep and where each rate's undelivered messages were lost; E-Perf-1 target-load delivery, paired WAFER minus native contrast and replication concordance |
 | `10-aot-startup.ipynb` | E-Perf-9 | Filesystem and compiled-component cache state by startup phase |
 | `10-summary-stats.ipynb` | E-Density-1; whole batch | Release component sizes; units, attempts, clean passes, system outcomes, infrastructure failures, retries and missing units per experiment, system and condition; wall time and peak temperature per experiment |
 

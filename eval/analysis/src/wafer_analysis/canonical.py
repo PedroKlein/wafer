@@ -1861,6 +1861,78 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(rate_rows), pd.DataFrame(boundary_rows)
 
 
+_CAPACITY_LOSS_STAGES = ("publisher_rejected", "accepted_undelivered", "sut_missed", "sut_dropped")
+
+
+def _capacity_loss_counts(run: dict) -> dict[str, tuple[int, int]]:
+    counts = {
+        "publisher_rejected": (run["rejected"], run["intended"]),
+        "accepted_undelivered": (run["acked"] - run["received_unique"], run["intended"]),
+    }
+    if run["sut_input"] is not None:
+        # The SUT counters run from before the warm-up, and no snapshot splits the warm-up off.
+        accepted = run["warmup_acked"] + run["acked"]
+        counts["sut_missed"] = (accepted - run["sut_input"], accepted)
+        counts["sut_dropped"] = (run["sut_input"] - run["sut_output"], accepted)
+    return counts
+
+
+def capacity_loss_location_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Perf-10: where on the delivery path each cell's undelivered messages were lost.
+
+    Each record is one completed run from ``capacity_loss_records``. A run's undelivered
+    messages are the ones the publisher rejected plus the ones the broker accepted that never
+    reached the subscriber. For WAFER, native and eKuiper the SUT counters then show how many
+    of the messages the broker accepted the SUT never counted in, and how many it counted in but
+    never out. When both are zero, every accepted but undelivered message was lost after the SUT;
+    otherwise the counters, which include the warm-up, cannot split the measured loss between
+    the SUT and the path after it. MQTT loopback has no SUT. The table only reports:
+    ``capacity_tables`` keeps every delivery classification and bound.
+    """
+    cells: dict[tuple[str, int], list[dict]] = {}
+    for run in records:
+        cells.setdefault((run["system"], run["offered_rate_msg_s"]), []).append(run)
+    rows = []
+    for (system, rate), runs in sorted(cells.items()):
+        intended = sum(run["intended"] for run in runs)
+        counts = [_capacity_loss_counts(run) for run in runs]
+        row = {
+            "system": system,
+            "offered_rate_msg_s": rate,
+            "N_runs": len(runs),
+            "pooled_loss": sum(run["intended"] - run["received_unique"] for run in runs) / intended,
+        }
+        for stage in _CAPACITY_LOSS_STAGES:
+            if stage not in counts[0]:
+                row[f"pooled_{stage}_share"] = row[f"median_{stage}_share"] = None
+                continue
+            lost, base = np.asarray([count[stage] for count in counts], dtype=float).T
+            row[f"pooled_{stage}_share"] = float(lost.sum() / base.sum())
+            row[f"median_{stage}_share"] = float(np.median(lost / base))
+        rows.append(
+            {
+                **row,
+                "units": "fraction of messages",
+                "estimator": (
+                    "publisher_rejected and accepted_undelivered are measured messages over the "
+                    "intended count and add up to the loss; sut_missed (accepted by the broker, "
+                    "never counted into the SUT) and sut_dropped (counted into the SUT, never "
+                    "out) are over the messages the broker accepted in warm-up and measurement, "
+                    "the span of the SUT counters, and when both are zero every accepted but "
+                    "undelivered message was lost after the SUT; pooled over the cell's runs and "
+                    "median over runs"
+                ),
+                "uncertainty": "descriptive; no interval",
+                "claim_boundary": (
+                    "locates loss on the MQTT delivery path; reporting only, it changes no "
+                    "delivery classification or ceiling bound"
+                ),
+                "thesis_evidence": canonical,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def backpressure_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     grouped = _require_runs(records, BACKPRESSURE_POLICIES)
     rows = []
