@@ -1,4 +1,7 @@
+import base64
 import json
+import struct
+
 import pytest
 
 from wafer_analysis.focused import (
@@ -73,6 +76,46 @@ def test_admitted_runs_reject_a_complete_run_without_its_artifact(tmp_path) -> N
 
     with pytest.raises(ValueError, match="admitted attempt lacks containment.json"):
         admitted_runs(tmp_path, "containment.json")
+
+
+def benchsink_hdr_log(counts: dict[int, int]) -> str:
+    """A BenchSink interval log of one V2 histogram (1 µs to 1 h, 3 digits) holding ``counts`` by counts index."""
+    payload = bytearray()
+    index = 0
+    for bucket, count in sorted(counts.items()):
+        for value in ([index - bucket] if bucket > index else []) + [count]:
+            zigzag = (value << 1) ^ (value >> 63)
+            while zigzag >= 0x80:
+                payload.append(zigzag & 0x7F | 0x80)
+                zigzag >>= 7
+            payload.append(zigzag)
+        index = bucket + 1
+    header = struct.pack(">IIiIqqd", 0x1C849313, len(payload), 0, 3, 1_000, 3_600_000_000_000, 1.0)
+    return (
+        "#WAFER BenchSink service time histogram: arrival minus source emit (nanoseconds)\n"
+        f"Tag=service_ns,0.000,60.000,2.001,{base64.b64encode(header + payload).decode()}\n"
+    )
+
+
+def test_admitted_runs_summarise_an_hdr_log_as_hdr_summary_does(tmp_path) -> None:
+    leaf = tmp_path / "wafer" / "run-01-attempt-01"
+    leaf.mkdir(parents=True)
+    (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+    # Index 4 holds 2,048-2,559 ns, index 32 16,384-16,895 ns, index 2977 1,999,872-2,000,895 ns.
+    (leaf / "service.hdr").write_text(benchsink_hdr_log({4: 50, 32: 45, 2977: 5}))
+
+    assert admitted_runs(tmp_path, "service.hdr") == [
+        {
+            "condition": "wafer",
+            "run_index": 1,
+            "total_count": 100,
+            "p50_ns": 2_559,
+            "p95_ns": 16_895,
+            "p99_ns": 2_000_895,
+            "p999_ns": 2_000_895,
+            "sut_outcome_reasons": [],
+        }
+    ]
 
 
 def test_branch_isolation_runs_add_the_branch_a_arrival_span(tmp_path) -> None:
@@ -151,6 +194,14 @@ def write_target_load_leaf(
             }
         )
     )
+    (leaf / "publisher-summary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_lag_ns": {"count": 60_000, "p50": 140_927, "p99": 327_679, "p999": 3_086_335, "max": 5_484_543},
+            }
+        )
+    )
 
 
 def test_target_load_rows_reconcile_delivery_and_duplicates(tmp_path) -> None:
@@ -168,6 +219,17 @@ def test_target_load_rows_reconcile_delivery_and_duplicates(tmp_path) -> None:
     assert row["loss_fraction"] == 1 / 60_000
     assert row["achieved_rate_msg_s"] == 59_999 / 60
     assert row["duplicates"] == 1
+
+
+def test_target_load_rows_report_the_publisher_hand_off_lag(tmp_path) -> None:
+    write_target_load_leaf(tmp_path, received_events=60_000, received_unique=60_000, duplicates=0)
+
+    row = target_load_rows(tmp_path).iloc[0]
+    assert (row["publisher_lag_p50_ns"], row["publisher_lag_p99_ns"]) == (140_927, 327_679)
+
+    (tmp_path / "wafer" / "run-01-attempt-01" / "publisher-summary.json").unlink()
+    with pytest.raises(ValueError, match="lacks throughput, subscriber or publisher evidence"):
+        target_load_rows(tmp_path)
 
 
 def test_target_load_rows_count_declared_tail_loss_beyond_the_kept_examples(tmp_path) -> None:
