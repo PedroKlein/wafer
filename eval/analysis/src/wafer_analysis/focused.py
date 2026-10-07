@@ -60,6 +60,26 @@ def admitted_runs(batch: Path, artifact: str) -> list[dict]:
     The record of a unit whose system under test stopped the run early holds only
     ``condition``, ``run_index`` and ``sut_outcome_reasons`` when the artifact is absent.
     """
+    return [record for _, record in _admitted_leaf_runs(batch, artifact)]
+
+
+def branch_isolation_runs(batch: Path) -> list[dict]:
+    """``admitted_runs`` of ``branch-isolation.json``, each with branch A's arrival span.
+
+    ``branch_a_arrival_span_ns`` runs from the first post-warmup arrival to the end of the
+    last row of ``branch-a/interval-latency.json``, which the sink closes when its input
+    ends, before it exports its files. It is None when that file is absent.
+    """
+    records = []
+    for leaf, record in _admitted_leaf_runs(batch, "branch-isolation.json"):
+        intervals = leaf / "branch-a" / "interval-latency.json"
+        rows = json.loads(intervals.read_text())["rows"] if intervals.is_file() else []
+        span = rows[-1]["interval_end_ns"] - rows[0]["interval_start_ns"] if rows else None
+        records.append({**record, "branch_a_arrival_span_ns": span})
+    return records
+
+
+def _admitted_leaf_runs(batch: Path, artifact: str) -> list[tuple[Path, dict]]:
     records = []
     for unit in batch_units(batch, None):
         attempt = unit.admitted
@@ -73,12 +93,15 @@ def admitted_runs(batch: Path, artifact: str) -> list[dict]:
         else:
             raise ValueError(f"admitted attempt lacks {artifact}: {attempt.path}")
         records.append(
-            {
-                "condition": unit.condition,
-                "run_index": unit.run_index,
-                **value,
-                "sut_outcome_reasons": list(attempt.reasons),
-            }
+            (
+                attempt.path,
+                {
+                    "condition": unit.condition,
+                    "run_index": unit.run_index,
+                    **value,
+                    "sut_outcome_reasons": list(attempt.reasons),
+                },
+            )
         )
     return records
 
