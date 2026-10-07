@@ -179,6 +179,12 @@ def target_latency_table(records: list[dict], *, canonical: bool = True) -> pd.D
                 ),
                 "ci95_low_ns": low,
                 "ci95_high_ns": high,
+                "median_publisher_lag_p50_ns": float(
+                    np.median([run["publisher_lag_p50_ns"] for run in condition_runs])
+                ),
+                "median_publisher_lag_p99_ns": float(
+                    np.median([run["publisher_lag_p99_ns"] for run in condition_runs])
+                ),
                 "median_achieved_rate_msg_s": float(np.median(achieved)),
                 "achieved_ci95_low_msg_s": achieved_low,
                 "achieved_ci95_high_msg_s": achieved_high,
@@ -295,13 +301,30 @@ def target_contrast_table(records: list[dict], *, canonical: bool = True) -> pd.
 
 
 def overhead_contrast_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
-    """E-Perf-5 on one host: paired WAFER/native ratio and WAFER minus native run p50."""
-    return _wafer_native_contrast(
-        records,
-        ("wafer", "native"),
-        ("p50",),
-        canonical=canonical,
-        claim_boundary="in-process path on one host; descriptive, no verdict; no cross-architecture claim",
+    """E-Perf-5 on one host: paired WAFER/native ratio and WAFER minus native run p50.
+
+    The ``service_`` columns repeat the contrast for each run's ``service_p50_ns``, the
+    BenchSink service time, which leaves out the bench source's lag that latency includes.
+    """
+    latency, service = (
+        _wafer_native_contrast(
+            records,
+            ("wafer", "native"),
+            (statistic,),
+            canonical=canonical,
+            claim_boundary="in-process path on one host; descriptive, no verdict; no cross-architecture claim",
+        )
+        for statistic in ("p50", "service_p50")
+    )
+    if latency.empty:
+        return latency
+    return pd.concat(
+        [
+            latency.loc[:, :"mdd_ns"],
+            service.loc[:, "wafer_median_ns":"mdd_ns"].add_prefix("service_"),
+            latency.loc[:, "units":],
+        ],
+        axis=1,
     )
 
 
