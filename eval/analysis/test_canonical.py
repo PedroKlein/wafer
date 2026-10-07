@@ -892,6 +892,43 @@ def test_swap_phase_table_reports_the_run_level_tail_of_cached_swaps() -> None:
     assert pd.isna(table.loc["first-use", "median_run_p95_sink_observed_output_gap_ns"])
 
 
+def test_swap_phase_table_reports_swap_work_apart_from_the_wait_for_the_next_message() -> None:
+    runs = swap_runs()
+    for run in runs:
+        for event in run["events"]:
+            event["first_post_replacement_local_outcome_ns"] = 20_000 * event["event_index"]
+    cached = swap_phase_table(runs).set_index("event_class").loc["cached"]
+    assert cached["median_swap_work_ns"] == 10_000 + 200_000 + 5_000 + 100_025
+    assert cached["median_run_p95_swap_work_ns"] == pytest.approx(10_000 + 200_000 + 5_000 + 100_046.6)
+    assert cached["median_phase_total_ns"] == 10_000 + 200_000 + 5_000 + 100_025 + 20_000 * 25
+    assert "wait for the next input message" in cached["estimator"]
+
+
+def test_swap_phase_table_reports_mean_phases_that_add_up_to_the_mean_total() -> None:
+    runs = swap_runs()
+    for run in runs:
+        for event in run["events"][1:]:
+            if event["event_index"] <= 5 * run["run_index"]:
+                event["compile_ns"] = 700_000
+    cached = swap_phase_table(runs).set_index("event_class").loc["cached"]
+    phases = [
+        "compile_ns",
+        "instantiate_ns",
+        "signal_ns",
+        "replacement_adopted_ns",
+        "first_post_replacement_local_outcome_ns",
+    ]
+    slow = sum(min(5 * run, 49) for run in range(1, 11))
+    assert cached["mean_compile_ns"] == pytest.approx((700_000 * slow + 10_000 * (490 - slow)) / 490)
+    assert sum(cached[f"mean_{phase}"] for phase in phases[:-1]) == pytest.approx(cached["mean_swap_work_ns"])
+    assert sum(cached[f"mean_{phase}"] for phase in phases) == pytest.approx(cached["mean_phase_total_ns"])
+    assert (
+        cached["mean_phase_total_ci95_low_ns"]
+        < cached["mean_phase_total_ns"]
+        < cached["mean_phase_total_ci95_high_ns"]
+    )
+
+
 def test_swap_phase_table_requires_ten_full_runs_unless_diagnostic() -> None:
     with pytest.raises(ValueError, match="requires 10 independent runs"):
         swap_phase_table([swap_evidence()])
@@ -1598,6 +1635,19 @@ def test_capacity_intervals_bootstrap_the_run_values() -> None:
         capacity_tables(summary)
 
 
+def fine_buckets(*dark_ms: tuple[int, int]) -> list[dict]:
+    return [
+        {
+            "start_offset_ns": start,
+            "end_offset_ns": start + 10_000_000,
+            "rate_msg_s": 0.0
+            if any(low * 1_000_000 <= start < high * 1_000_000 for low, high in dark_ms)
+            else 1_000.0,
+        }
+        for start in range(-2_000_000_000, 2_000_000_000, 10_000_000)
+    ]
+
+
 def swap3_runs() -> list[dict]:
     return [
         {
@@ -1613,6 +1663,7 @@ def swap3_runs() -> list[dict]:
             "action_duration_ns": 10_000_000,
             "loss": 0,
             "duplicates": 0,
+            "fine_buckets": fine_buckets(),
         }
         for strategy in (
             "wafer-hotswap",
@@ -1631,7 +1682,8 @@ def test_swap3_table_separates_event_metrics_and_applies_hot_swap_threshold() ->
         "median_dip_percent",
         "median_interruption_ns",
         "median_action_duration_ns",
-        "median_recovery_ns",
+        "median_zero_output_ns",
+        "median_loss_equivalent_outage_ns",
         "total_loss",
         "total_duplicates",
     } <= set(table.columns)
@@ -1642,6 +1694,28 @@ def test_swap3_table_separates_event_metrics_and_applies_hot_swap_threshold() ->
     )
     assert wafer["dip_ci95_high_percent"] < 5
     assert wafer["verdict"] == "PASS"
+
+
+def test_swap3_table_measures_the_outage_at_10_ms_not_the_100_ms_recovery_grid() -> None:
+    runs = swap3_runs()
+    for run in runs:
+        if run["strategy"] == "wafer-restart":
+            run |= {
+                "loss": 405,
+                "interruption_ns": 400_000_000,
+                "recovery_ns": 84_576_668,
+                "fine_buckets": fine_buckets((-1_000, -300), (0, 420), (600, 650)),
+            }
+    table = swap3_table(runs).set_index("strategy")
+    assert not {"median_recovery_ns", "recovery_ci95_low_ns", "recovery_ci95_high_ns"} & set(table)
+    restart = table.loc["wafer-restart"]
+    assert restart["median_interruption_ns"] == 400_000_000
+    assert restart["median_zero_output_ns"] == 420_000_000
+    assert (restart["zero_output_ci95_low_ns"], restart["zero_output_ci95_high_ns"]) == (420_000_000, 420_000_000)
+    assert restart["median_loss_equivalent_outage_ns"] == 405_000_000
+    hotswap = table.loc["wafer-hotswap"]
+    assert (hotswap["median_zero_output_ns"], hotswap["median_loss_equivalent_outage_ns"]) == (0, 0)
+    assert hotswap["verdict"] == "PASS"
 
 
 def test_swap3_table_reports_the_placebo_dip_of_every_arm_without_judging_it() -> None:
