@@ -1914,6 +1914,87 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(rate_rows), pd.DataFrame(boundary_rows)
 
 
+_CAPACITY_LOSS_SHARES = (
+    "publisher_rejected_share",
+    "accepted_undelivered_share",
+    "sut_missed_share_of_accepted",
+    "sut_dropped_share_of_accepted",
+)
+
+
+def _capacity_loss_counts(run: dict) -> dict[str, tuple[int, int]]:
+    counts = {
+        "publisher_rejected_share": (run["rejected"], run["intended"]),
+        "accepted_undelivered_share": (run["acked"] - run["received_unique"], run["intended"]),
+    }
+    if run["sut_input"] is not None:
+        # The SUT counters run from before the warm-up, and no snapshot splits the warm-up off.
+        accepted = run["warmup_acked"] + run["acked"]
+        counts["sut_missed_share_of_accepted"] = (accepted - run["sut_input"], accepted)
+        counts["sut_dropped_share_of_accepted"] = (run["sut_input"] - run["sut_output"], accepted)
+    return counts
+
+
+def capacity_loss_location_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Perf-10: where on the delivery path each cell's undelivered messages were lost.
+
+    Each record is one completed run from ``capacity_loss_records``. A run's undelivered
+    messages are the ones the publisher rejected plus the ones the broker accepted that never
+    reached the subscriber. For WAFER, native and eKuiper the SUT counters then show how many
+    of the messages the broker accepted the SUT never counted in, and how many it counted in but
+    never out. These two are over the accepted messages, not the intended ones, so they do not
+    add up with the first two. When both are zero, every accepted but undelivered message was
+    lost after the SUT; otherwise the counters, which include the warm-up, cannot split the
+    measured loss between the SUT and the path after it. The table shows where messages were lost, not why: a
+    message the SUT dropped can still have been dropped because the broker was slow to take its
+    output. MQTT loopback has no SUT. The table only reports: ``capacity_tables`` keeps every
+    delivery classification and bound.
+    """
+    cells: dict[tuple[str, int], list[dict]] = {}
+    for run in records:
+        cells.setdefault((run["system"], run["offered_rate_msg_s"]), []).append(run)
+    rows = []
+    for (system, rate), runs in sorted(cells.items()):
+        intended = sum(run["intended"] for run in runs)
+        counts = [_capacity_loss_counts(run) for run in runs]
+        row = {
+            "system": system,
+            "offered_rate_msg_s": rate,
+            "N_runs": len(runs),
+            "pooled_loss": sum(run["intended"] - run["received_unique"] for run in runs) / intended,
+        }
+        for share in _CAPACITY_LOSS_SHARES:
+            if share not in counts[0]:
+                row[f"pooled_{share}"] = row[f"median_{share}"] = None
+                continue
+            lost, base = np.asarray([count[share] for count in counts], dtype=float).T
+            row[f"pooled_{share}"] = float(lost.sum() / base.sum())
+            row[f"median_{share}"] = float(np.median(lost / base))
+        rows.append(
+            {
+                **row,
+                "units": "fraction of messages",
+                "estimator": (
+                    "publisher_rejected_share and accepted_undelivered_share are measured "
+                    "messages over the intended count and add up to the loss; "
+                    "sut_missed_share_of_accepted (accepted by the broker, never counted into the "
+                    "SUT) and sut_dropped_share_of_accepted (counted into the SUT, never out) are "
+                    "over the messages the broker accepted in warm-up and measurement, the span "
+                    "of the SUT counters, and when both are zero every accepted but undelivered "
+                    "message was lost after the SUT; pooled over the cell's runs and median over "
+                    "runs"
+                ),
+                "uncertainty": "descriptive; no interval",
+                "claim_boundary": (
+                    "locates loss on the MQTT delivery path, not its cause; reporting only, it "
+                    "changes no delivery classification or ceiling bound"
+                ),
+                "thesis_evidence": canonical,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def backpressure_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     grouped = _require_runs(records, BACKPRESSURE_POLICIES)
     rows = []
