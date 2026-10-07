@@ -252,6 +252,20 @@ def build_complete_fixture(root: Path) -> None:
                     for second, (user, idle) in enumerate(counters)
                 ]
             (leaf / "cpu-cores.csv").write_text("".join(lines))
+            intended = rate * 60
+            messages = {"intended": intended, "rejected": 0, "acked": intended, "received_unique": intended}
+            (leaf / "capacity-run.json").write_text(
+                json.dumps({"system": system, "rate_msg_s": rate, "run_index": 1, "messages": messages})
+            )
+            (leaf / "stdout.log").write_text(
+                "".join(
+                    f"Load generation complete total={count} errors=0 acked={count}\n"
+                    for count in (rate * 30, intended)
+                )
+            )
+            (leaf / "per_node_metrics.csv").write_text(
+                f"node_id,messages_in,messages_out\nmqtt-in,0,{rate * 90}\nmqtt-out,{rate * 90},{rate * 90}\n"
+            )
     (root / "progress.jsonl").write_text(
         "".join(
             json.dumps(entry) + "\n"
@@ -684,6 +698,14 @@ def test_all_notebooks_execute_against_complete_fixture(
         (4_000, "support cores", 80.0),
         (4_000, "SUT cores", 40.0),
     }
+    loss = pd.read_csv(rendered / "e-perf-10-loss-location.csv")
+    assert loss[["system", "offered_rate_msg_s", "N_runs"]].values.tolist() == [
+        ["native", 1_000, 1],
+        ["native", 4_000, 1],
+        ["wafer", 1_000, 1],
+        ["wafer", 4_000, 1],
+    ]
+    assert loss.pooled_sut_missed_share_of_accepted.eq(0).all()
     assert (rendered / "campaign/temperature.pdf").stat().st_size > 1_000
     assert (rendered / "campaign-attempts.csv").is_file()
     assert (rendered / "campaign-timing.csv").is_file()

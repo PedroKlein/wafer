@@ -14,7 +14,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from .attempts import INCOMPLETE_RUN_REASONS, batch_units
+from .attempts import INCOMPLETE_RUN_REASONS, PASSED, batch_units
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+_PUBLISHER_DONE = re.compile(r"Load generation complete total=\d+ errors=\d+ acked=(\d+)")
+_CAPACITY_COUNTERS = ("intended", "rejected", "acked", "received_unique")
+_EKUIPER_SUT_COUNTERS = (
+    "source_wafer_telemetry_0_records_in_total",
+    "sink_mqtt_0_0_records_out_total",
+)
 
 def evidence_label(sample_count: int, units: str, thesis_evidence: bool) -> str:
     evidence = "thesis" if thesis_evidence else "diagnostic"
@@ -288,3 +296,62 @@ def depth_run_records(batch: Path, *, canonical: bool) -> list[dict]:
         }
         for row in target_load_rows(batch).to_dict("records")
     ]
+
+
+def capacity_loss_records(batch: Path) -> list[dict]:
+    """One record per passed E-Perf-10 run: the messages counted at each hop of its delivery path.
+
+    WAFER and native count the SUT's input and output in ``per_node_metrics.csv`` (what
+    ``mqtt-in`` and ``mqtt-out`` emitted), eKuiper in its rule's source and sink counters between
+    the two ``ekuiper-health.json`` snapshots. Both span warm-up and measurement, so the record
+    keeps the warm-up publisher's acked count, which only its line in ``stdout.log`` holds. MQTT
+    loopback has no SUT and gets ``None`` for these three.
+    """
+    records = []
+    for unit in batch_units(batch, None):
+        attempt = unit.admitted
+        if attempt is None or attempt.outcome != PASSED:
+            continue
+        leaf = attempt.path
+        if not (leaf / "capacity-run.json").is_file():
+            continue
+        run = json.loads((leaf / "capacity-run.json").read_text())
+        messages = run["messages"]
+        missing = [name for name in _CAPACITY_COUNTERS if name not in messages]
+        if missing:
+            raise ValueError(f"capacity-run.json lacks {', '.join(missing)}: {leaf}")
+        record = {
+            "system": run["system"],
+            "offered_rate_msg_s": int(run["rate_msg_s"]),
+            "run_index": int(run["run_index"]),
+            **{name: int(messages[name]) for name in _CAPACITY_COUNTERS},
+            "warmup_acked": None,
+            "sut_input": None,
+            "sut_output": None,
+        }
+        if run["system"] != "mqtt-loopback":
+            record.update(_sut_counts(leaf, run["system"], record["acked"]))
+        records.append(record)
+    return records
+
+
+def _sut_counts(leaf: Path, system: str, acked: int) -> dict:
+    log = _ANSI_ESCAPE.sub("", (leaf / "stdout.log").read_text(errors="replace"))
+    publishers = [int(value) for value in _PUBLISHER_DONE.findall(log)]
+    if len(publishers) != 2 or publishers[1] != acked:
+        raise ValueError(
+            f"stdout.log does not record the warm-up publisher before the measured one: {leaf}"
+        )
+    if system == "ekuiper":
+        health = json.loads((leaf / "ekuiper-health.json").read_text())
+        before, after = (health[name]["rule_status"] for name in ("before", "after"))
+        sut_input, sut_output = (
+            int(after[name]) - int(before[name]) for name in _EKUIPER_SUT_COUNTERS
+        )
+    else:
+        with (leaf / "per_node_metrics.csv").open(newline="") as stream:
+            nodes = {row["node_id"]: row for row in csv.DictReader(stream)}
+        sut_input, sut_output = (
+            int(nodes[node]["messages_out"]) for node in ("mqtt-in", "mqtt-out")
+        )
+    return {"warmup_acked": publishers[0], "sut_input": sut_input, "sut_output": sut_output}

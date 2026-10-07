@@ -19,6 +19,7 @@ from wafer_analysis.canonical import (
     backpressure_table,
     bucket_band,
     branch_isolation_table,
+    capacity_loss_location_table,
     capacity_tables,
     ekuiper_profile_tables,
     failed_replacement_summary,
@@ -41,7 +42,7 @@ from wafer_analysis.canonical import (
     validation_gate_table,
 )
 from wafer_analysis import paths
-from wafer_analysis.focused import admitted_runs
+from wafer_analysis.focused import admitted_runs, capacity_loss_records
 from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
 from wafer_analysis.verdicts import concordance_table
 
@@ -731,6 +732,149 @@ def test_capacity_tables_reject_pooled_counters_that_disagree_with_their_runs() 
     summary["systems"]["ekuiper"]["rates"][1]["mean_achieved_ratio"] = 0.995
     with pytest.raises(ValueError, match="ekuiper rate 4000 pooled counters disagree"):
         capacity_tables(summary)
+
+
+def publisher_log(total: int, acked: int) -> str:
+    """The colourised line `wafer-loadgen publish` logs when it finishes."""
+    fields = (("total", total), ("errors", total - acked), ("acked", acked), ("unacked_at_exit", 0))
+    return (
+        "\x1b[2m2026-10-07T04:39:33Z\x1b[0m \x1b[32m INFO\x1b[0m wafer_loadgen::publish: "
+        "Load generation complete "
+        + " ".join(f"\x1b[3m{name}\x1b[0m\x1b[2m=\x1b[0m{value}" for name, value in fields)
+        + "\n"
+    )
+
+
+def write_capacity_leaf(
+    batch: Path,
+    system: str,
+    run: int,
+    *,
+    intended: int,
+    rejected: int,
+    received: int,
+    warmup_acked: int,
+    sut: tuple[int, int] | None = None,
+    rate: int = 15_000,
+) -> Path:
+    leaf = batch / system / f"rate-{rate:05d}" / f"run-{run:02d}-attempt-01"
+    leaf.mkdir(parents=True)
+    (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+    acked = intended - rejected
+    messages = {
+        "intended": intended,
+        "rejected": rejected,
+        "enqueued": acked,
+        "acked": acked,
+        "received_events": received,
+        "received_unique": received,
+        "downstream_lost": acked - received,
+        "total_undelivered": intended - received,
+        "duplicates": 0,
+        "ignored_warmup": 0,
+    }
+    (leaf / "capacity-run.json").write_text(
+        json.dumps({"system": system, "rate_msg_s": rate, "run_index": run, "messages": messages})
+    )
+    (leaf / "stdout.log").write_text(
+        publisher_log(intended // 2, warmup_acked) + publisher_log(intended, acked)
+    )
+    if system == "ekuiper":
+        before = (50, 40)
+        after = tuple(start + count for start, count in zip(before, sut))
+        snapshots = {
+            name: {
+                "rule_status": {
+                    "source_wafer_telemetry_0_records_in_total": source,
+                    "sink_mqtt_0_0_records_out_total": sink,
+                }
+            }
+            for name, (source, sink) in (("before", before), ("after", after))
+        }
+        (leaf / "ekuiper-health.json").write_text(json.dumps(snapshots))
+    elif sut is not None:
+        sut_in, sut_out = sut
+        (leaf / "per_node_metrics.csv").write_text(
+            "node_id,messages_in,messages_out\n"
+            f"filter,{sut_in},{sut_in}\nmqtt-in,0,{sut_in}\nmqtt-out,{sut_in},{sut_out}\n"
+        )
+    return leaf
+
+
+def test_capacity_loss_location_reports_where_each_cell_lost_its_messages(tmp_path) -> None:
+    # The warm-up publisher had 150 of its 450 publishes rejected, so the SUT took in every
+    # message the broker accepted: 300 in the warm-up and 900 measured.
+    for run, received in ((1, 400), (2, 400), (3, 700)):
+        write_capacity_leaf(
+            tmp_path, "wafer", run,
+            intended=900, rejected=0, received=received, warmup_acked=300, sut=(1_200, 1_200),
+        )
+    # A run the SUT failed holds no capacity result, as in the rate table.
+    failed = write_capacity_leaf(
+        tmp_path, "wafer", 4,
+        intended=900, rejected=0, received=0, warmup_acked=300, sut=(600, 0),
+    )
+    (failed / "canonical-status.json").write_text(
+        '{"status":"failed","failure_class":"sut_outcome","reasons":["runtime-exit"]}'
+    )
+    # eKuiper's rule counters stand above zero in the snapshot taken before the run.
+    write_capacity_leaf(
+        tmp_path, "ekuiper", 1,
+        intended=480, rejected=0, received=440, warmup_acked=240, sut=(715, 690),
+    )
+    write_capacity_leaf(
+        tmp_path, "mqtt-loopback", 1, intended=900, rejected=100, received=700, warmup_acked=450
+    )
+
+    table = capacity_loss_location_table(capacity_loss_records(tmp_path), canonical=False)
+
+    rows = table.set_index("system")
+    wafer, ekuiper, loopback = (rows.loc[system] for system in ("wafer", "ekuiper", "mqtt-loopback"))
+    assert wafer["N_runs"] == 3
+    assert wafer["pooled_loss"] == pytest.approx(1_200 / 2_700)
+    assert wafer["pooled_accepted_undelivered_share"] == pytest.approx(1_200 / 2_700)
+    assert wafer["median_accepted_undelivered_share"] == pytest.approx(500 / 900)
+    for share in (
+        "publisher_rejected_share", "sut_missed_share_of_accepted", "sut_dropped_share_of_accepted"
+    ):
+        assert wafer[f"pooled_{share}"] == wafer[f"median_{share}"] == 0
+    assert ekuiper["pooled_accepted_undelivered_share"] == pytest.approx(40 / 480)
+    assert ekuiper["pooled_sut_missed_share_of_accepted"] == pytest.approx(5 / 720)
+    assert ekuiper["pooled_sut_dropped_share_of_accepted"] == pytest.approx(25 / 720)
+    assert loopback["pooled_publisher_rejected_share"] == pytest.approx(100 / 900)
+    assert loopback["pooled_accepted_undelivered_share"] == pytest.approx(100 / 900)
+    for share in ("sut_missed_share_of_accepted", "sut_dropped_share_of_accepted"):
+        assert pd.isna(loopback[f"pooled_{share}"])
+        assert pd.isna(loopback[f"median_{share}"])
+    assert np.allclose(
+        table["pooled_publisher_rejected_share"] + table["pooled_accepted_undelivered_share"],
+        table["pooled_loss"],
+    )
+    assert not table["thesis_evidence"].any()
+
+
+def test_capacity_loss_location_rejects_a_log_without_the_warmup_publisher(tmp_path) -> None:
+    leaf = write_capacity_leaf(
+        tmp_path, "native", 1,
+        intended=900, rejected=0, received=900, warmup_acked=450, sut=(1_350, 1_350),
+    )
+    (leaf / "stdout.log").write_text(publisher_log(900, 900))
+
+    with pytest.raises(ValueError, match="warm-up publisher"):
+        capacity_loss_records(tmp_path)
+
+
+def test_capacity_loss_location_rejects_a_run_without_the_acked_count(tmp_path) -> None:
+    leaf = write_capacity_leaf(
+        tmp_path, "native", 1,
+        intended=900, rejected=0, received=900, warmup_acked=450, sut=(1_350, 1_350),
+    )
+    run = json.loads((leaf / "capacity-run.json").read_text())
+    del run["messages"]["acked"]
+    (leaf / "capacity-run.json").write_text(json.dumps(run))
+
+    with pytest.raises(ValueError, match="capacity-run.json lacks acked"):
+        capacity_loss_records(tmp_path)
 
 
 def swap5_record(run_index: int = 1) -> dict:
