@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from canonical_power import read_measurement_window, read_message_count, render
-from wafer_analysis.power import clip_to_window, measurement_label, summarize_power
+from wafer_analysis.power import clip_to_window, load_telemetry, measurement_label, summarize_power
 
 
 def test_external_subscriber_message_count_ignores_empty_gap_csv(
@@ -157,6 +157,38 @@ def test_power_report_is_named_by_host_and_refuses_mixed_measurements(
     mixed = pd.DataFrame([row, {**row, "host": "rpi5", "measurement": "Raspberry Pi 5 PMIC internal-rail proxy"}])
     with pytest.raises(ValueError, match="one power report per host and measurement"):
         render(mixed, tmp_path / "mixed")
+
+
+def test_x86_power_is_the_rapl_package_without_psys(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "power-boundary.json").write_text(
+        '{"backend":"x86","measurement":"x86-rapl-package-energy"}'
+    )
+    (tmp_path / "pi-telemetry.csv").write_text(
+        "timestamp_ns,temperature_millicelsius,cpu_frequency_hz,governor,throttled,rail_proxy_watts\n"
+        "1000000000,45000,1600000000,performance,0x0,0\n"
+        "2000000000,45000,1600000000,performance,0x0,9.0\n"
+        "3000000000,46000,1600000000,performance,0x0,11.0\n"
+    )
+    (tmp_path / "pmic-rails.csv").write_text(
+        "timestamp_ns,rail,current_a,voltage_v,power_w\n"
+        "2000000000,package-0,,,2.0\n"
+        "2000000000,psys,,,7.0\n"
+        "3000000000,package-0,,,3.0\n"
+        "3000000000,psys,,,8.0\n"
+    )
+    samples = load_telemetry(tmp_path / "pi-telemetry.csv")
+    assert [(sample["timestamp_ns"], sample["rail_proxy_watts"]) for sample in samples] == [
+        (2_000_000_000, 2.0),
+        (3_000_000_000, 3.0),
+    ]
+    assert samples[1]["temperature_millicelsius"] == 46_000
+    assert summarize_power(samples)["mean_proxy_watts"] == 2.5
+
+    (tmp_path / "power-boundary.json").write_text(
+        '{"backend":"jetson","measurement":"jetson-ina3221-rail-proxy"}'
+    )
+    watts = [sample["rail_proxy_watts"] for sample in load_telemetry(tmp_path / "pi-telemetry.csv")]
+    assert watts == [0.0, 9.0, 11.0]
 
 
 def test_pi_idle_baseline_is_not_subtracted_from_another_host() -> None:
