@@ -16,7 +16,10 @@ summarise_idle_baseline = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(summarise_idle_baseline)
 
 
-def write_sample(root: Path, index: int, watts: float, busy_jiffies: int) -> None:
+def write_sample(
+    root: Path, index: int, watts: float, busy_jiffies: int, untracked_jiffies: int = 0
+) -> None:
+    """``untracked_jiffies`` per second of SUT-core busy time miss the tick-sampled counters."""
     sample = root / f"sample-{index:02d}"
     sample.mkdir(parents=True)
     start = 1_000_000_000_000
@@ -27,14 +30,15 @@ def write_sample(root: Path, index: int, watts: float, busy_jiffies: int) -> Non
         rows.append(f"{stamp},45000,2400000000,performance,0x0,{watts}")
         for cpu in range(4):
             busy = busy_jiffies * second if cpu else 50 * second
-            cores.append(f"{stamp},{cpu},{busy},0,0,{100 * second - busy},0,0,0,0,2400000000")
+            idle = 100 * second - busy - (untracked_jiffies * second if cpu else 0)
+            cores.append(f"{stamp},{cpu},{busy},0,0,{idle},0,0,0,0,2400000000")
     (sample / "pi-telemetry.csv").write_text("\n".join(rows) + "\n")
     (sample / "cpu-cores.csv").write_text("\n".join(cores) + "\n")
     (sample / "measurement-window.json").write_text(
         json.dumps({"started_ns": start, "finished_ns": start + 10_000_000_000})
     )
     (sample / "host-sidecar.json").write_text(
-        json.dumps({"sut_cpus": "1-3", "sampler_cpu_seconds": 0.05})
+        json.dumps({"sut_cpus": "1-3", "sampler_cpu_seconds": 0.05, "clock_ticks_per_second": 100})
     )
 
 
@@ -50,6 +54,13 @@ def test_summary_reports_median_idle_watts_and_sut_core_idleness(tmp_path: Path)
     assert abs(summary["sut_core_busy_fraction_max"] - 0.01) < 1e-9
     assert summary["host_idle"] is True
     assert summary["throttled"] is False
+
+
+def test_sut_core_busy_time_the_tick_missed_still_counts(tmp_path: Path) -> None:
+    write_sample(tmp_path, 1, 2.0, busy_jiffies=1, untracked_jiffies=29)
+    summary = summarise_idle_baseline.summarise(tmp_path)
+    assert abs(summary["sut_core_busy_fraction_max"] - 0.30) < 1e-9
+    assert summary["host_idle"] is False
 
 
 def test_busy_sut_cores_mark_the_host_as_not_idle(tmp_path: Path) -> None:

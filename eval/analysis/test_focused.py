@@ -7,6 +7,7 @@ import pytest
 from wafer_analysis.focused import (
     admitted_artifacts,
     admitted_runs,
+    branch_isolation_runs,
     depth_run_records,
     evidence_label,
     pending_record,
@@ -115,6 +116,37 @@ def test_admitted_runs_summarise_an_hdr_log_as_hdr_summary_does(tmp_path) -> Non
             "sut_outcome_reasons": [],
         }
     ]
+
+
+def test_branch_isolation_runs_add_the_branch_a_arrival_span(tmp_path) -> None:
+    measured = tmp_path / "control" / "run-01-attempt-01"
+    without_rows = tmp_path / "control" / "run-02-attempt-01"
+    stopped = tmp_path / "panic-attack" / "run-01-attempt-01"
+    for leaf in (measured, without_rows):
+        (leaf / "branch-a").mkdir(parents=True)
+        (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+        (leaf / "branch-isolation.json").write_text('{"branches": {}}')
+    (measured / "branch-a" / "interval-latency.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {"interval_start_ns": 0, "interval_end_ns": 1_000_000_000},
+                    {"interval_start_ns": 1_000_000_000, "interval_end_ns": 1_999_145_055},
+                ]
+            }
+        )
+    )
+    stopped.mkdir(parents=True)
+    (stopped / "canonical-status.json").write_text(json.dumps(OUTCOME))
+
+    records = branch_isolation_runs(tmp_path)
+
+    assert [
+        (record["condition"], record["run_index"], record["branch_a_arrival_span_ns"])
+        for record in records
+    ] == [("control", 1, 1_999_145_055), ("control", 2, None), ("panic-attack", 1, None)]
+    assert records[0]["branches"] == {}
+    assert records[2]["sut_outcome_reasons"] == ["runtime-exit"]
 
 
 def write_target_load_leaf(
