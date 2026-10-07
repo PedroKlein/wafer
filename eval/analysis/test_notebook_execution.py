@@ -232,16 +232,22 @@ def build_complete_fixture(root: Path) -> None:
     for system in ("wafer", "native"):
         for rate in (1_000, 4_000):
             leaf = root / "e-perf-10" / system / f"rate-{rate:05d}" / "run-01-attempt-01"
-            write_passed_artifact(leaf, "host-sidecar.json", {"sut_cpus": "1-3"})
-            busy = rate // 100
-            (leaf / "cpu-cores.csv").write_text(
-                "timestamp_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal,frequency_hz\n"
-                + "".join(
-                    f"{stamp},{cpu},{stamp * (busy if cpu else 2 * busy)},0,0,{stamp * 100},0,0,0,0,2400000000\n"
-                    for stamp in (1, 2)
-                    for cpu in range(4)
-                )
+            write_passed_artifact(
+                leaf, "host-sidecar.json", {"sut_cpus": "1-3", "clock_ticks_per_second": 100}
             )
+            (leaf / "measurement-window.json").write_text(
+                json.dumps({"started_ns": 1_000_000_000, "finished_ns": 2_000_000_000})
+            )
+            lines = ["timestamp_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal,frequency_hz\n"]
+            for cpu in range(4):
+                busy = rate // 100 if cpu else rate // 50
+                # Idle outside the window; inside it the tick sampled a tenth of the busy time.
+                counters = ((0, 0), (0, 100), (busy // 10, 200 - busy), (busy // 10, 300 - busy))
+                lines += [
+                    f"{second * 1_000_000_000},{cpu},{user},0,0,{idle},0,0,0,0,2400000000\n"
+                    for second, (user, idle) in enumerate(counters)
+                ]
+            (leaf / "cpu-cores.csv").write_text("".join(lines))
     (root / "progress.jsonl").write_text(
         "".join(
             json.dumps(entry) + "\n"
@@ -666,7 +672,13 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert density[0].startswith("plugin,wasm_bytes,container_floor_bytes,floor_to_wasm_ratio,")
     assert all(",450000," in row for row in density[1:])
     assert (rendered / "rq1/core-utilisation.pdf").stat().st_size > 1_000
-    assert (rendered / "e-perf-10-core-utilisation.csv").is_file()
+    cores = pd.read_csv(rendered / "e-perf-10-core-utilisation.csv")
+    assert set(zip(cores.offered_rate_msg_s, cores.cores, cores.median_busy_percent.round(6))) == {
+        (1_000, "support cores", 20.0),
+        (1_000, "SUT cores", 10.0),
+        (4_000, "support cores", 80.0),
+        (4_000, "SUT cores", 40.0),
+    }
     assert (rendered / "campaign/temperature.pdf").stat().st_size > 1_000
     assert (rendered / "campaign-attempts.csv").is_file()
     assert (rendered / "campaign-timing.csv").is_file()
