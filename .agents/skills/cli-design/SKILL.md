@@ -3,7 +3,7 @@ name: cli-design
 description: >
   CLI design patterns for waferctl using clap derive API. Covers dual-consumer error
   messages (human-readable + machine-parseable for automation), structured JSON output
-  with RFC 9457 Problem Details, endpoint configuration, output formatting with tabled,
+  and errors, endpoint configuration, output formatting with tabled,
   and interactive vs scripted UX. Use when adding CLI commands, formatting output,
   handling CLI errors, designing subcommand interfaces, or making waferctl agent-friendly.
   Triggers on: waferctl, CLI, clap, subcommand, Parser, Subcommand, tabled, --json,
@@ -43,24 +43,20 @@ Error: Cannot connect to runtime at http://127.0.0.1:9090
 
 ### Machine Output (--json)
 
-Follow RFC 9457 Problem Details + extension fields:
+Errors go to stderr as one JSON object (`CliError::format_json` in
+`crates/waferctl/src/error.rs`):
 ```json
 {
-  "type": "urn:wafer:error:connection-refused",
-  "title": "Cannot connect to runtime",
-  "status": 3,
-  "detail": "TCP connection refused at http://127.0.0.1:9090",
-  "instance": "/health",
-  "suggested_fix": "Start the pipeline: wafer --config pipeline.toml",
-  "retry_after": null,
-  "docs_url": "https://github.com/PedroKlein/wafer#quickstart"
+  "error": {
+    "message": "Cannot connect to runtime at http://127.0.0.1:9090",
+    "exit_code": 3,
+    "hint": "Check that the WAFER runtime is running and the endpoint URL is correct."
+  }
 }
 ```
 
-Key extension fields:
-- `suggested_fix`: free-text recovery action (agent can attempt automatically)
-- `retry_after`: seconds to wait before retrying (null = don't retry)
-- `docs_url`: link to relevant documentation
+`hint` is present only when the error carries one. `exit_code` matches the
+process exit code.
 
 ---
 
@@ -255,6 +251,6 @@ Commands::HotSwap { node_id, wasm_path } => {
   context is undebuggable; always show which endpoint was tried and how it was resolved
 - **NEVER emit ANSI color codes to non-TTY output** — piped output becomes garbled;
   check `std::io::stdout().is_terminal()` before coloring
-- **NEVER treat errors as just strings** — structure them with type URIs, exit codes,
-  and `suggested_fix`; in 2026 your CLI's consumers include AI agents that can parse
+- **NEVER treat errors as just strings** — structure them with a message, exit code,
+  and recovery `hint`; in 2026 your CLI's consumers include AI agents that can parse
   structured diagnostics and retry autonomously

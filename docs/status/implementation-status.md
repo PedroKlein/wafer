@@ -55,9 +55,9 @@ denied rather than merely observing a later trap. This receipt is a release
 prerequisite, not admitted campaign evidence.
 
 The bounded Go interoperability claim covers only
-`plugins/go/uppercase`: release verification builds it with TinyGo, validates
-the component, and executes four host-boundary tests
-(`mise run //plugins:test-plugin-go`). The Python
+`plugins/go/uppercase`: the manual `mise run //plugins:test-plugin-go` task
+builds it with TinyGo and runs four host-boundary tests against it. CI does not
+run this task. The Python
 threshold-filter remains a stub and is not support evidence.
 
 ## Inference validation

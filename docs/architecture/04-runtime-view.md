@@ -118,7 +118,6 @@ sequenceDiagram
     Runner->>Runner: Finish current message (if in-flight)
     Runner->>NewStore: Install, validate, and initialize replacement
     alt replacement initialized
-        destroy OldStore
         Runner->>OldStore: Drop old Store + Instance
         Runner->>Runner: Flush retry buffer → DLQ (reason: HotSwapDrain)
         Runner->>Runner: Mark replacement adoption, resume main loop
@@ -127,7 +126,7 @@ sequenceDiagram
     end
     deactivate Runner
 
-    Note over Runner: Next input_rx.recv() uses<br/>the new Store + Instance
+    Note over Runner: After a successful swap, the next<br/>input_rx.recv() uses the new Store + Instance
 ```
 
 ### Key properties
