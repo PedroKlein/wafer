@@ -1,6 +1,6 @@
 # RFC-012: WASI 0.3 and Component Model Evolution
 
-- **Status:** Async P2 and bounded outbound HTTP implemented; P3 PoC approved
+- **Status:** Async P2 and bounded outbound HTTP implemented; any P3 PoC follows the canonical campaign
 - **Assessment dates:** 2026-09-25 to 2026-09-26
 - **Amends:** —
 - **Amended by:** [ADR-0016](../adr/0016-outbound-wasi-http-capability.md)
@@ -17,9 +17,11 @@ host now uses Wasmtime's asynchronous Preview 2 bindings without changing guest
 WIT or plugin bytes, and processing nodes may receive a default-deny outbound
 `wasi:http` grant for exact destinations.
 
-Before WAFER's first release and canonical campaign, a separate Preview 3 PoC
-will test native async functions and streams against the retained P2 path. The
-PoC may lead to a versioned WIT migration; it is not production P3 support.
+The canonical campaign runs on the P2 `wafer:pipeline@0.1.0` contract. A
+Preview 3 PoC, if pursued, runs after the campaign under a separately versioned
+package, tests native async functions and streams against the retained P2 path,
+and does not change campaign evidence. The PoC may lead to a versioned WIT
+migration; it is not production P3 support.
 
 ## Current implementation
 
@@ -153,7 +155,7 @@ No P3 feature or binding is enabled.
 | Initial instantiation | `load_transform_node`, `load_filter_node`, and `load_router_node` call synchronous `*Pre::instantiate`, then synchronous lifecycle methods. | Await `*Pre::instantiate_async`, `validate`, and `init` in the existing sequential launch future. | Store limits, fuel before start functions, relative epoch deadline, plugin version, config, and inference grant remain identical. |
 | Lifecycle | `Wasm*Node::validate_and_init` resets configured fuel and epoch, calls `validate` then `init`, and flushes guest logs. The baseline Wasm runner does not invoke the guest `close` export; retirement drops the Store. | Await the same ordered calls. Do not add a new `close` behavior as part of this migration. | No lifecycle-policy change and no early-return cleanup change. |
 | Processing | `WasmTransformNode::process`, `WasmFilterNode::evaluate`, and `WasmRouterNode::route` synchronously clear logs, reset metering, push one borrowed buffer, call the guest, flush logs, delete the buffer on success/error/trap, and map the result. | Make these methods async and await the generated export while retaining that exact setup/call/cleanup order. | Metadata, payload, lineage, retry count, logging, metering, and resource cleanup remain unchanged. |
-| Runner scheduling | `spawn_wasm_runner` uses `JoinSet::spawn_blocking` plus `Handle::block_on`; each Transform, Filter, and Router call is wrapped in `tokio::task::block_in_place`. | Spawn each runner as an ordinary `JoinSet` task and await the node call directly. | `ProcessingGuard` spans the whole call. No per-message task, Store mutex, task abort, timeout race, or `select!` branch around a Wasm future. |
+| Runner scheduling | `spawn_wasm_runner` uses `JoinSet::spawn_blocking` plus `Handle::block_on`; each Transform, Filter, and Router call is wrapped in `tokio::task::block_in_place`. | Spawn each runner as an ordinary `JoinSet` task and await the node call directly. | One guest call completes before the runner takes the next message. No per-message task, Store mutex, task abort, timeout race, or `select!` branch around a Wasm future. |
 | Trap and timeout recovery | Each runner handles the completed error, then `recover_from_cached_pre` creates a fresh Store, reapplies capabilities, memory, fuel, and epoch configuration, synchronously instantiates the cached pre-instance, and reruns lifecycle. | Await fresh-Store instantiation and lifecycle before receiving another message. | A trapped or interrupted Store is never reused. |
 | Reconfigure | `try_reconfigure` prepares a fresh Store and cached instance synchronously, swaps it in, runs lifecycle, and restores the complete prior Store/bindings/config on rejection. | Await preparation and lifecycle before committing or rolling back. | Reconfigure remains atomic and between messages. |
 | Hot-swap preparation and adoption | `prepare_*_swap_timed` already calls `instantiate_async`, but the `*Pre` was built from the synchronous P2 linker; the runner applies the prepared Store between messages and runs synchronous lifecycle. | Use the async P2 linker and generated bindings for preparation and await lifecycle during between-message adoption. | Watch-channel signalling, capabilities, memory limits, canary rollback, and one active call remain unchanged. |
@@ -291,13 +293,14 @@ These macOS measurements support the implementation decision only and are not
 canonical thesis evidence. The retained host migration is commits `fb129b4` and
 `e7b9779`; decision tooling is `75ab337`.
 
-### D3: Run a P3 PoC before the first release
+### D3: Run any P3 PoC after the canonical campaign
 
-The P3 experiment runs before the first release and canonical campaign, while a
-breaking WIT change has no external compatibility cost and before measurements
-would need to be repeated. It uses a separately versioned package or world and
-leaves the verified `@0.1.0` P2 path intact until the adoption decision. It has
-two stages:
+The canonical campaign runs on the P2 `wafer:pipeline@0.1.0` contract. A P3
+PoC, if pursued, runs after the campaign under a separately versioned package
+and does not change campaign evidence. Run before the first release, it still
+lets a breaking WIT change land without external compatibility cost. It leaves
+the verified `@0.1.0` P2 path intact until the adoption decision. It has two
+stages:
 
 1. a toolchain smoke test for one Rust component, P3 HTTP, and the maintained Go path; and
 2. a streaming pass-through slice compared with the P2 message-at-a-time path.
@@ -400,7 +403,7 @@ This PoC does not:
 
 1. **Complete:** adopt asynchronous P2 host bindings after matched correctness, simplicity, and performance gates.
 2. **Complete:** implement and adversarially verify bounded outbound P2 `wasi:http`.
-3. **Next:** build the isolated P3 Rust/HTTP/Go toolchain smoke test.
+3. **After the canonical campaign, if pursued:** build the isolated P3 Rust/HTTP/Go toolchain smoke test.
 4. **Next if the smoke passes:** build one P3 streaming pass-through slice.
 5. Compare P2, P3 message-at-a-time, and P3 streaming behavior under fixed conditions.
 6. Before release, decide whether to migrate to a new WIT package version or ship P2 as the initial contract.

@@ -133,7 +133,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 | File | Summary |
 |------|---------|
 | `README.md` | Project README — quick start, prerequisites, project structure, development setup, running pipelines, building plugins. Post-migration, this is a one-page quickstart that points into `docs/`. |
-| `mise.toml` | Primary non-Rust developer toolchain and command-runner config. Run `mise run setup` for helper tools and `mise tasks ls` for tasks. |
+| `mise.toml` | Primary non-Rust developer toolchain and command-runner config. Run `mise run setup` for helper tools and `mise tasks ls --all` for tasks. |
 | `rust-toolchain.toml` | Pinned Rust toolchain (stable channel, `wasm32-wasip2` target). |
 | `rustfmt.toml` | Formatter configuration. |
 | `Cargo.toml` | Workspace root. Defines workspace members, shared dependencies, and profiles. |
@@ -148,7 +148,7 @@ This project uses [`mise`](https://mise.jdx.dev/) as the primary non-Rust develo
 
 ```bash
 mise run setup          # Verify Rust/rustup, then install pinned helper tools
-mise tasks ls           # List all available tasks
+mise tasks ls --all     # List all available tasks
 mise run build          # Build entire workspace
 mise run test           # Run all tests
 mise run test-eval      # Run the evaluation harness tests (Python and shell)
@@ -170,12 +170,13 @@ mise run //plugins:build-plugin NAME  # Build a specific plugin (e.g., mise run 
 
 ```bash
 mise run cross-build-pi        # Build wafer, wafer-loadgen, waferctl for aarch64 Linux
-                               # via docker run --platform linux/arm64 rust:1-slim-bookworm.
+                               # via docker run --platform linux/arm64 rust:<toolchain>-slim-bookworm
+                               # (toolchain from rust-toolchain.toml).
                                # Output: target/docker-aarch64-linux/release/{wafer,wafer-loadgen,waferctl}
 mise run cross-build-pi-check  # Verify the three binaries are aarch64 ELF via `file(1)`. CI-friendly.
 ```
 
-See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. The `.github/workflows/cross-arch.yml` job builds the same binaries natively on an arm64 runner on push + PR; `.github/workflows/ci.yml` runs fmt, clippy and the test suite.
+See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. `.github/workflows/cross-arch.yml` builds the release binaries for aarch64 (on a native arm64 runner) and x86_64 when Rust sources, Cargo files, `rust-toolchain.toml`, `mise.toml` or the glibc script change; `.github/workflows/ci.yml` runs the docs check, fmt, clippy, the workspace tests and the evaluation tests, and on pull requests skips the suites the diff cannot affect.
 
 ### Analysis Notebooks
 
@@ -186,11 +187,11 @@ mise run //eval:notebooks-execute                  # Re-execute all notebooks ag
 mise run //eval:figures                            # Re-execute notebooks + list regenerated PDFs under eval/analysis/figures/
 ```
 
-Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) pins JupyterLab, matplotlib, pandas, HdrHistogram, statsmodels, scipy. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. See `eval/analysis/notebooks/README.md` for the notebook ↔ experiment ↔ RQ mapping.
+Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) declares numpy, matplotlib, seaborn, pandas and Jupyter. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. See `eval/analysis/notebooks/README.md` for the notebook-to-experiment mapping.
 
 ### Evaluation Campaign
 
-Run these on the evaluation host itself (from its `~/wafer` checkout), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`), and `approve-batch`, which runs on the analysis machine against the results volume. The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
+Run these on the evaluation host itself (from its `~/wafer` checkout), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`), and `approve-batch`, which runs on the analysis machine against the results root that holds the host's copied batch. The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
 
 ```bash
 mise run preflight-pi5                               # or preflight-jetson / preflight-x86 on those hosts
@@ -226,9 +227,11 @@ cargo test --workspace -- --nocapture           # With stdout output
 ### Debugging
 
 ```bash
-RUST_LOG=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
-RUST_LOG=trace cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+RUST_LOG=wafer=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+RUST_LOG=wafer=trace cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
 ```
+
+The runtime adds an INFO default to the `RUST_LOG` filter, so a bare level such as `RUST_LOG=debug` still logs at INFO. Name a target instead; `wafer` also matches the `wafer_*` crates.
 
 ---
 

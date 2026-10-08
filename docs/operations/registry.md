@@ -144,7 +144,7 @@ entry or point `[registry].cache_dir` at an empty directory.
 | `mise run //plugins:publish-plugin <name> <version>` | Push using stored docker credentials. |
 | `mise run //plugins:publish-plugin-auth <user> <token> <name> <version>` | Push with inline credentials. |
 | `mise run //plugins:publish-all <version>` | Push every built plugin. |
-| `mise run //plugins:pull-plugin <name> <version>` | Pull one plugin into the cache. |
+| `mise run //plugins:pull-plugin <name> <version>` | Download one plugin to `downloads/` (not the runtime cache). |
 | `mise run //plugins:pull-plugin-auth <user> <token> <name> <version>` | Pull with inline credentials. |
 | `mise run run-local` | Run the sample pipeline with only local plugins. |
 | `mise run run-remote` | Run the sample pipeline with OCI-hosted plugins. |

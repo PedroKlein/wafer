@@ -41,7 +41,7 @@ alwaysLoaded: true
 |-----------|------------------|-----------------|
 | Writing thesis prose | Scope Qualifiers → Comparators | Terms MUST use qualifiers |
 | Reviewing code | Architectural Invariants #1–10 | NEVER violate any invariant |
-| Designing experiments | RQ pass criteria + method | N≥30, open-loop, one-sided bootstrap bounds |
+| Designing experiments | RQ pass criteria + method | Matrix repetitions, open-loop, one-sided bootstrap bounds |
 | Hot-swap implementation | Invariant #8 + "NOT stateful" | Watch-channel swap is stateless — state is lost |
 | Benchmarking | RQ1 pass criteria + hardware | Paired baselines: native + eKuiper |
 | Adding features | "What WAFER Is NOT" + Invariants | Don't add windowing, exactly-once, etc. |
@@ -71,17 +71,17 @@ on sub-8GB gateway hardware.
 | RQ | Question | Criterion (summary; authority is `tcc-doc/research/analysis/thesis-statement-v3.md`) |
 |----|----------|----------------|
 | **RQ1** | What is the performance cost of typed Wasm boundaries on edge hardware? | At 1,000 msg/s: median WAFER p95 / median eKuiper p95 <= 2.0, pooled loss <= 1%, mean achieved/offered >= 0.99. Capacity: WAFER tested-grid delivery ceiling >= 0.70x eKuiper's across the bracketed ratio interval, or `CENSORED`. Per-hop cost is reported against a 50 µs reference, not passed or failed |
-| **RQ2** | Do per-stage sandboxes contain faults without pipeline-wide failure? | Each E-Iso-1..6 attack traps or is denied by the expected mechanism without a host-runtime panic; healthy-branch impact (E-Iso-7) and trap recovery (E-Iso-8) are measured at run level |
-| **RQ3** | What is the disruption cost of stateless stage replacement? | E-Swap-3: upper 95% CI of median dip below 5%, zero loss and duplication. E-Swap-4: across-run p95 sink gap below 100 ms, zero loss and duplication |
+| **RQ2** | Do per-stage sandboxes contain faults without pipeline-wide failure? | Each E-Iso-1..6 attack traps or is denied by the expected mechanism without a host-runtime panic; E-Iso-7: median branch-A throughput drop below 1% of control (one-sided bound) and no stopped runs; trap recovery (E-Iso-8) is measured at run level |
+| **RQ3** | What is the disruption cost of stateless stage replacement? | E-Swap-3: upper 95% CI of median dip below 5%, zero loss and duplication. E-Swap-4: across-run p95 sink gap below 100 ms, zero loss and duplication. E-Swap-2: no run with loss, duplicates or an early stop. E-Swap-5: no run with a failed rollback, missing output after the final rollback, loss or duplicates |
 
 **Evaluation architecture** (three-way comparison):
 ```
 Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←── Gap B: "competitive?" ──→ eKuiper
 ```
 
-**Hardware**: Raspberry Pi 5 4 GB (primary), Jetson Orin (optional inference validation), x86 (cross-validation).
+**Hardware**: Raspberry Pi 5 4 GB (canonical); Jetson Orin Nano (25 W, CPU only) and x86 as replication hosts that run the full matrix as separate strata, never pooled.
 **Canonical allocation**: CPU 0 runs OS, native Mosquitto, `wafer-loadgen` and telemetry (systemd `CPUAffinity=0`, `irqaffinity=0`, no `isolcpus`); CPUs 1–3 run one active SUT. eKuiper 2.1.5 runs natively. ESP32 is excluded from measured experiments.
-**Method**: N≥30 repetitions, open-loop load gen, HdrHistogram, Bootstrap CI95; verdicts compare one-sided bootstrap bounds with the thresholds in `verdict_rules` of `eval/canonical-matrix.json`.
+**Method**: repetitions per experiment from `eval/canonical-matrix.json` (30 for most; 10 for E-Swap-1, -2, -5 and -6; 1 for E-Density-1), open-loop load gen, HdrHistogram, Bootstrap CI95; verdicts compare one-sided bootstrap bounds with the thresholds in `verdict_rules` of `eval/canonical-matrix.json`.
 
 ---
 
@@ -128,14 +128,14 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 | Convention | Detail |
 |-----------|--------|
 | WASM target | `wasm32-wasip2` (Component Model, WASI Preview 2) |
-| Rust edition | 2024 (stable channel, `rust-version = "1.85"`) |
+| Rust edition | 2024 (`rust-version = "1.98"`) |
 | Pipeline config | TOML only |
 | WIT package | One package, `wafer:pipeline@0.1.0`, in five files under `/wit/`: `pipeline-types.wit` (`types`), `pipeline-node.wit` (`lifecycle`, `transform`, `filter`), `pipeline-routing.wit` (`router`), `pipeline-host.wit` (`logging`), `worlds.wit` |
 | WIT worlds | `transform-node`, `filter-node`, `router-node`, and the capability-gated `inference-node`, all in `wit/worlds.wit` |
 | Envelope shape | `Arc<EnvelopeHeader>` (metadata) + `Bytes` payload + `Lineage` trail; buffer resource with `borrow<buffer>` for zero-copy input |
 | Plugin structure | `/plugins/{name}/src/lib.rs`, `crate-type = ["cdylib"]` |
 | Workspace crates | `wafer-core` (runtime lib), `wafer-runtime` (bin), `wafer-types` (shared types), `wafer-config` (loader + validation), `wafer-plugin` (guest SDK), `wafer-loadgen` (eval harness), `waferctl` (CLI) |
-| Toolchain | `rust-toolchain.toml` (stable channel, Edition 2024) |
+| Toolchain | `rust-toolchain.toml` pins 1.98.1 (Edition 2024) |
 | Tool manager / command runner | Rust via rustup + `rust-toolchain.toml`; non-Rust tools/tasks via `mise.toml`; run `mise run setup` for helper tools and `mise tasks ls` for tasks |
 | ADRs | `docs/adr/NNNN-<slug>.md`, Michael Nygard format |
 | RFCs | `docs/rfcs/RFC-NNN-<slug>.md` (authoritative long-form decision archive) |
@@ -144,7 +144,7 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 | Node categories | Source, Sink, Transform, Filter, Router (no Joiner) |
 | Node config field | Single `plugin` field on `WasmNodeDef` (not `plugin_path` / `plugin_ref`); the loader dispatches to local path vs OCI reference based on the value |
 | Edge field | Single `port` field on `EdgeDef` (only used for router outputs); no `from_port` / `to_port` |
-| Metrics | `prometheus-client` crate, separate port |
+| Metrics | Prometheus text rendered by `api::handlers::metrics` on the API listener; a separate listener only with `--metrics-bind` |
 | Logging | `tracing` + `EnvFilter` |
 | Control plane | axum HTTP REST API |
 
@@ -215,10 +215,8 @@ Paths are relative to the workspace root (`~/Dev/github.com/PedroKlein/`).
 Do NOT load all references at once — each is 5,000–15,000 words. Load only the
 one directly relevant to the current task.
 
-Because the doc tree is being restructured (see banner at top), some of these targets
-are being replaced. During the migration, prefer the source code / WIT files as the
-authoritative view of *what is*, and RFCs (`docs/rfcs/`) or decision docs as
-authoritative for *why*.
+Prefer source code and WIT files as authoritative for *what is*, and RFCs (`docs/rfcs/`)
+or ADRs for *why*.
 
 | Need | Read |
 |------|------|
@@ -234,5 +232,5 @@ authoritative for *why*.
 | Evaluation plan (experiments, stats, threats) | `tcc-doc/main/research/analysis/evaluation-plan.md` |
 | Comparator positioning matrix | `tcc-doc/main/research/analysis/positioning-matrix.md` |
 | Use cases with trade-offs | `tcc-doc/main/context/use-cases.md` |
-| Literature synthesis (75 papers) | `tcc-doc/main/findings/synthesis-findings.md` |
+| Literature and claim authority | `tcc-doc/main/SOURCES-OF-TRUTH.md` |
 | Similar systems deep search | `tcc-doc/main/findings/similar-systems-2025-2026.md` |

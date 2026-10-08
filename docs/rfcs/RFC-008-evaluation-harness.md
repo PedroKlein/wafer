@@ -7,7 +7,7 @@
 
 ## Abstract
 
-The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.5 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
+The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.5 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`. The Raspberry Pi 5 is the canonical host; the same matrix is repeated on a Jetson Orin Nano (25 W, CPU only) and an x86-64 Linux host as replication strata.
 
 The independent unit is a complete process run unless the matrix explicitly declares a static experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, diagnostic-batch, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; it enters the final campaign only by moving into the matrix's final `experiments` list before a final batch starts.
 
@@ -47,7 +47,7 @@ Each of 30 independent runs contains one stateless swap and contributes one sink
 
 ### External MQTT path
 
-`wafer-loadgen publish` and `wafer-loadgen subscribe` drive E-Perf-1, E-Perf-2, E-Perf-10, and E-Swap-3 through the same native Mosquitto broker. The publisher stamps each payload with its scheduled send time, reports how late messages left as `source_lag_ns`, and distinguishes intended offers, client-queue rejection, and successful enqueue. The subscriber records bounded sequence and HDR summaries. Every MQTT run declares its measured sequence range, numbers warmup messages above it, and gives the subscriber one drain grace from the canonical matrix after the publisher exits before stopping it with SIGINT, so tail loss is recorded the same way for every system. Final capacity runs do not require per-message CSV traces.
+`wafer-loadgen publish` and `wafer-loadgen subscribe` drive E-Perf-1, E-Perf-2, E-Perf-3, E-Perf-10, and E-Swap-3 through the same native Mosquitto broker. The publisher stamps each payload with its scheduled send time, reports how late messages left as `source_lag_ns`, and distinguishes intended offers, client-queue rejection, and successful enqueue. The subscriber records bounded sequence and HDR summaries. Every MQTT run declares its measured sequence range, numbers warmup messages above it, and gives the subscriber one drain grace from the canonical matrix after the publisher exits before stopping it with SIGINT, so tail loss is recorded the same way for every system. Final capacity runs do not require per-message CSV traces.
 
 ## Canonical metering
 
@@ -87,7 +87,7 @@ A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and
 
 E-Perf-9 compares Linux filesystem page-cache preparation. The runtime disk compiled-component cache is disabled for these runs, so E-Perf-9 is not evidence for AOT or serialized-component caching.
 
-E-Perf-5 remains `PENDING` until matching Raspberry Pi 5 and x86 Linux batches exist at the same source and method. The x86 execution and any cross-architecture conclusion remain `future-work`.
+E-Perf-5 remains `PENDING` until matching Raspberry Pi 5 and x86 Linux batches exist at the same source and method. The x86 host runs the full matrix as a replication host, and the cross-architecture conclusion waits for both batches.
 
 ## Final RQ3 experiments
 

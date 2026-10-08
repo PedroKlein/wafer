@@ -22,7 +22,7 @@ stable `RFC-NNN-<slug>` filename. Git history keeps the original files.
 | [RFC-008](RFC-008-evaluation-harness.md) | Evaluation harness design | Implemented for final-campaign readiness | 2026-07-12 |
 | [RFC-009](RFC-009-implementation-architecture.md) | Implementation Architecture — Module Structure & Crate Boundaries | Implemented | 2026-07-12 |
 | [RFC-010](RFC-010-io-integration.md) | I/O Integration & First End-to-End Pipeline | Implemented | 2026-07-15 |
-| [RFC-012](RFC-012-wasi-0.3-evaluation.md) | WASI 0.3 and Component Model Evolution | Async P2 and bounded outbound HTTP implemented; P3 PoC approved | 2026-09-25 |
+| [RFC-012](RFC-012-wasi-0.3-evaluation.md) | WASI 0.3 and Component Model Evolution | Async P2 and bounded outbound HTTP implemented; any P3 PoC follows the canonical campaign | 2026-09-25 |
 
 Titles, statuses, and dates are copied from each RFC's own header; the RFC's
 Status line carries the detail. Amendment relations are listed below.

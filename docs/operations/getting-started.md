@@ -76,11 +76,14 @@ Under the hood, `mise run run` shells out to:
 cargo run -p wafer-runtime -- --config <path>
 ```
 
-To turn up the logs:
+To turn up the logs, name the targets:
 
 ```bash
-RUST_LOG=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+RUST_LOG=wafer=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
 ```
+
+The runtime always adds an `info` default after reading `RUST_LOG`, so a
+level-only value such as `RUST_LOG=debug` cannot change that default.
 
 ## 4 — Explore the control plane
 
@@ -98,7 +101,7 @@ curl -s http://127.0.0.1:9090/api/v1/nodes | jq
 # [{"id":"source","state":"running","processed":0,"failed":0,"replacement_eligible":false}, ...]
 
 curl -s http://127.0.0.1:9090/metrics | head
-# wafer_node_processed_total{node="upper"} 3
+# wafer_node_processed_total{node="uppercase"} 3
 ```
 
 For an interactive collection, import
@@ -113,14 +116,14 @@ different transform and hot-swap it in:
 
 ```bash
 mise run //plugins:build-plugin json-parse
-curl -X POST http://127.0.0.1:9090/api/v1/nodes/upper/hot-swap \
+curl -X POST http://127.0.0.1:9090/api/v1/nodes/uppercase/hot-swap \
      -H 'content-type: application/json' \
      -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
-# {"node_id":"upper","replacement_adopted":true,"first_post_replacement_local_outcome":{"disposition":"forwarded/enqueued","after_adoption_ns":...},"compile_cache":"compiled","timeline":{"compile_ns":...,"instantiate_ns":...,"signal_ns":...,"replacement_adopted_ns":...,"first_post_replacement_local_outcome_ns":...}}
+# {"node_id":"uppercase","replacement_adopted":true,"first_post_replacement_local_outcome":{"disposition":"forwarded/enqueued","after_adoption_ns":...},"compile_cache":"compiled","timeline":{"compile_ns":...,"instantiate_ns":...,"signal_ns":...,"replacement_adopted_ns":...,"first_post_replacement_local_outcome_ns":...}}
 ```
 
 The response proves adoption and a runner-local outcome, not sink convergence.
-The `upper` node's Wasm instance is replaced between messages; the next valid
+The `uppercase` node's Wasm instance is replaced between messages; the next valid
 JSON line is processed by the replacement.
 
 ## 6 — Shut down cleanly

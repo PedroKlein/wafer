@@ -2,9 +2,10 @@
 
 Functional and non-functional requirements for WAFER.
 
-- `functional.md` — FR-1..N derived from the WIT contracts, HTTP control plane,
-  and plugin surface. Each requirement carries an ID, statement, rationale, and
+- `functional.md` — `FR-<area>-N` requirements (configuration, nodes, messaging,
+  errors, hot-swap, control plane, plugin sandboxing), each with a statement and
   verification method.
-- `non-functional.md` — NFR-1..N mapped 1:1 to the thesis research questions
-  (RQ1 Performance, RQ2 Isolation, RQ3 Hot-swap) with quantitative pass
-  criteria drawn from `tcc-doc/research/analysis/thesis-statement-v3.md`.
+- `non-functional.md` — NFR-PERF/ISO/SWAP requirements grouped by research
+  question (RQ1 performance, RQ2 isolation, RQ3 hot-swap). Thresholds come from
+  `verdict_rules` in `eval/canonical-matrix.json`; some requirements are
+  report-only.

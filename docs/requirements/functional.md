@@ -24,11 +24,12 @@ hot-swap) live in `non-functional.md`.
 
 - **FR-CFG-2 · Reject invalid topologies at load time.**
   *Statement:* The runtime shall reject configs whose graph contains a
-  cycle, references an undefined node, uses an undefined router port,
-  omits the required `plugin` field on a Wasm node, or contains an
-  unknown key (outside a plugin's opaque `config` table). It shall also
-  reject duplicate edges, a `port` on a non-router edge, a processing
-  node without an input or an output, and `epoch_tick_ms = 0`.
+  cycle, references an undefined node, has an edge from a router
+  without a `port`, omits the required `plugin` field on a Wasm node,
+  or contains an unknown key (outside a plugin's opaque `config`
+  table). It shall also reject duplicate edges, a `port` on a
+  non-router edge, a processing node without an input or an output,
+  and `epoch_tick_ms = 0`.
   *Rationale:* Fail-fast on structural errors; a running pipeline
   cannot recover from a topology error.
   *Verify:* `wafer-config::validate` returns a `ValidationError`
@@ -70,10 +71,10 @@ hot-swap) live in `non-functional.md`.
   *Statement:* Transform, Filter, and Router nodes shall select either a WebAssembly Component-Model binary or one of the closed native evaluation functions through `plugin`. Only loaded Wasm implementations are replacement-eligible; there is no inline expression language.
   *Verify:* `PluginSpec`, launcher dispatch, and loaded-Wasm eligibility tests.
 
-- **FR-NODE-5 · Wasm nodes implement one of three WIT worlds.**
-  *Statement:* Wasm plugins shall implement exactly one of the three WIT worlds
-  `transform-node`, `filter-node`, or `router-node` in the single
-  `wafer:pipeline@0.1.0` package.
+- **FR-NODE-5 · Wasm nodes implement one of four WIT worlds.**
+  *Statement:* Wasm plugins shall implement exactly one of the four WIT worlds
+  `transform-node`, `filter-node`, `router-node`, or the capability-gated
+  `inference-node` in the single `wafer:pipeline@0.1.0` package.
   *Verify:* wit-bindgen linking fails at build time if the exported
   interfaces do not match the world.
 
@@ -91,10 +92,12 @@ hot-swap) live in `non-functional.md`.
   `crates/wafer-config/src/validation.rs` and orchestrator tests.
 
 - **FR-MSG-3 · Fan-out via Router output ports.**
-  *Statement:* Router nodes shall declare their output ports via
-  `output-ports()` at init. `route(input)` shall return a subset of
-  those port names; empty list drops the message, multi-port list
-  fans out by cloning the `borrow<buffer>` handle.
+  *Statement:* Router plugins export `output-ports()`, but the host
+  does not call it. `route(input)` returns port names; the host
+  forwards the message to every outgoing edge whose `port` matches and
+  drops names that match no edge. An empty list drops the message;
+  several names fan out by cloning the envelope (Arc header and `Bytes`
+  payload refcount bumps), with the last match receiving the original.
   *Verify:* `wit/pipeline-routing.wit` + router runner tests.
 
 - **FR-MSG-4 · Zero-copy filter forwarding.**
@@ -124,7 +127,7 @@ hot-swap) live in `non-functional.md`.
   `crates/wafer-core/tests/attack_containment.rs`.
 
 - **FR-ERR-2 · Bounded retry.**
-  *Statement:* Retryable categories shall wait exactly `backoff_ms` before the first retry, double later delays to 30 000 ms, wake at the earliest due buffered deadline, and preserve retry count. Exhaustion shall perform the configured terminal action (`skip`, `dlq`, or `teardown`) without requeue; DLQ full and closed remain distinct. `teardown` ends the node's runner loop without recovery. A `dlq` action with no `[dead_letter]` sink configured drops the message and counts it as `dlq_lost`; the validator does not require `[dead_letter]` for error-policy actions.
+  *Statement:* Retryable categories shall wait exactly `backoff_ms` before the first retry, double later delays to 30 000 ms, wake at the earliest due buffered deadline, and preserve retry count. Exhaustion shall perform the configured terminal action (`skip`, `dlq`, or `teardown`) without requeue; DLQ full and closed remain distinct. `teardown` ends the node's runner loop without recovery. The validator rejects a config in which any node's effective error policy sends a category to `dlq` (the default for `bad_input`) while no `[dead_letter]` sink is configured.
   *Verify:* paused-time and real-runner retry tests.
 
 - **FR-ERR-3 · DLQ envelope preservation.**

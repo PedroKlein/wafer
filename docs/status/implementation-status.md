@@ -46,7 +46,7 @@ The async P2 path was selected by a 30-pair diagnostic macOS A/B experiment afte
 
 ## Plugin inventory and language boundary
 
-The release verification builds and validates 16 Rust processing/evaluation
+The release verification builds and validates 17 Rust processing/evaluation
 components and six attack components. The six attack components are executable
 containment stimuli, not production operators; `mise run mandatory-attack-evidence`
 runs S1–S6 plus a healthy reference and rejects skipped, duplicate, malformed,
@@ -56,7 +56,8 @@ prerequisite, not admitted campaign evidence.
 
 The bounded Go interoperability claim covers only
 `plugins/go/uppercase`: release verification builds it with TinyGo, validates
-the component, and executes five host-boundary tests. The Python
+the component, and executes four host-boundary tests
+(`mise run //plugins:test-plugin-go`). The Python
 threshold-filter remains a stub and is not support evidence.
 
 ## Inference validation

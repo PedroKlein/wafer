@@ -20,8 +20,7 @@ in the table.
 | **Tremor** (Wayfair) | Rust DAG, streaming, backpressure, production-scale (10 TB/day) | No Wasm isolation, no typed plugin contracts, no per-node hot-swap | General-purpose event processor |
 
 *Extended comparator set (Fluvio SmartModules, Flow-Like, Wick,
-Node-RED) is covered narratively in `../rfcs/RFC-008-evaluation-harness.md`
-and `tcc-doc/research/analysis/positioning-matrix.md`.*
+Node-RED) is covered in `tcc-doc/research/analysis/positioning-matrix.md`.*
 
 ## Per-system notes
 

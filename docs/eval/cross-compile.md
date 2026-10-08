@@ -88,8 +88,8 @@ under `target/release/`. CI builds the same set on `ubuntu-latest` in the
 
 ```bash
 git clone <this-repo> && cd wafer
-mise install                # rust/uv/wasm-tools/etc.
-mise run cross-build-pi     # cold-cache first run: ~11 minutes
+mise trust && mise run setup  # needs Rust from rustup; installs uv, wasm-tools and other helpers
+mise run cross-build-pi       # cold-cache first run: ~11 minutes
 mise run cross-build-pi-check
 ```
 

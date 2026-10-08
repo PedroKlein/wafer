@@ -18,4 +18,6 @@ Each `test_<name>.py` covers the script or module of the same name;
 `test_verify_canonical.py` covers `verify-result-contract.py` and
 `test_canonical_matrix.py` covers `validate-canonical.py matrix`.
 `test_deploy_pi5.py` needs the Wasm plugins built (`plugins/build-plugins.sh`).
-CI runs all of this in the `test` job.
+CI runs all of this in the `eval tests` job of `.github/workflows/ci.yml`: on
+every push to main, and on pull requests whose diff matches that job's path
+filter (see the `changes` job).
