@@ -19,9 +19,10 @@ The canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/st
 
 Remaining work for thesis-grade numbers:
 
-- Finish the final campaign of the frozen canonical experiment matrix (N=30,
-  30 s warmup, experiment-specific windows), which is running on the Jetson
-  Orin Nano and x86 replication hosts first and the Raspberry Pi 5 last, via
+- Finish the final campaign of the frozen canonical experiment matrix (30 runs
+  for 22 of the 27 experiments, 30 s warmup, experiment-specific windows), which
+  is running on the Jetson Orin Nano and x86 replication hosts first and the
+  Raspberry Pi 5 last, via
   [`docs/eval/pi5-experiment-runbook.md`](docs/eval/pi5-experiment-runbook.md)
   ([`docs/eval/jetson-host-setup.md`](docs/eval/jetson-host-setup.md),
   [`docs/eval/x86-host-setup.md`](docs/eval/x86-host-setup.md)).

@@ -40,7 +40,7 @@ cd wafer
 cargo --version     # if this fails, install Rust first from https://rustup.rs/
 mise trust          # one-time trust for this repo's mise.toml, if prompted
 mise run setup      # verify Rust/rustup, then install pinned helper tools
-mise tasks ls       # list every available task
+mise tasks ls --all # list every available task
 ```
 
 The workspace holds seven crates (see

@@ -112,6 +112,8 @@ waferctl metrics --raw
 
 ## Output Formats
 
+The samples below show the intended output. Until #193 is fixed, `status`, `nodes`, `node` and a successful `hot-swap` behave as described under Quick Start.
+
 ### Human-Readable (Default)
 
 ```bash

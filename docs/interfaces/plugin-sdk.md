@@ -210,6 +210,7 @@ For the outbound HTTP configuration and policy boundary, see [`config-schema.md`
 ## Language boundary
 
 The Rust SDK is the maintained authoring surface. The TinyGo uppercase
-component is a bounded interoperability demonstration that is built, validated,
-and executed through the real host in release verification. The Python
+component is a bounded interoperability demonstration that the manual
+`mise run //plugins:test-plugin-go` task builds and runs through the real host;
+CI does not run it. The Python
 threshold-filter directory remains a stub and is not support evidence.
