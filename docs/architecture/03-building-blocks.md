@@ -133,7 +133,7 @@ The largest crate. Contains all runtime logic grouped into modules:
 | `testing` | In-memory `ChannelSource` / `ChannelSink` I/O and `PluginTestHarness` / `TransformHarness` for direct component calls; compiled for tests and benches or with the `test-support` feature. |
 | `api` | Axum HTTP server: route wiring, handlers (health, ready, list-nodes, get-node, hot-swap, reconfigure, shutdown, metrics scrape). |
 | `error` | `WaferError`, `RegistryError`, top-level `Result` alias. |
-| `registry` | OCI reference parsing, pulls and the content-addressed plugin cache. |
+| `registry` | OCI reference parsing, pulls and the tag-keyed plugin cache (24 h default TTL). |
 | `util` | Small shared helpers (time conversion, file writes). |
 
 ### `wafer-plugin`

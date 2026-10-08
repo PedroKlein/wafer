@@ -134,7 +134,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 |------|---------|
 | `README.md` | Project README — quick start, prerequisites, project structure, development setup, running pipelines, building plugins. Post-migration, this is a one-page quickstart that points into `docs/`. |
 | `mise.toml` | Primary non-Rust developer toolchain and command-runner config. Run `mise run setup` for helper tools and `mise tasks ls --all` for tasks. |
-| `rust-toolchain.toml` | Pinned Rust toolchain (stable channel, `wasm32-wasip2` target). |
+| `rust-toolchain.toml` | Pinned Rust toolchain (1.98.1, `wasm32-wasip2` target). |
 | `rustfmt.toml` | Formatter configuration. |
 | `Cargo.toml` | Workspace root. Defines workspace members, shared dependencies, and profiles. |
 
