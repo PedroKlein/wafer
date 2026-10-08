@@ -21,12 +21,13 @@ sequenceDiagram
     participant Watch as watch channel
     participant Runner as Transform runner
     participant Guest as New guest instance
-    API->>Engine: compile, pre-instantiate, instantiate
+    API->>Engine: compile and pre-instantiate on blocking pool, instantiate
     Engine-->>API: SwapPayload with new Store
-    API->>Watch: send replacement
-    Runner->>Watch: borrow_and_update between messages
+    API->>Watch: send_swap
+    Runner->>Watch: take_pending_swap between messages
     Runner->>Guest: validate and init
-    Guest-->>Runner: replacement_adopted
+    Guest-->>Runner: validate and init Ok
+    Runner->>Runner: flush retries, mark_replacement_adopted, arm canary
     Runner->>Guest: process next message
     alt first local outcome completes
         Runner-->>API: first_post_replacement_local_outcome
@@ -36,20 +37,20 @@ sequenceDiagram
     end
 ```
 
-1. During pipeline construction, each Transform, Filter, and Router bundle receives `watch::channel(None)`. Sources and sinks receive no swap channel.
-2. The API acquires a per-node swap guard, reads replacement bytes, and selects the preparation function for the node category. `prepare_transform_swap_timed` compiles through the engine cache, pre-instantiates the typed world, creates a new Store and bindings, and packages them in `SwapPayload::Transform` with `HotSwapProgress`.
-3. `PipelineHandle::send_swap` publishes the payload through the node's watch sender. At the top of each iteration the transform runner calls `take_pending_swap`, which checks `swap_rx.has_changed()` before another message is selected, and its input wait also wakes on `swap_rx.changed()`, so an idle node swaps at once. Replacement happens between guest calls rather than by cancelling one.
-4. `SwapPayload::try_apply_transform` takes ownership of the prepared Store and bindings. `WasmTransformNode::try_hot_swap` temporarily retains the old Store, bindings, and pre-instance, runs the replacement's `validate_and_init`, and keeps the old values only if that initialization fails.
-5. On success, the runner marks `replacement_adopted`, records a swap, and retains the prior `InstancePre` during a bounded canary window. The first forwarded/enqueued, filter-dropped, or router-dropped result completes `first_post_replacement_local_outcome`.
+1. During pipeline construction (`build_pipeline_inner` in `crates/wafer-core/src/orchestrator/builder.rs`), each Transform, Filter, and Router bundle receives `watch::channel(None)`. Sources and sinks receive no swap channel.
+2. `POST /api/v1/nodes/{id}/hot-swap` reaches the `hot_swap` handler (`crates/wafer-core/src/api/handlers.rs`). It takes the per-node swap guard with `PipelineHandle::try_begin_swap` (`crates/wafer-core/src/orchestrator/pipeline.rs`), reads the replacement bytes, and selects the preparation function for the node category. For a Transform it calls `prepare_transform_swap_timed_with_fuel` (`crates/wafer-core/src/orchestrator/hotswap.rs`) with the node's effective fuel budget. That function compiles through the engine cache and pre-instantiates the typed world on Tokio's blocking pool (`compile_and_link`, which uses `spawn_blocking`), then creates a new Store and bindings and packages them in `SwapPayload::Transform` with `HotSwapProgress`.
+3. `PipelineHandle::send_swap` publishes the payload through the node's watch sender. At the top of each iteration the transform runner calls `take_pending_swap` (`crates/wafer-core/src/runner/mod.rs`), which checks `swap_rx.has_changed()` before another message is selected, and its input wait also wakes on `swap_rx.changed()`, so an idle node swaps at once. Replacement happens between guest calls rather than by cancelling one. `take_pending_swap` also claims the payload with `HotSwapProgress::try_claim`. If the handler's 5 s wait for an outcome ends before that claim, the handler withdraws the payload with `try_withdraw` and answers 504, and the runner then ignores it.
+4. `SwapPayload::try_apply_transform` takes ownership of the prepared Store and bindings. `WasmTransformNode::try_hot_swap` (`crates/wafer-core/src/node/wasm.rs`) rejects a replacement whose capabilities or inference grant differ from the running node. It then temporarily retains the old Store, bindings, and pre-instance, runs the replacement's `validate_and_init`, and keeps the old values only if that initialization fails.
+5. When that returns `Ok`, the runner (`run_transform_loop_with_config` in `crates/wafer-core/src/runner/transform.rs`) flushes pending retries to the DLQ with `DlqReason::HotSwapDrain`, calls `mark_replacement_adopted`, records a swap, and retains the prior `InstancePre` in a canary. A failed swap keeps the old instance and its retries. The canary closes after `engine.hot_swap.canary_success_count` successful calls (default 32) or `canary_window_ms` (default 10000 ms), whichever comes first (`HotSwapConfig` in `crates/wafer-types/src/config/engine.rs`); the runner checks this at the top of each iteration. The first forwarded/enqueued, filter-dropped, or router-dropped result completes `first_post_replacement_local_outcome`. A reconfigure uses the same watch channel and guard but never arms a canary.
 6. If the new Transform traps while that canary is active (including an epoch or fuel trap), the runner restores the prior cached pre-instance and calls `transform.recover_from_cached_pre()`. This creates another fresh Store, re-instantiates prior code, runs lifecycle initialization, retries the trapped envelope, and records recovery and rollback metrics. The canary is consumed by the rollback, so each swap rolls back at most once; a later trap in the restored version takes the ordinary recovery path. It reports `rolled_back` only while the caller is waiting; a later rollback cannot rewrite an already completed local-outcome response.
 
 ## Rust
 
-A Tokio watch channel stores the latest `Option<SwapPayload>`. The payload is cloneable because the single-consumer Store and binding values sit in `Arc<Mutex<Option<T>>>`; `Option::take` transfers each prepared value exactly once into the owning runner task.
+[Tokio in context](tokio-in-context.md) covers the `watch`, `oneshot`, and `Notify` APIs used here. A Tokio watch channel stores the latest `Option<SwapPayload>`. The payload is cloneable because the single-consumer Store and binding values sit in `Arc<Mutex<Option<T>>>`; `Option::take` transfers each prepared value exactly once into the owning runner task.
 
 The live node is not shared behind a hot-path mutex. The runner owns it. `std::mem::replace` provides an initialization-failure transaction: the candidate becomes active for validation, and the old host objects can be put back if validation or initialization fails.
 
-`HotSwapProgress` combines `OnceLock` timestamps with a oneshot result. Adoption alone does not complete the response. The first runner-local outcome supplies the second marker. Before that marker consumes the sender, a process-time rollback completes the pending caller with `rolled_back`. After a successful local outcome has already returned, a later canary rollback cannot rewrite the response; recovery state and metrics are then the remaining local record.
+`HotSwapProgress` (`crates/wafer-core/src/runner/mod.rs`) combines `OnceLock` timestamps with a oneshot result, plus an `AtomicU8` whose compare-exchange lets exactly one side win: the runner's claim or the API's withdrawal. Adoption alone does not complete the response. The first runner-local outcome supplies the second marker. Before that marker consumes the sender, a process-time rollback completes the pending caller with `rolled_back`. After a successful local outcome has already returned, a later canary rollback cannot rewrite the response; recovery state and metrics are then the remaining local record.
 
 ## Design
 

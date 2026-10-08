@@ -34,7 +34,7 @@ arc42-lite framework, split into subdirectories by reader intent.
 ```
 docs/
 ├── README.md             This navigator
-├── architecture/         arc42 §1–8 + comparators (Explanation)
+├── architecture/         arc42 §1-8 + comparators (Explanation)
 │   ├── README.md
 │   ├── 00-vision.md
 │   ├── 01-goals-and-constraints.md
@@ -59,16 +59,18 @@ docs/
 ├── learn/                Source-guided learning path (Tutorial / Explanation)
 │   ├── README.md
 │   ├── workspace-map.md
-│   ├── reading-paths.md
 │   ├── rust-in-context.md
+│   ├── tokio-in-context.md
 │   ├── config-to-running-pipeline.md
 │   ├── message-through-wasm.md
+│   ├── wasmtime-in-context.md
 │   ├── plugin-boundary.md
-│   ├── stateless-hot-swap.md
 │   ├── shutdown-and-failure.md
-│   └── evaluation-harness.md
-├── adr/                  Nygard-format decision records (0001–0018)
-├── rfcs/                 Long-form design records (RFC-001–012)
+│   ├── stateless-hot-swap.md
+│   ├── evaluation-harness.md
+│   └── reading-paths.md
+├── adr/                  Nygard-format decision records (0001-0018)
+├── rfcs/                 Long-form design records (RFC-001 to RFC-012)
 ├── operations/           Task-oriented how-tos (How-to)
 │   ├── README.md
 │   ├── getting-started.md          (Tutorial)
@@ -109,26 +111,31 @@ evaluation as they are today.
 
 ## Reader profiles
 
-- **Thesis reviewer** — read `architecture/00-vision.md`,
+- **Thesis reviewer**: read `architecture/00-vision.md`,
   `architecture/07-quality-requirements.md`, `architecture/09-comparators.md`,
-  and skim `rfcs/README.md` for the amendments graph.
-- **Edge-gateway operator** — start with
+  and skim `rfcs/README.md` for the amendments graph. To check a claim
+  against the source, follow the numbered first-read order in
+  `learn/README.md`.
+- **Edge-gateway operator**: start with
   `operations/getting-started.md`, then work through
   `operations/configuration.md` for your pipeline shape, then
   `operations/observability.md` for scraping metrics.
-- **Plugin author** — `interfaces/wit-contracts.md`,
+- **Plugin author**: `interfaces/wit-contracts.md`,
   `interfaces/plugin-sdk.md`, and the concrete example in
   `plugins/pass-through/src/lib.rs`.
-- **Runtime contributor** — walk `architecture/03-building-blocks.md`,
-  `architecture/06-crosscutting-concepts.md`, then the relevant
+- **Runtime contributor**: start with `learn/workspace-map.md` for the
+  crate and module map and the build, run, and test commands, and use the
+  first-read order in `learn/README.md` to learn the code. Then walk
+  `architecture/03-building-blocks.md`,
+  `architecture/06-crosscutting-concepts.md`, and the relevant
   RFC(s) under `rfcs/`. Load the domain skills under
   `.agents/skills/` when editing code.
 
 ## Cross-repository pointers
 
-- `github.com/PedroKlein/tcc-doc` — thesis writing, evaluation plan
+- `github.com/PedroKlein/tcc-doc`: thesis writing, evaluation plan
   and RQ definitions.
-- `github.com/PedroKlein/obsidian-personal` — literature notes under
+- `github.com/PedroKlein/obsidian-personal`: literature notes under
   `TCC/`.
-- `AGENTS.md` — how humans and agents collaborate in this
+- `AGENTS.md`: how humans and agents collaborate in this
   repository.
