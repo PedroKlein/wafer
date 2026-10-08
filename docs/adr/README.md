@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory contains Architecture Decision Records (ADRs) for the wasm-dag-runtime project.
+This directory contains Architecture Decision Records (ADRs) for WAFER.
 
 ADRs document significant architectural decisions, their context, and consequences. They serve as a historical record of why the system is built the way it is.
 

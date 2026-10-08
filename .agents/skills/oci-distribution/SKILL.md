@@ -50,8 +50,9 @@ const WAFER_AOT_MEDIA_TYPE: &str = "application/vnd.wafer.plugin.aot.v1+cwasm";
 | `oci-client` | Low-level (raw OCI distribution API) | Spin | More control, more boilerplate |
 | `oci-wasm` | High-level (Wasm-specific conventions) | Wassette | Handles artifact conventions automatically |
 
-For WAFER: start with `oci-wasm` (less boilerplate). Drop to `oci-client` only if
-custom media types or multi-layer handling needs arise.
+WAFER uses `oci-client` (`crates/wafer-core/src/registry/client.rs`) and takes the first
+layer accepted as `application/wasm`, `application/vnd.wasm.content.layer.v1+wasm` or
+`application/octet-stream`.
 
 ---
 
@@ -108,14 +109,17 @@ credentials, or mount credentials as a volume. Never bake tokens into WAFER conf
 
 ### Cache Structure
 
+The current cache (`crates/wafer-core/src/registry/cache.rs`) is keyed by tag, not by
+content hash:
+
 ```
-~/.cache/wafer/plugins/
-├── blobs/
-│   ├── sha256_abc123.../plugin.wasm    # Stored by content hash
-│   └── sha256_def456.../plugin.wasm
-└── tags/
-    └── ghcr.io_org_plugin_v1.0.0.json  # Tag → digest + timestamp
+~/.cache/wafer/plugins/                     # or [registry].cache_dir
+└── <registry>/<repository>/<tag>.wasm      # reused while the file is younger than 24 h
 ```
+
+`OciReference` accepts only `registry/repository:tag`, and cache writes use a plain
+`fs::write`. The content-addressable lookup and atomic-write patterns below are the
+target design, not current code.
 
 ### Lookup Strategy
 

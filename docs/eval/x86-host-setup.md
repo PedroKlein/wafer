@@ -13,7 +13,7 @@ Read-only preflight: `mise run preflight-x86` or `./eval/scripts/preflight-x86.s
 | IRQs on CPU 0 | `/proc/irq/default_smp_affinity` is CPU 0 only | add `irqaffinity=0` to `GRUB_CMDLINE_LINUX` in `/etc/default/grub`, run `sudo update-grub`, then reboot |
 | SUT CPUs balanced | three busy loops under `taskset -c 1-3` run on three CPUs | follows from the two rows above |
 | Governor | `performance` on every online CPU | `sudo cpupower -c 0-3 frequency-set -g performance` |
-| Clocks | `scaling_min_freq` equals `scaling_max_freq` on CPUs 0-3, and busy CPUs 1-3 report `scaling_cur_freq` within 5% of that limit during preflight | after disabling SMT and turbo, set `max=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq)` and run `sudo cpupower -c 0-3 frequency-set -d "${max}kHz" -u "${max}kHz"` |
+| Clocks | `scaling_min_freq` and `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 at preflight; equal minimum and maximum limits on every online CPU during a run | after disabling SMT and turbo, set `max=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq)` and run `sudo cpupower -c 0-3 frequency-set -d "${max}kHz" -u "${max}kHz"` |
 | Temperature | `x86_pkg_temp` thermal zone (Intel) or `k10temp`/`coretemp` hwmon | kernel modules `coretemp` or `k10temp` |
 | Power | RAPL package `energy_uj` readable by the user that runs the batch; without it every run fails its power check | `sudo chmod a+r /sys/class/powercap/intel-rapl:*/energy_uj`, again after each reboot |
 | Binaries | built on this host | `mise run build-release-x86` |
@@ -22,7 +22,8 @@ Read-only preflight: `mise run preflight-x86` or `./eval/scripts/preflight-x86.s
 Repeat the governor and minimum/maximum frequency commands after every boot. In
 active mode, `intel_pstate` defines `scaling_cur_freq` as an average P-state between
 scheduler utilization callbacks, so an idle core can transiently report below the
-requested minimum. Preflight checks `scaling_cur_freq` while CPUs 1-3 are busy.
+requested minimum. Preflight reads `scaling_cur_freq` on CPUs 1-3 after its
+load-balancing probe has stopped, so such a reading can fail it; run it again.
 During a run, frequency remains audit data while admission continuously requires the
 `performance` governor and equal minimum/maximum limits and watches the hardware
 core and package throttle counters. See the kernel documentation for
@@ -63,6 +64,13 @@ throttle verdict. `power-boundary.json` records `x86-rapl-package-energy` or
 `unavailable`.
 
 ## Running a batch
+
+Set `WAFER_RESULTS_ROOT` to this host's own mounted or bind-mounted results root
+before any batch command, as the
+[runbook](pi5-experiment-runbook.md#set-the-hosts-results-root) describes.
+Approval and analysis read the batch from one root on the analysis machine that
+holds every host's copied results
+([runbook](pi5-experiment-runbook.md#bring-the-host-results-together)).
 
 Before each batch on this host, re-check the eKuiper comparator as the
 [runbook](pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch)

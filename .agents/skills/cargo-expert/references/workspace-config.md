@@ -11,21 +11,15 @@ project/
 ├── Cargo.toml              # Workspace root
 ├── Cargo.lock              # Shared lockfile
 ├── rust-toolchain.toml     # Pinned Rust version
-├── mise.toml               # Primary task runner and tool/task config
-├── justfile                # Temporary compatibility task runner
+├── mise.toml               # Task runner and tool/task config
 ├── crates/
+│   ├── wafer-config/       # TOML loading and validation
 │   ├── wafer-core/         # Core library
-│   │   ├── Cargo.toml
-│   │   └── src/
+│   ├── wafer-loadgen/      # Evaluation load generator
+│   ├── wafer-plugin/       # Guest-side SDK
 │   ├── wafer-runtime/      # Binary (host)
-│   │   ├── Cargo.toml
-│   │   └── src/
 │   ├── wafer-types/        # Shared types
-│   │   ├── Cargo.toml
-│   │   └── src/
 │   └── waferctl/           # CLI tool
-│       ├── Cargo.toml
-│       └── src/
 ├── plugins/                # WASM plugins (excluded from workspace)
 │   ├── uppercase/
 │   │   ├── Cargo.toml
@@ -44,7 +38,10 @@ project/
 [workspace]
 resolver = "2"              # Required for edition 2021+ (automatic in 2024)
 members = [
+    "crates/wafer-config",
     "crates/wafer-core",
+    "crates/wafer-loadgen",
+    "crates/wafer-plugin",
     "crates/wafer-runtime",
     "crates/wafer-types",
     "crates/waferctl",

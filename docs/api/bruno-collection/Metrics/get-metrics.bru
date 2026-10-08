@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{metricsUrl}}/metrics
+  url: {{baseUrl}}/metrics
   body: none
   auth: none
 }
@@ -26,7 +26,8 @@ docs {
   
   **Note:** By default /metrics is served on the API listener (baseUrl).
   Only when the runtime is started with --metrics-bind <ADDR> is it served
-  on that separate listener; set metricsUrl to match that address.
+  on that separate listener; then change the URL to {{metricsUrl}} and set
+  metricsUrl to match that address.
 }
 
 assert {

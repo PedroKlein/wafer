@@ -24,12 +24,14 @@ waferctl status
 waferctl nodes
 
 # Get detailed node info
-waferctl node transform-1
+waferctl node passthrough
 ```
+
+`waferctl status`, `waferctl nodes` and `waferctl node` currently fail with a parse error against the runtime API, and a successful `waferctl hot-swap` is reported as an error even though the runtime applied it. The client expects field names (`swappable`, `status`) that the runtime responses do not send (#193).
 
 ## Configuration
 
-waferctl looks for endpoints in `~/.config/waferctl/config.toml` or uses `http://localhost:9090` by default.
+waferctl reads endpoints from `<config dir>/wafer/config.toml` (`~/.config/wafer/config.toml` on Linux) or uses `http://127.0.0.1:9090` by default.
 
 ### Managing Endpoints
 
@@ -65,7 +67,7 @@ waferctl -e http://192.168.1.100:8080 status
 # Simple health check (exit code 0 = healthy)
 waferctl health
 
-# Pipeline status with uptime and message counts
+# Pipeline status with readiness, node count and message counts
 waferctl status
 
 # JSON output for scripting
@@ -101,7 +103,7 @@ Use per-node `hot-swap` or restart the runtime for config changes.
 ### Metrics
 
 ```bash
-# Human-readable metrics summary
+# Human-readable summary: not implemented yet (prints "No metrics available")
 waferctl metrics
 
 # Raw Prometheus format (for debugging)
@@ -114,21 +116,27 @@ waferctl metrics --raw
 
 ```bash
 $ waferctl status
-Pipeline: running
-Uptime: 2h 15m 30s
-Messages: 152,847 processed, 3 failed
-Nodes: 5 running, 0 draining
+Pipeline: wafer-pipeline
+State:    running
+Nodes:    3
+
+Messages:
+  Processed: 152847
+  Failed:    3
 ```
 
 ```bash
 $ waferctl nodes
-ID            TYPE        STATE    SWAPPABLE  PROCESSED  FAILED
-source        source      running  no         152847     0
-transform-1   transform   running  yes        152844     2
-filter        transform   running  yes        152842     0
-transform-2   transform   running  yes        100231     1
-sink          sink        running  no         100231     0
++-------------+--------+---------+-----------+--------+
+| ID          | TYPE   | STATE   | PROCESSED | AVG_MS |
++-------------+--------+---------+-----------+--------+
+| passthrough | wasm   | running | 152844    | -      |
+| sink        | native | running | 152844    | -      |
+| source      | native | running | 152847    | -      |
++-------------+--------+---------+-----------+--------+
 ```
+
+`--wide` adds `SWAP`, `FAILED` and `QUEUE` columns.
 
 ### JSON (for scripting)
 
@@ -137,11 +145,10 @@ $ waferctl --json status
 {
   "name": "wafer-pipeline",
   "state": "running",
-  "uptime_secs": 8130,
+  "node_count": 3,
   "messages_processed": 152847,
   "messages_failed": 3,
-  "nodes_running": 5,
-  "nodes_draining": 0
+  "ready_reason": null
 }
 ```
 
@@ -153,13 +160,6 @@ $ waferctl --json status
 | 1 | User error | Invalid arguments, missing config |
 | 2 | API error | Server returned error (node not found, etc.) |
 | 3 | Connection error | Cannot reach runtime |
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `WAFERCTL_ENDPOINT` | Default endpoint URL | `http://localhost:8080` |
-| `WAFERCTL_CONFIG` | Config file path | `~/.config/waferctl/config.toml` |
 
 ## Examples
 
@@ -189,12 +189,13 @@ done
 
 ```bash
 #!/bin/bash
-# Rebuild plugin
+# Rebuild plugin (each plugin is its own workspace with its own target/)
 cargo build --manifest-path plugins/my-transform/Cargo.toml \
     --target wasm32-wasip2 --release
 
 # Trigger hot-swap
-waferctl hot-swap my-transform --wasm-path target/wasm32-wasip2/release/my_transform.wasm
+waferctl hot-swap my-transform \
+    --wasm-path plugins/my-transform/target/wasm32-wasip2/release/my_transform.wasm
 ```
 
 ### Graceful Shutdown Script

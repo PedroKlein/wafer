@@ -37,7 +37,7 @@ the table. (zircote, "CLI Error Messages Are a Dual-Consumer Problem")
 ### Human Output (default)
 
 ```
-Error: Cannot connect to runtime at http://localhost:8080
+Error: Cannot connect to runtime at http://127.0.0.1:9090
   Is the pipeline running? Try: wafer --config pipeline.toml
 ```
 
@@ -48,8 +48,8 @@ Follow RFC 9457 Problem Details + extension fields:
 {
   "type": "urn:wafer:error:connection-refused",
   "title": "Cannot connect to runtime",
-  "status": 1,
-  "detail": "TCP connection refused at http://localhost:8080",
+  "status": 3,
+  "detail": "TCP connection refused at http://127.0.0.1:9090",
   "instance": "/health",
   "suggested_fix": "Start the pipeline: wafer --config pipeline.toml",
   "retry_after": null,
@@ -86,7 +86,7 @@ enum Commands {
     Status,
     Nodes { #[arg(short, long)] wide: bool },
     Node { id: String },
-    HotSwap { node_id: String },
+    HotSwap { node_id: String, #[arg(long)] wasm_path: String },
     Reload,
     Drain,
     Shutdown,
@@ -146,15 +146,11 @@ struct NodeRow {
 ### Exit Codes (Semantic, Not Random)
 
 ```rust
-pub fn exit_code(err: &CliError) -> i32 {
-    match err {
-        CliError::ConnectionFailed(_) => 1,   // Runtime unreachable
-        CliError::NotFound(_) => 2,           // Resource doesn't exist
-        CliError::Conflict(_) => 3,           // Swap already in progress
-        CliError::InvalidInput(_) => 4,       // Bad arguments
-        CliError::Internal(_) => 5,           // Server error
-        CliError::Timeout(_) => 6,            // Operation timed out
-    }
+pub mod exit_code {
+    pub const SUCCESS: i32 = 0;           // Command completed
+    pub const USER_ERROR: i32 = 1;        // Bad arguments, invalid config
+    pub const API_ERROR: i32 = 2;         // Server returned an error (node not found, swap conflict)
+    pub const CONNECTION_ERROR: i32 = 3;  // Runtime unreachable
 }
 ```
 
@@ -167,7 +163,7 @@ eprintln!("Error: reqwest::Error {{ kind: Connect, url: ... }}");
 // GOOD — actionable message + context
 eprintln!("Error: Cannot connect to runtime at {endpoint}");
 eprintln!("  Hint: Is the pipeline running? Try: wafer --config pipeline.toml");
-eprintln!("  Endpoint resolved from: {source}");  // "~/.config/wafer/endpoints.toml"
+eprintln!("  Endpoint resolved from: {source}");  // "~/.config/wafer/config.toml"
 ```
 
 ### Threading Global Flags Through Commands
@@ -180,7 +176,9 @@ async fn run() -> Result<(), CliError> {
     
     match cli.command {
         Commands::Status => cmd_status(&client, cli.json).await,
-        Commands::HotSwap { node_id } => cmd_hotswap(&client, &node_id, cli.json).await,
+        Commands::HotSwap { node_id, wasm_path } => {
+            cmd_hot_swap(&client, &node_id, &wasm_path, cli.json).await
+        }
         // ...
     }
 }
@@ -190,22 +188,22 @@ async fn run() -> Result<(), CliError> {
 
 ## Endpoint Configuration
 
-Stored at `~/.config/wafer/endpoints.toml`:
+Stored at `<config dir>/wafer/config.toml` (`~/.config/wafer/config.toml` on Linux):
 ```toml
 default = "local"
 
 [endpoints.local]
-url = "http://localhost:8080"
+url = "http://127.0.0.1:9090"
 
 [endpoints.raspi]
-url = "https://192.168.1.100:8080"
+url = "http://192.168.1.100:9090"
 ```
 
 Resolution order (first match wins):
 1. `--endpoint http://...` — URL passed directly
 2. `--endpoint raspi` — name lookup in config
 3. Neither — use `default` from config
-4. No config file — fallback to `http://localhost:8080`
+4. No default and no endpoints configured — fallback to `http://127.0.0.1:9090`
 
 ---
 
@@ -227,11 +225,11 @@ Commands::Shutdown => {
 ### Progress for Long Operations
 
 ```rust
-Commands::HotSwap { node_id } => {
+Commands::HotSwap { node_id, wasm_path } => {
     if !cli.json {
         eprintln!("Hot-swapping node '{node_id}'...");  // stderr = progress
     }
-    let metrics = client.hot_swap(&node_id).await?;
+    let metrics = client.hot_swap(&node_id, &wasm_path).await?;
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&metrics)?);  // stdout = data
     } else {

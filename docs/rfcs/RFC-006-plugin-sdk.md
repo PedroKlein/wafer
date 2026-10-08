@@ -188,4 +188,4 @@ Simple plugins avoid serde (manual JSON parsing, ~5–10KB). Complex plugins use
 - All evaluation plugins are implemented: pass-through, json-parse, uppercase, threshold-filter, content-router, tensor-prep, result-format, mnist-inference, cayenne-decoder, anomaly-detector, vibration-features, quality-rules. The experiment-support plugins pass-through-v1, pass-through-v2, pass-through-v2-panics, and delay-injector were added later.
 - Attack plugins exist under `plugins/attacks/`.
 - Polyglot plugins exist under `plugins/go/` and `plugins/python/`.
-- `PluginTestHarness` and `TestPipeline` implementations are in `crates/wafer-core/` (test infrastructure).
+- `PluginTestHarness` and the in-memory `ChannelSource` / `ChannelSink` test I/O are in `crates/wafer-core/src/testing/`; no `TestPipeline` type was built.

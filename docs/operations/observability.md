@@ -13,8 +13,13 @@ RUST_LOG=info cargo run -p wafer-runtime -- --config pipeline.toml
 RUST_LOG=wafer=debug,wasmtime=warn,hyper=warn cargo run -p wafer-runtime -- --config pipeline.toml
 ```
 
-Guest calls to `wafer:pipeline/logging.log` enter the host tracing context for
-the emitting node. The runtime does not currently expose an OTLP or Jaeger
+The runtime adds an `info` default after reading `RUST_LOG`, so a level-only
+value such as `debug` or `off` cannot change that default; name targets as in
+the second line.
+
+The host re-emits guest calls to `wafer:pipeline/logging.log` as `tracing`
+events with target `wafer_core::node::wasm` and a `node` field naming the
+emitting node. The runtime does not currently expose an OTLP or Jaeger
 exporter.
 
 ## Prometheus endpoint
@@ -74,6 +79,5 @@ enabled = false
 enabled = false
 ```
 
-`RUST_LOG=off` disables structured log output for controlled measurements.
 Unconditional in-memory counters remain available to runtime tests and
 measurement hooks.
