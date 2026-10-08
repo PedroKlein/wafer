@@ -61,7 +61,7 @@ The documented node-state tracker has Error, Recovering, and Running transitions
 
 ## Status boundaries
 
-**Current implementation:** Watch senders exist only for loaded Wasm processing nodes; replacement payloads are prepared for Transform, Filter, and Router; runner loops apply them between messages. The Transform runner additionally implements configured canary recovery. Hot-swap and reconfigure share one per-node mutation guard.
+**Current implementation:** Every Transform, Filter, and Router has a watch sender, but only loaded Wasm processing nodes are marked replacement-eligible; replacement payloads are prepared for Transform, Filter, and Router; runner loops apply them between messages. The Transform runner additionally implements configured canary recovery. Hot-swap and reconfigure share one per-node mutation guard.
 
 **Intended design:** The API and metrics divide preparation, signal, replacement adoption, first runner-local outcome, rollback, and recovery so each claim has one owner. None is sink evidence; sink transition, sequence continuity, loss, throughput, and gap require evaluation artifacts.
 

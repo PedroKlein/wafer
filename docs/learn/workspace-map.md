@@ -79,7 +79,7 @@ The remaining crates have one clear consumer boundary: guest authors use `wafer-
 
 **Intended design:** Placing shared types below parsing and execution is the organizing rationale visible in crate descriptions and dependencies. That rationale does not guarantee every module or binary is small.
 
-**Known drift:** `docs/status/implementation-status.md` says `wafer-config` owns "Types + validator," but current source places the configuration types in `wafer-types`. Treat the source split above as authoritative. The core also contains a `dag` module used by orchestration, so `wafer-config::DagGraph` is not the only graph representation in the repository.
+**Known drift:** The core contains its own `dag` module used by orchestration, so `wafer-config::DagGraph` is not the only graph representation in the repository.
 
 ## Checkpoint
 

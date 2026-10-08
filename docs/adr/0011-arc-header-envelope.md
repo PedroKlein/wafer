@@ -30,7 +30,7 @@ The implementation lives in `crates/wafer-core/src/queue/envelope.rs`. `Envelope
 
 ## Consequences
 
-- **Positive (RQ1 performance):** Near-free envelope clone is what makes Filter and Router borrow-only signatures actually cheap in practice. Without this, the host-side clone cost after each borrow-only Wasm invocation would dominate per-hop latency and undermine the RQ1 pass criterion of <50 µs per-hop on RPi 4. With ~10 ns clone cost, the envelope forwarding overhead is negligible compared to the Wasm call itself (~15–35 µs).
+- **Positive (RQ1 performance):** Near-free envelope clone is what makes Filter and Router borrow-only signatures actually cheap in practice. Without this, the host-side clone cost after each borrow-only Wasm invocation would dominate per-hop latency and undermine the RQ1 pass criterion of <50 µs per-hop on RPi 4 (now a 50 µs reference on the Raspberry Pi 5, not a pass criterion). With ~10 ns clone cost, the envelope forwarding overhead is negligible compared to the Wasm call itself (~15–35 µs).
 
 - **Positive (fan-out efficiency):** Router fan-out to N downstream ports costs N−1 clones at ~10 ns each plus one move. A 4-way router adds ~30 ns of envelope overhead — invisible next to the Wasm boundary crossing.
 

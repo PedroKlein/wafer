@@ -109,7 +109,7 @@ options.set_clean_session(false);  // Broker remembers subscriptions across reco
 
 ```rust
 let mut options = MqttOptions::new(
-    format!("wafer-{pipeline}-{node_id}"),  // Deterministic, unique client ID
+    format!("wafer-{node_id}"),  // Runtime default when the node sets no `client_id`
     broker_host,
     broker_port
 );
@@ -128,7 +128,8 @@ options.set_clean_session(false);
 
 **Client ID collision**: Two clients with the same ID = connection war. The broker
 disconnects the older client. Both sides reconnect, kick each other, loop forever.
-Use deterministic IDs: `wafer-{pipeline_name}-{node_id}`.
+The runtime defaults to `wafer-{node_id}`; set the node's `client_id` when two WAFER
+processes share a broker.
 
 **Keep alive vs processing time**: If your WASM transform takes 2s and the eventloop
 task is blocked on `tx.send().await` (backpressure), the eventloop can't send PING.

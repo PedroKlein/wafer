@@ -117,9 +117,9 @@ log_warn!("dropped duplicate");
 log_error!("upstream unreachable");
 ```
 
-Each macro calls the generated `wafer:pipeline/logging.log` import with the corresponding `LogLevel`. Messages appear in the host's `tracing` span for the
-emitting node, so they are visible in structured logs and integrate
-with the standard `RUST_LOG=<node_id>=debug` filter.
+Each macro calls the generated `wafer:pipeline/logging.log` import with the corresponding `LogLevel`. The host re-emits each entry as a `tracing` event with target
+`wafer_core::node::wasm` and a `node` field naming the emitting node;
+enable them with `RUST_LOG=wafer_core::node::wasm=debug`.
 
 ## Config parsing
 

@@ -43,7 +43,7 @@ sequenceDiagram
     activate Src
     Src->>Src: Wrap as RuntimeEnvelope (Arc header + Bytes payload)
     Src->>Q1: send(envelope)
-    Note over Q1: Bounded channel; if full,<br/>OverflowPolicy applies<br/>(slow / drop / dead-letter)
+    Note over Q1: Bounded channel. If full,<br/>OverflowPolicy applies<br/>(slow / drop / dead-letter)
     deactivate Src
 
     Q1->>Tx: recv(envelope)
@@ -111,16 +111,20 @@ sequenceDiagram
     API->>Orch: send_swap(node_id, SwapPayload)
     Orch->>Watch: watch_tx.send(Some(payload))
 
-    Note over Runner: Runner loop iteration:<br/>  1. swap_rx.has_changed()? — apply if yes<br/>  2. select! { cancel | swap_rx.changed() | input_rx.recv() }
+    Note over Runner: Runner loop iteration:<br/>  1. swap_rx.has_changed()? — apply if yes<br/>  2. select! { cancel | input_rx.recv() | swap_rx.changed() | retry deadline }
 
     Watch-->>Runner: swap_rx.changed() wakes the runner (or has_changed() on next iteration)
     activate Runner
     Runner->>Runner: Finish current message (if in-flight)
-    Runner->>Runner: Flush retry buffer → DLQ (reason: HotSwapDrain)
-    Runner->>OldStore: Drop old Store + Instance
-    destroy OldStore
     Runner->>NewStore: Install, validate, and initialize replacement
-    Runner->>Runner: Mark replacement adoption; resume main loop
+    alt replacement initialized
+        destroy OldStore
+        Runner->>OldStore: Drop old Store + Instance
+        Runner->>Runner: Flush retry buffer → DLQ (reason: HotSwapDrain)
+        Runner->>Runner: Mark replacement adoption, resume main loop
+    else swap fails
+        Runner->>Runner: Keep old Store + Instance and its retries
+    end
     deactivate Runner
 
     Note over Runner: Next input_rx.recv() uses<br/>the new Store + Instance
@@ -136,7 +140,8 @@ sequenceDiagram
 - **Stateless replacement.** The replacement starts from a fresh Store and its own `init`; guest state in the old instance is discarded, and the old guest's `close` export is not called.
 - **Retry buffer flush.** Outstanding retry entries are sent to the DLQ
   with `DlqReason::HotSwapDrain` because the new plugin version may have
-  incompatible semantics. No retries survive the boundary.
+  incompatible semantics. No retries survive a successful swap; a failed
+  swap keeps the old instance and its retries.
 - **Serialized mutation.** Hot-swap and reconfigure share one per-node guard. Concurrent requests cannot overwrite a pending watch value: one proceeds and the other receives a conflict.
 - **Runner-local reporting.** The response separates `replacement_adopted` from `first_post_replacement_local_outcome`. A local forward, filter drop, or no-route outcome is not sink convergence, sequence continuity, loss, or throughput evidence.
 - **Rollback boundary.** Initialization rollback exists for every eligible Wasm role. Process-time canary rollback is implemented only for Transform; Filter and Router do not make that claim. A20 remains deferred, so `/metrics` has no rollback-total series.

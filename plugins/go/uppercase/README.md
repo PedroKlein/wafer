@@ -58,17 +58,14 @@ Both failure modes are caught by `crates/wafer-core/tests/polyglot_go_uppercase.
 
 | Failure mode | How it surfaces |
 |---|---|
-| Shim removed prematurely | `Unrecoverable("borrow handles still remain at the end of the call")` from wasmtime — three of the five polyglot tests fail. |
+| Shim removed prematurely | `Unrecoverable("borrow handles still remain at the end of the call")` from wasmtime — three of the four polyglot tests fail. |
 | Shim redundant (generator now emits its own release) | `Unrecoverable("...wasm backtrace...wasmexport_Process...")` trap on double resource-table delete — same three tests fail. |
-| Shim doing its job | All five tests pass. |
+| Shim doing its job | All four tests pass. |
 
 This makes the shim self-verifying: any change to the generator that alters
-borrow handling will surface as a hard CI failure with an actionable
-diagnostic. When regenerating, run the polyglot test suite as your acceptance
-gate; if it goes green after removing the shim, the shim is genuinely obsolete
+borrow handling will fail `mise run //plugins:test-plugin-go` (these tests are
+ignored by default and CI does not run them) with an actionable diagnostic.
+When regenerating, run the polyglot test suite as your acceptance gate; if it
+goes green after removing the shim, the shim is genuinely obsolete
 and the removal is safe to commit. If it goes red, restore the shim and
 document what changed.
-
-The fault-injection procedure used to validate this enforcement is captured in
-the sentinel test `go_uppercase_double_drop_diagnostic_is_recognizable`, which
-pins the expected error variant shape so the diagnostic can't silently drift.
