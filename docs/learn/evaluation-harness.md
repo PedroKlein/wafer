@@ -6,7 +6,7 @@
 
 ## Purpose
 
-Trace an evaluation claim from its machine-readable experiment definition through execution, result validation, selected physical evidence, derived datasets, and final evidence classification. The goal is to keep execution count, observation count, and thesis status separate.
+Trace an evaluation claim from its machine-readable experiment definition through execution, result validation, selected physical evidence, derived datasets, and final evidence classification. The goal is to keep execution count, observation count, and evidence status separate.
 
 ## Prerequisites
 
@@ -16,9 +16,12 @@ Read this against a current checkout of `main`. Do not open or quote raw result 
 
 ```mermaid
 flowchart TD
-    A[canonical-matrix.json definition] --> B[canonical_runner.py schedule]
-    B --> C[run-experiment.sh execution]
-    C --> D[RESULT-CONTRACT artifacts]
+    S[run-rpi5-canonical.sh] --> B[canonical_runner.py schedule]
+    A[canonical-matrix.json definition] --> B
+    B -->|rate sweep, density, hot-swap, restart, eKuiper| P[Python executors in canonical_runner.py]
+    B -->|every other run| C[run-experiment.sh execution]
+    P --> D[RESULT-CONTRACT artifacts]
+    C --> D
     D --> E[verify-result-contract.py]
     E --> F[selected physical leaves and aliases]
     F --> H[analysis notebooks: figures and tables]
@@ -28,15 +31,22 @@ flowchart TD
 ```
 
 1. `eval/canonical-matrix.json` defines experiment IDs, condition grids, repetitions, sample units, required outputs, ordering, metering, evidence class, and admission flags. Each experiment in the `enhanced_candidate` block is N=5 candidate or diagnostic work and sets `thesis_evidence=false` and `n30_admitted=false`.
-2. `eval/scripts/lib/canonical_runner.py` turns definitions into deterministic `RunItem` schedules. It dispatches the appropriate execution path, writes progress and summaries, post-processes outputs, and calls `verify_result` for each physical leaf.
-3. `eval/scripts/run-experiment.sh` handles one run: configuration, runtime and load-generator processes, bounded collection, shutdown, metadata, and result placement. It delegates fresh local result-directory creation to `eval/scripts/collect-results.sh`, which never overwrites an existing directory.
-4. `eval/RESULT-CONTRACT.md` assigns each artifact to its producer and states which experiments require it. `verify-result-contract.py` and experiment-specific checks reject missing, malformed, inconsistent, or wrongly classified evidence.
+2. `eval/scripts/run-rpi5-canonical.sh` runs `eval/scripts/lib/canonical_runner.py` (`main`), which turns definitions into deterministic `RunItem` schedules (`build_schedule`). `run_attempt` picks the execution path. Rate sweeps (`e-perf-10` and the capacity runs), `e-density-1`, the hot-swap runs (`e-swap-1`, `e-swap-4`, `e-swap-5` and the session experiments), `e-swap-3` restarts, and eKuiper runs go to Python executors in the same file, which start their own processes. Every other run calls `run-experiment.sh`. The runner writes progress and summaries, post-processes outputs, and calls `verify_result` for each physical leaf.
+3. `eval/scripts/run-experiment.sh` handles one run: configuration, runtime and load-generator processes, bounded collection, shutdown, metadata, and result placement. It writes to the exact `--output-dir` the runner passes, or delegates fresh local result-directory creation to `eval/scripts/collect-results.sh`, which creates `eval/results/<experiment>/<host>-<UTC timestamp>/` and never overwrites an existing directory.
+4. `eval/RESULT-CONTRACT.md` assigns each artifact to its producer and states which experiments require it. `eval/scripts/verify-result-contract.py` and experiment-specific checks reject missing, malformed, inconsistent, or wrongly classified evidence.
 5. Shared experiment IDs are aliases to one selected physical leaf. An alias receipt preserves identity; it does not copy evidence or create another replicate.
-6. The notebooks under `eval/analysis/notebooks/` resolve one explicit batch through `wafer_analysis.paths.resolve_analysis_batch` and render figures and tables that carry run counts, units, estimator, and evidence class.
+6. The notebooks under `eval/analysis/notebooks/` resolve their input through `wafer_analysis.paths.resolve_analysis_batch`: an explicit diagnostic path, or the approved batch named by `WAFER_EVAL_BATCH_ID`. The cross-architecture notebook, `04-cross-arch.ipynb`, uses `resolve_host_batches` instead and resolves one batch per host. The notebooks render figures and tables that carry run counts, units, estimator, and evidence class.
 
 ## Rust
 
-The runtime emits typed JSON and CSV artifacts, but the campaign controller and analysis are Python. `RunItem` is a frozen dataclass carrying one physical run identity. `ResultsLayout` confines raw, manifest, derived, and report paths; analysis reads selected raw files and writes outside the raw tree.
+When a run starts the runtime, the harness sets `WAFER_BENCH_OUTPUT_DIR` to the result directory, and the runtime writes its artifacts there. The "Ownership summary" in `eval/RESULT-CONTRACT.md` maps every file to its producer. The Rust producers are:
+
+- `BenchSink::export_to_dir` (`crates/wafer-core/src/node/sink/bench.rs`) writes the in-process `latency.hdr` and `throughput.csv` when the sink closes, plus `service.hdr` and `source-lag.hdr` when messages carried bench stamps, and `sequence.csv` and `swap_timeline.json` when enabled. `BenchSource` (`crates/wafer-core/src/node/source/bench.rs`) generates load inside the runtime.
+- `flush_bench_artifacts` in `crates/wafer-runtime/src/main.rs` writes `memory.csv`, and `queue-depth.csv` to the path in `WAFER_QUEUE_DEPTH_OUTPUT` when that is set, from the samplers in `crates/wafer-core/src/bench/`, then `per_node_metrics.csv` and `recovery.csv` through `PipelineOrchestrator::export_per_node_metrics` (`crates/wafer-core/src/orchestrator/pipeline.rs`).
+- `crates/wafer-runtime/src/metadata.rs` (`write_provenance`) writes `runtime-provenance.json`, which the harness merges into `metadata.json`. `crates/wafer-runtime/src/startup.rs` (`write_startup`) writes the startup-phase file named by `WAFER_STARTUP_OUTPUT` (`startup.json`).
+- `LatencyRecorder::write_artifacts` (`crates/wafer-loadgen/src/recorder.rs`) writes the end-to-end `latency.hdr`, `sequence.csv`, and `subscriber-metadata.json` for `wafer-loadgen subscribe`.
+
+The controller and analysis are Python. `RunItem` is a frozen dataclass carrying one physical run identity. `ResultsLayout` (`eval/analysis/src/wafer_analysis/results_layout.py`) confines raw, manifest, derived, and report paths: under `eval/` by default, or under a mounted `WAFER_RESULTS_ROOT`. Analysis reads selected raw files and writes outside the raw tree.
 
 Counts need type-like discipline even though Python tables are dynamic. A complete host run is an independent sample. Messages, aliases, events, buckets, and one-second intervals are nested observations or alternate views. More rows improve within-run detail; they do not increase independent N.
 
