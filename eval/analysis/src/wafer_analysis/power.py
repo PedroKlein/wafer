@@ -30,8 +30,8 @@ def measurement_label(leaf: Path) -> str:
 def load_telemetry(path: Path) -> list[dict[str, float | int | str]]:
     """The samples of a leaf's `pi-telemetry.csv`, in the power quantity the leaf declares.
 
-    On x86 `rail_proxy_watts` adds every top-level RAPL zone, and `psys` already contains
-    the package, so an x86 leaf takes its watts from the package rows of `pmic-rails.csv`.
+    Older x86 leaves add every top-level RAPL zone into `rail_proxy_watts`, and `psys` already
+    contains the package, so an x86 leaf takes its watts from the package rows of `pmic-rails.csv`.
     """
     with path.open(newline="") as stream:
         rows = []
