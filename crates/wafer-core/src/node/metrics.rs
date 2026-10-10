@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use crate::runner::error_policy::{ErrorCategory, TrapKind, WasmProcessError};
 
-const MAX_RECOVERY_SAMPLES: usize = 65_536;
+const MAX_RECOVERY_SAMPLES: usize = 262_144;
 
 #[derive(Debug, Default)]
 pub struct QueueMetrics {
@@ -582,6 +582,30 @@ mod tests {
         m.record_recovery(12_345);
         m.record_recovery(67_890);
         assert_eq!(m.recovery_samples_ns(), vec![12_345, 67_890]);
+    }
+
+    #[test]
+    fn recovery_samples_keep_every_sample_of_a_ninety_thousand_trap_run() {
+        let m = NodeMetrics::new();
+        for duration_ns in 0..90_000 {
+            m.record_recovery(duration_ns);
+        }
+        let samples = m.recovery_samples_ns();
+        assert_eq!(samples.len(), 90_000);
+        assert_eq!(samples.first(), Some(&0));
+    }
+
+    #[test]
+    fn recovery_samples_keep_the_newest_past_the_cap() {
+        let m = NodeMetrics::new();
+        let total = u64::try_from(MAX_RECOVERY_SAMPLES).unwrap() + 1;
+        for duration_ns in 0..total {
+            m.record_recovery(duration_ns);
+        }
+        let samples = m.recovery_samples_ns();
+        assert_eq!(samples.len(), MAX_RECOVERY_SAMPLES);
+        assert_eq!(samples.first(), Some(&1));
+        assert_eq!(m.recovery_count(), total);
     }
 
     #[test]

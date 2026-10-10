@@ -271,6 +271,62 @@ def test_isolation_leaf_dlq_records_must_match_dlq_sent(
     assert (message in completed.stdout) is rejected, completed.stdout
 
 
+def write_recovery_evidence(leaf: Path, recovery_count: int, samples: int) -> None:
+    leaf.mkdir(parents=True)
+    (leaf / "per_node_metrics.csv").write_text(
+        "node_id,messages_in,recovery_count\n"
+        "source,0,0\n"
+        f"attack,10,{recovery_count}\n"
+    )
+    rows = "".join(f"attack,{index},{1000 + index}\n" for index in range(samples))
+    (leaf / "recovery.csv").write_text("node_id,sample_index,duration_ns\n" + rows)
+
+
+@pytest.mark.parametrize(("samples", "rejected"), [(3, False), (2, True)])
+def test_recovery_samples_must_match_recovery_count(
+    tmp_path: Path, samples: int, rejected: bool
+) -> None:
+    leaf = tmp_path / "run-01"
+    write_recovery_evidence(leaf, 3, samples)
+
+    violations = CONTRACT.check_recovery_samples(leaf)
+
+    message = (
+        f"recovery.csv holds {samples} samples for attack "
+        "but per_node_metrics.csv counts 3 recoveries"
+    )
+    assert violations == ([message] if rejected else [])
+
+
+def test_recovery_samples_are_not_checked_past_the_runtime_cap(tmp_path: Path) -> None:
+    leaf = tmp_path / "run-01"
+    write_recovery_evidence(leaf, CONTRACT.RECOVERY_SAMPLE_CAP + 1, 2)
+
+    assert CONTRACT.check_recovery_samples(leaf) == []
+
+
+def test_missing_recovery_csv_is_rejected_when_nodes_recovered(tmp_path: Path) -> None:
+    leaf = tmp_path / "run-01"
+    write_recovery_evidence(leaf, 1, 0)
+    (leaf / "recovery.csv").unlink()
+
+    violations = CONTRACT.check_recovery_samples(leaf)
+
+    assert violations == [
+        "recovery.csv holds 0 samples for attack but per_node_metrics.csv counts 1 recoveries"
+    ]
+
+
+def test_leaf_check_reports_truncated_recovery_samples(tmp_path: Path) -> None:
+    leaf = tmp_path / "e-iso-8" / "run-01"
+    write_recovery_evidence(leaf, 3, 1)
+    (leaf / "config.toml").write_text("fixture\n")
+
+    completed = run(leaf, canonical=False)
+
+    assert "recovery.csv holds 1 samples for attack" in completed.stdout, completed.stdout
+
+
 def make_result(root: Path) -> Path:
     result = root / "e-perf-4" / "rpi5-2026-08-30T00-00-00Z" / "120b" / "run-01"
     result.mkdir(parents=True)
