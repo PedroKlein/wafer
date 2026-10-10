@@ -197,6 +197,7 @@ class ProcessTracker:
         self.comms = comms
         self.known: dict[int, str] = {}
         self.calls = 0
+        self.switches = ThreadSwitchCounter()
 
     @staticmethod
     def may_exec(comm: str) -> bool:
@@ -220,33 +221,63 @@ class ProcessTracker:
         return sorted(pid for pid, comm in self.known.items() if comm in self.comms)
 
 
-def thread_context_switches(pid: int) -> dict[str, int] | None:
-    """/proc/<pid>/status counts only the thread-group leader, so sum every task."""
-    try:
-        tids = os.listdir(PROC / str(pid) / "task")
-    except OSError:
-        return None
-    totals = {"voluntary_ctxt_switches": 0, "nonvoluntary_ctxt_switches": 0}
-    for tid in tids:
-        text = read_text(PROC / str(pid) / "task" / tid / "status")
-        if text is None:
-            continue
-        status = parse_pid_status(text)
-        for key in totals:
-            totals[key] += int(status[key])
-    return totals
+SWITCH_KEYS = ("voluntary_ctxt_switches", "nonvoluntary_ctxt_switches")
+
+
+class ThreadSwitchCounter:
+    """Per-process context switches summed over every thread, never decreasing.
+
+    /proc/<pid>/status counts only the thread-group leader, and an exited
+    thread's counts vanish from /proc/<pid>/task. So the last counts seen for
+    each thread are kept, and when a thread disappears they move into a
+    retired total for its process.
+    """
+
+    def __init__(self) -> None:
+        self.threads: dict[int, dict[str, dict[str, int]]] = {}
+        self.retired: dict[int, dict[str, int]] = {}
+
+    def forget_except(self, pids: set[int]) -> None:
+        for table in (self.threads, self.retired):
+            for pid in [pid for pid in table if pid not in pids]:
+                del table[pid]
+
+    def sample(self, pid: int) -> dict[str, int] | None:
+        try:
+            tids = os.listdir(PROC / str(pid) / "task")
+        except OSError:
+            return None
+        retired = self.retired.setdefault(pid, dict.fromkeys(SWITCH_KEYS, 0))
+        live: dict[str, dict[str, int]] = {}
+        for tid in tids:
+            text = read_text(PROC / str(pid) / "task" / tid / "status")
+            if text is None:
+                continue
+            status = parse_pid_status(text)
+            live[tid] = {key: int(status[key]) for key in SWITCH_KEYS}
+        for tid, counts in self.threads.get(pid, {}).items():
+            if tid not in live:
+                for key in SWITCH_KEYS:
+                    retired[key] += counts[key]
+        self.threads[pid] = live
+        return {
+            key: retired[key] + sum(counts[key] for counts in live.values())
+            for key in SWITCH_KEYS
+        }
 
 
 def sample_processes(tracker: ProcessTracker, page_size: int) -> list[dict[str, int | str]]:
     rows = []
-    for pid in tracker.tracked_pids():
+    pids = tracker.tracked_pids()
+    tracker.switches.forget_except(set(pids))
+    for pid in pids:
         stat_text = read_text(PROC / str(pid) / "stat")
         status_text = read_text(PROC / str(pid) / "status")
         if stat_text is None or status_text is None:
             continue
         stat = parse_pid_stat(stat_text)
         status = parse_pid_status(status_text)
-        switches = thread_context_switches(pid)
+        switches = tracker.switches.sample(pid)
         if switches is not None:
             status.update(switches)
         rows.append(

@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -178,6 +179,42 @@ def test_context_switches_are_summed_over_threads(tmp_path: Path, monkeypatch) -
     assert rows[0]["voluntary_ctxt_switches"] == 122
     assert rows[0]["nonvoluntary_ctxt_switches"] == 11
     assert rows[0]["cpus_allowed_list"] == "1-3"
+
+
+def test_context_switches_stay_monotonic_when_a_thread_exits(tmp_path: Path, monkeypatch) -> None:
+    import proc_telemetry
+
+    fake_proc = tmp_path / "proc"
+    pid_dir = fake_proc / "42"
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "comm").write_text("wafer\n")
+    (pid_dir / "stat").write_text(PID_STAT.replace("4242 (wafer load gen)", "42 (wafer)"))
+    (pid_dir / "status").write_text(PID_STATUS)
+
+    def write_thread(tid: str, voluntary: int, nonvoluntary: int) -> None:
+        (pid_dir / "task" / tid).mkdir(parents=True, exist_ok=True)
+        (pid_dir / "task" / tid / "status").write_text(
+            f"voluntary_ctxt_switches:\t{voluntary}\nnonvoluntary_ctxt_switches:\t{nonvoluntary}\n"
+        )
+
+    write_thread("42", 10, 1)
+    write_thread("43", 100, 7)
+    monkeypatch.setattr(proc_telemetry, "PROC", fake_proc)
+    tracker = proc_telemetry.ProcessTracker()
+
+    def switches() -> tuple[int, int]:
+        [row] = proc_telemetry.sample_processes(tracker, 4096)
+        return row["voluntary_ctxt_switches"], row["nonvoluntary_ctxt_switches"]
+
+    assert switches() == (110, 8)
+    write_thread("42", 12, 1)
+    write_thread("43", 130, 9)
+    assert switches() == (142, 10)
+    shutil.rmtree(pid_dir / "task" / "43")
+    write_thread("44", 3, 0)
+    assert switches() == (145, 10)
+    write_thread("42", 20, 2)
+    assert switches() == (153, 11)
 
 
 def test_only_launcher_pids_are_rechecked(tmp_path: Path, monkeypatch) -> None:
