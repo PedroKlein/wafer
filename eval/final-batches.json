@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "batches": {
+    "jetson": {
+      "batch_id": "final-jetson-20261005b",
+      "wafer_git_sha": "a36631caad57f54342bd00b7afd52baa9178687d",
+      "canonical_matrix_sha256": "72c0b815f77c7d9b25792ce3588d988feb6ea81145a12bc5747a19b80d87caa6",
+      "raw_manifest_sha256": "621a5a0cba271f549df2e1b2ae8077573cd75ec8e3d3c6e511f0b8ca065082cf",
+      "approved_at": "2026-10-10T20:21:58Z",
+      "other_final_batches": []
+    },
+    "rpi5": {
+      "batch_id": "final-rpi5-20261007",
+      "wafer_git_sha": "a5d7f62ff5f7535b8c4e1ce0726431c39564a21e",
+      "canonical_matrix_sha256": "72c0b815f77c7d9b25792ce3588d988feb6ea81145a12bc5747a19b80d87caa6",
+      "raw_manifest_sha256": "da976f49606347618374286f525fb077afb198b32989335bc6d41db9d295e0bb",
+      "approved_at": "2026-10-10T13:32:10Z",
+      "other_final_batches": []
+    },
+    "x86": {
+      "batch_id": "final-x86-20261005",
+      "wafer_git_sha": "a36631caad57f54342bd00b7afd52baa9178687d",
+      "canonical_matrix_sha256": "72c0b815f77c7d9b25792ce3588d988feb6ea81145a12bc5747a19b80d87caa6",
+      "raw_manifest_sha256": "c6b4701893dba1797e5cbb1bebc1c43bbbfee76069f14739c216db9a25b01b7a",
+      "approved_at": "2026-10-10T20:14:06Z",
+      "other_final_batches": []
+    }
+  }
+}
