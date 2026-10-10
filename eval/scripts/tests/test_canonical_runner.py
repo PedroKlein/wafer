@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -147,6 +148,48 @@ def test_density_dispatches_static_collector_before_generic_config(
 
     assert runner.run_item(tmp_path, "test", item)
     assert len(observed) == 1
+
+
+def test_density_window_uses_unix_epoch_timestamps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    item = RunItem(
+        experiment="e-density-1",
+        condition="release-components",
+        run_index=1,
+        config="",
+        warmup_secs=0,
+        measurement_secs=0,
+        system="static",
+    )
+    (tmp_path / "eval/scripts").mkdir(parents=True)
+    (tmp_path / "eval/scripts/binary-sizes.index").write_text("# header\npass-through|a.wasm\n")
+    output = tmp_path / "leaf"
+
+    def fake_run(command, **kwargs):
+        if command[0].endswith("collect-binary-sizes.sh"):
+            (output / "binary-sizes.csv").write_text("plugin,path,bytes\npass-through,a.wasm,1\n")
+        else:
+            (output / "host-facts.json").write_text("{}")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner.time, "sleep", lambda secs: None)
+    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, output, item: [])
+    monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
+    monkeypatch.setattr(runner, "static_host_metadata", lambda facts: {})
+    monkeypatch.setattr(runner, "postprocess_run", lambda root, item, output: None)
+    monkeypatch.setattr(runner, "verify_result", lambda root, output: None)
+    monkeypatch.setattr(runner, "finish_attempt", lambda output, item: True)
+
+    before_ns = time.time_ns()
+    assert runner.run_density_item(tmp_path, item, runner.AttemptSelection(output, skip=False))
+    after_ns = time.time_ns()
+
+    window = json.loads((output / "measurement-window.json").read_text())
+    assert before_ns <= window["started_ns"] <= window["finished_ns"] <= after_ns
+    metadata = json.loads((output / "metadata.json").read_text())
+    assert 0 <= metadata["duration_ns"] <= after_ns - before_ns
 
 
 def test_candidate_swap_dispatches_existing_hot_swap_runner(

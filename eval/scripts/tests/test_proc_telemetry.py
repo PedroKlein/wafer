@@ -178,3 +178,31 @@ def test_context_switches_are_summed_over_threads(tmp_path: Path, monkeypatch) -
     assert rows[0]["voluntary_ctxt_switches"] == 122
     assert rows[0]["nonvoluntary_ctxt_switches"] == 11
     assert rows[0]["cpus_allowed_list"] == "1-3"
+
+
+def test_only_launcher_pids_are_rechecked(tmp_path: Path, monkeypatch) -> None:
+    import proc_telemetry
+
+    fake_proc = tmp_path / "proc"
+    for pid, comm in {10: "kworker/0:1", 11: "rsyslogd", 12: "python3", 13: "bash", 14: "(kuiperd)"}.items():
+        (fake_proc / str(pid)).mkdir(parents=True)
+        (fake_proc / str(pid) / "comm").write_text(f"{comm}\n")
+    monkeypatch.setattr(proc_telemetry, "PROC", fake_proc)
+    reads: list[int] = []
+    real_read_text = proc_telemetry.read_text
+
+    def counting_read_text(path: Path) -> str | None:
+        if path.name == "comm":
+            reads.append(int(path.parent.name))
+        return real_read_text(path)
+
+    monkeypatch.setattr(proc_telemetry, "read_text", counting_read_text)
+    tracker = proc_telemetry.ProcessTracker()
+    assert tracker.tracked_pids() == []
+    assert sorted(reads) == [10, 11, 12, 13, 14]
+    for pid in (10, 11, 12, 13, 14):
+        (fake_proc / str(pid) / "comm").write_text("wafer\n")
+    reads.clear()
+    seen = [tracker.tracked_pids() for _ in range(tracker.RECHECK_EVERY)]
+    assert sorted(reads) == [12, 13, 14]
+    assert seen[-1] == [12, 13, 14]
