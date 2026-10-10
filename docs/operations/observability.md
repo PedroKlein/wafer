@@ -13,9 +13,10 @@ RUST_LOG=info cargo run -p wafer-runtime -- --config pipeline.toml
 RUST_LOG=wafer=debug,wasmtime=warn,hyper=warn cargo run -p wafer-runtime -- --config pipeline.toml
 ```
 
-The runtime adds an `info` default after reading `RUST_LOG`, so a level-only
-value such as `debug` or `off` cannot change that default; name targets as in
-the second line.
+The runtime logs at `info` when `RUST_LOG` is unset or empty. A level-only
+value such as `debug` or `off` applies to every target. A value that names
+only targets logs nothing else, so add a base level to raise some targets and
+keep the rest, for example `info,wafer=debug`.
 
 The host re-emits guest calls to `wafer:pipeline/logging.log` as `tracing`
 events with target `wafer_core::node::wasm` and a `node` field naming the

@@ -103,6 +103,16 @@ fn build_wit_message(
     })
 }
 
+/// Ticks that guest instantiation, `validate()` and `init()` may run before an
+/// epoch interrupt. The configured deadline budgets one `process()` call; a
+/// deadline of a tick or two would let an unlucky tick fail the start or
+/// recovery of a healthy guest. `process()` re-arms the per-call deadline.
+const LIFECYCLE_EPOCH_TICKS: u64 = 1_000;
+
+pub(crate) fn lifecycle_epoch_deadline(per_call: NonZeroU64) -> u64 {
+    per_call.get().max(LIFECYCLE_EPOCH_TICKS)
+}
+
 fn recovery_store(
     old_store: &Store<WaferState>,
     node_id: &str,
@@ -120,7 +130,7 @@ fn recovery_store(
     // store's default 0 deadline never triggers a trap.
     if let Some(n) = epoch_deadline {
         store.epoch_deadline_trap();
-        store.set_epoch_deadline(n.get());
+        store.set_epoch_deadline(lifecycle_epoch_deadline(n));
     }
     // M2 (safety review): reapply fuel BEFORE the caller instantiates from
     // the cached InstancePre. Component start functions can consume fuel
@@ -514,7 +524,7 @@ impl WasmTransformNode {
             })?;
         }
         if let Some(n) = self.epoch_deadline {
-            self.store.set_epoch_deadline(n.get());
+            self.store.set_epoch_deadline(lifecycle_epoch_deadline(n));
         }
         if let Some(message) = self
             .bindings
@@ -722,7 +732,7 @@ impl WasmFilterNode {
             })?;
         }
         if let Some(n) = self.epoch_deadline {
-            self.store.set_epoch_deadline(n.get());
+            self.store.set_epoch_deadline(lifecycle_epoch_deadline(n));
         }
         if let Some(message) = self
             .bindings
@@ -987,7 +997,7 @@ impl WasmRouterNode {
             })?;
         }
         if let Some(n) = self.epoch_deadline {
-            self.store.set_epoch_deadline(n.get());
+            self.store.set_epoch_deadline(lifecycle_epoch_deadline(n));
         }
         if let Some(message) = self
             .bindings
@@ -1462,6 +1472,49 @@ mod tests {
                 .outbound_http(vec![loopback_http_destination(8080)]),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn recovery_survives_epoch_ticks_with_a_one_tick_deadline() -> anyhow::Result<()> {
+        let epoch = NonZeroU64::new(1);
+        let memory_limit = 32 * 1024 * 1024;
+        let config = EngineConfig { epoch_deadline: epoch, ..EngineConfig::default() };
+        let engine = WaferEngine::from_engine_config(&config)?;
+        let component = engine.load_component_from_bytes(ORDINARY_TRAP_COMPONENT, "trap")?;
+        let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
+        let capabilities = Capabilities::sandbox();
+        let state = WaferState::new_with_memory_limit("trap", capabilities.clone(), memory_limit);
+        let mut store = Store::new(engine.inner(), state);
+        store.limiter(|state| state.limits_mut());
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(1);
+        let bindings = pre.instantiate_async(&mut store).await?;
+        let mut node = WasmTransformNode::new(store, bindings, pre, None);
+        node.configure_runtime(capabilities, memory_limit, epoch, r#"{"mode":"trap"}"#.into());
+        node.validate_and_init(r#"{"mode":"trap"}"#).await?;
+
+        let ticking = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let ticker = {
+            let engine = engine.inner().clone();
+            let ticking = Arc::clone(&ticking);
+            std::thread::spawn(move || {
+                while ticking.load(std::sync::atomic::Ordering::Relaxed) {
+                    engine.increment_epoch();
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                }
+            })
+        };
+        let mut result = Ok(());
+        for _ in 0..50 {
+            result = node.recover_from_cached_pre().await;
+            if result.is_err() {
+                break;
+            }
+        }
+        ticking.store(false, std::sync::atomic::Ordering::Relaxed);
+        ticker.join().map_err(|panic| anyhow::anyhow!("ticker thread panicked: {panic:?}"))?;
+        result?;
+        Ok(())
     }
 
     #[tokio::test]
