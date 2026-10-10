@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import os
+import platform
 import resource
 import signal
 import sys
@@ -21,6 +22,9 @@ from pathlib import Path
 
 PROC = Path("/proc")
 SYS_CPU = Path("/sys/devices/system/cpu")
+CLOCKSOURCE = Path("/sys/devices/system/clocksource/clocksource0/current_clocksource")
+X86_MACHINES = frozenset({"x86_64", "amd64", "i386", "i686"})
+TSC_FLAGS = ("constant_tsc", "nonstop_tsc", "tsc_reliable")
 TRACKED_COMMS = frozenset(
     {"wafer", "wafer-runtime", "wafer-loadgen", "kuiperd", "mosquitto"}
 )
@@ -179,6 +183,27 @@ def read_frequency_hz(cpu: int) -> int | None:
         return int(text.strip()) * 1000
     except ValueError:
         return None
+
+
+def read_clocksource() -> str | None:
+    text = read_text(CLOCKSOURCE)
+    if text is None:
+        return None
+    return text.strip() or None
+
+
+def read_tsc_flags(machine: str | None = None) -> dict[str, bool] | None:
+    if (machine or platform.machine()).lower() not in X86_MACHINES:
+        return None
+    text = read_text(PROC / "cpuinfo")
+    if text is None:
+        return None
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "flags":
+            flags = set(value.split())
+            return {flag: flag in flags for flag in TSC_FLAGS}
+    return None
 
 
 class ProcessTracker:
@@ -378,6 +403,8 @@ class Sampler:
             "kernel_cmdline": cmdline.strip() if cmdline else None,
             "uptime_secs_at_start": float(uptime.split()[0]) if uptime else None,
             "tracked_comms": sorted(TRACKED_COMMS),
+            "clocksource": read_clocksource(),
+            "tsc_flags": read_tsc_flags(),
         }
 
 

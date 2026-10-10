@@ -134,6 +134,7 @@ def test_sampler_writes_contract_files_and_tracks_sut_processes_by_comm() -> Non
         assert receipt["sampler_cpu_seconds"] < 2.0
         assert receipt["clock_ticks_per_second"] == os.sysconf("SC_CLK_TCK")
         assert receipt["boot_id"]
+        assert "clocksource" in receipt and "tsc_flags" in receipt
 
 
 def test_untracked_pid_is_rechecked_after_exec(tmp_path: Path, monkeypatch) -> None:
@@ -156,6 +157,31 @@ def test_sampler_records_a_failure_instead_of_dying_silently(tmp_path: Path) -> 
     assert proc_telemetry.run(tmp_path / "leaf", 0.1, "not-a-cpu-list", "") == 1
     error = json.loads((tmp_path / "leaf" / "host-sidecar-error.json").read_text())
     assert error["error"].startswith("ValueError")
+
+
+def test_receipt_reads_clocksource_and_x86_tsc_flags(tmp_path: Path, monkeypatch) -> None:
+    import proc_telemetry
+
+    fake_proc = tmp_path / "proc"
+    fake_proc.mkdir()
+    (fake_proc / "cpuinfo").write_text(
+        "processor\t: 0\nflags\t\t: fpu tsc constant_tsc nonstop_tsc rep_good\n\n"
+        "processor\t: 1\nflags\t\t: fpu tsc constant_tsc nonstop_tsc rep_good\n"
+    )
+    clocksource = tmp_path / "current_clocksource"
+    clocksource.write_text("tsc\n")
+    monkeypatch.setattr(proc_telemetry, "PROC", fake_proc)
+    monkeypatch.setattr(proc_telemetry, "CLOCKSOURCE", clocksource)
+
+    assert proc_telemetry.read_clocksource() == "tsc"
+    assert proc_telemetry.read_tsc_flags("x86_64") == {
+        "constant_tsc": True,
+        "nonstop_tsc": True,
+        "tsc_reliable": False,
+    }
+    assert proc_telemetry.read_tsc_flags("aarch64") is None
+    clocksource.unlink()
+    assert proc_telemetry.read_clocksource() is None
 
 
 def test_context_switches_are_summed_over_threads(tmp_path: Path, monkeypatch) -> None:
