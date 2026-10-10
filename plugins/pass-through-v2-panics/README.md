@@ -7,8 +7,8 @@ failed-swap-recovery experiment.
 
 Compiled to a `wasm32-wasip2` component that:
 
-- exports the standard `pipeline:node/lifecycle` and
-  `pipeline:node/transform` interfaces (surface-compatible with
+- exports the standard `wafer:pipeline/lifecycle` and
+  `wafer:pipeline/transform` interfaces (surface-compatible with
   `pass-through-v1` and `pass-through-v2`), so a hot-swap request pointing
   at this binary is accepted by the runtime up to the moment the first
   message is processed;
@@ -24,7 +24,7 @@ messages from where v1 left off.
 
 ## Metadata sentinel
 
-The `Cargo.toml` version is `"0.2.0-panic"` and the panic message contains
+The `Cargo.toml` version is `"2.0.0-panic"` and the panic message contains
 the literal string `2.0.0-panic`. Both are intentional grep markers — a
 reviewer skimming `eval/configs/*.toml` should be able to spot the fault
 injection at a glance.

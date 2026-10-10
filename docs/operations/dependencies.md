@@ -66,7 +66,7 @@ version so `mise install` gives the same tools on every machine:
 | `anyhow` | `1` | Error boundary for CLI / API. |
 | `tracing` | `0.1` | Structured logs and spans. |
 | `tracing-subscriber` | `0.3` | Log formatting and `RUST_LOG` filtering. |
-| `prometheus-client` | `0.23` | Metrics registry and text exposition. |
+| `prometheus-client` | `0.23` | Declared under the `http-api` feature; currently unused (`/metrics` is formatted by `api::handlers::metrics`). |
 | `hdrhistogram` | `7` | Latency histograms in the benchmark sink and load generator. |
 | `rumqttc` | `0.25` | MQTT source and sink. |
 | `reqwest` | `0.12` | HTTP sink (rustls TLS). |

@@ -9,9 +9,10 @@ transport layer.
 ## Threat model in scope
 
 The runtime is designed around one active threat: an untrusted Wasm
-Component plugin loaded into the pipeline. Plugins run in a wasmtime
-Store with fuel and epoch limits, no ambient WASI capabilities, and
-no shared linear memory. Failures in that model — for example, a
+Component plugin loaded into the pipeline. Plugins run in a Wasmtime
+Store with no ambient WASI capabilities and no shared linear memory.
+Fuel and epoch limits are available but off by default; set them under
+`[engine]` for untrusted plugins. Failures in that model — for example, a
 plugin that escapes its sandbox, drains fuel without accounting, or
 crashes the host through the WIT boundary — are treated as security
 issues.

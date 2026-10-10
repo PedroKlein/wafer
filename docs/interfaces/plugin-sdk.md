@@ -117,9 +117,9 @@ log_warn!("dropped duplicate");
 log_error!("upstream unreachable");
 ```
 
-Each macro calls the generated `wafer:pipeline/logging.log` import with the corresponding `LogLevel`. Messages appear in the host's `tracing` span for the
-emitting node, so they are visible in structured logs and integrate
-with the standard `RUST_LOG=<node_id>=debug` filter.
+Each macro calls the generated `wafer:pipeline/logging.log` import with the corresponding `LogLevel`. The host re-emits each entry as a `tracing` event with target
+`wafer_core::node::wasm` and a `node` field naming the emitting node;
+enable them with `RUST_LOG=wafer_core::node::wasm=debug`.
 
 ## Config parsing
 
@@ -210,6 +210,7 @@ For the outbound HTTP configuration and policy boundary, see [`config-schema.md`
 ## Language boundary
 
 The Rust SDK is the maintained authoring surface. The TinyGo uppercase
-component is a bounded interoperability demonstration that is built, validated,
-and executed through the real host in release verification. The Python
+component is a bounded interoperability demonstration that the manual
+`mise run //plugins:test-plugin-go` task builds and runs through the real host;
+CI does not run it. The Python
 threshold-filter directory remains a stub and is not support evidence.

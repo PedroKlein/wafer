@@ -36,7 +36,7 @@
 
 ## Abstract
 
-This RFC defines the physical code structure that maps the eight Phase 0 design sessions into Rust workspace crates and modules. The workspace splits into seven host crates (`wafer-types`, `wafer-config`, `wafer-core`, `wafer-runtime`, `wafer-loadgen`, `waferctl`, `wafer-plugin`) with a strict one-way dependency graph, plus a separate `plugins/` workspace targeting `wasm32-wasip2`. Each crate has a clear responsibility boundary: `wafer-types` carries passive domain vocabulary with zero heavy dependencies, `wafer-config` owns parsing and DAG validation, `wafer-core` owns all runtime behavior (engine, orchestrator, runner loops, nodes, metrics, HTTP API), and `wafer-plugin` is the standalone guest SDK. This separation yields sub-2-second incremental compiles for config schema changes without rebuilding wasmtime, and enables three levels of testing (unit, plugin integration via `PluginTestHarness`, and E2E via `TestPipeline`) plus criterion benchmarks. The evaluation harness (`eval/` + `wafer-loadgen`) lives alongside the runtime for measurement without coupling to it.
+This RFC defines the physical code structure that maps the eight Phase 0 design sessions into Rust workspace crates and modules. The workspace splits into seven host crates (`wafer-types`, `wafer-config`, `wafer-core`, `wafer-runtime`, `wafer-loadgen`, `waferctl`, `wafer-plugin`) with a strict one-way dependency graph, plus a separate `plugins/` workspace targeting `wasm32-wasip2`. Each crate has a clear responsibility boundary: `wafer-types` carries passive domain vocabulary with zero heavy dependencies, `wafer-config` owns parsing and DAG validation, `wafer-core` owns all runtime behavior (engine, orchestrator, runner loops, nodes, metrics, HTTP API), and `wafer-plugin` is the standalone guest SDK. This separation yields sub-2-second incremental compiles for config schema changes without rebuilding wasmtime, and enables three levels of testing (unit, plugin integration via `PluginTestHarness`, and E2E via `ChannelSource` / `ChannelSink`) plus criterion benchmarks. The evaluation harness (`eval/` + `wafer-loadgen`) lives alongside the runtime for measurement without coupling to it.
 
 ## Context
 
@@ -106,7 +106,7 @@ Plugins compile to `wasm32-wasip2` — they cannot be in the same Cargo workspac
 
 - Level 1: Unit tests inside each plugin crate (native target, pure logic).
 - Level 2: `PluginTestHarness` in `wafer-core` — real wasmtime, single-call verification.
-- Level 3: `TestPipeline` E2E — full orchestrator with `MemorySource` + `CollectorSink`.
+- Level 3: pipeline E2E — the real builder and orchestrator with in-memory `ChannelSource` / `ChannelSink`.
 - Level 4: Criterion benchmarks — `BenchSource` + `BenchSink` for per-hop latency, throughput, hot-swap timing.
 
 ### D11: Native Rust Baseline
@@ -127,7 +127,7 @@ When implementing a new piece: domain enums/config structs → `wafer-types`; pa
 
 - **Config structs in `wafer-config` instead of `wafer-types`:** Rejected because both `wafer-config` (for parsing) and `wafer-core` (for building the orchestrator) need the same `Config` struct. A shared vocabulary crate (`wafer-types`) avoids circular dependencies.
 
-- **Shared `wafer-testing` crate for test utilities:** Not adopted; `PluginTestHarness` and `TestPipeline` live in `wafer-core` because they use its internal types directly. Extracting them would require re-exporting engine internals.
+- **Shared `wafer-testing` crate for test utilities:** Not adopted; `PluginTestHarness` and the channel test I/O live in `wafer-core` because they use its internal types directly. Extracting them would require re-exporting engine internals.
 
 - **Single `runner/loop.rs` with generic dispatch:** Rejected (D6). Per-type files allow ownership-model specialization (transforms take ownership, filters/routers borrow) without branching at runtime.
 

@@ -77,7 +77,7 @@ tokio::select! {
 }
 ```
 
-For WAFER's overflow policies: `Slow` uses `.send().await` outside select (no cancel risk).
+For WAFER's overflow policies: `Slow` awaits `reserve()` and sends with the permit.
 `Drop` and `DeadLetter` use `try_send()` (synchronous — no cancel risk).
 The cancel hazard is only when mixing sends with other futures in select!.
 

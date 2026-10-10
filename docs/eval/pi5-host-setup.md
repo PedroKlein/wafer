@@ -150,13 +150,13 @@ vcgencmd get_throttled
 
 `get_throttled` must report `throttled=0x0`. Active cooling is required. The retained 5 V / 4.2 A supply gets no threshold waiver: every final run must record `throttled=0x0`, and `approve-batch` refuses a batch with any other value.
 
-## 9. Mount the single results volume
+## 9. Mount the results root
 
-Campaign evidence uses one physical exFAT filesystem labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAF_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
+The Pi writes its campaign batches to its own results root, the exFAT volume labeled `WAF_RESULTS` (the label fits exFAT's 11 UTF-16 code-unit limit) mounted at `/mnt/wafer-results`. Set `WAFER_RESULTS_ROOT=/mnt/wafer-results` in the shell that runs the batches. The runner writes `raw/` and `manifests/` there, with every stored path relative to the root, and refuses a root that is not a mounted filesystem or a Linux bind mount. The Jetson and x86 hosts keep their own roots; [Set the host's results root](pi5-experiment-runbook.md#set-the-hosts-results-root) and [Bring the host results together](pi5-experiment-runbook.md#bring-the-host-results-together) in the runbook describe the arrangement.
 
 Do not format or relabel a device from this guide. If the volume ever needs formatting, confirm the exact device identity first. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
 
-Before moving the drive, stop all writers, run `sync`, and unmount it cleanly. After each mount or host transition, confirm the UUID and label and verify the complete SHA-256 manifest before exposing `raw/` to analysis. Analysis opens `raw/` read-only and writes only under `derived/` and `reports/`. Never copy the raw tree to the SD card, Mac internal storage, or another removable volume.
+Before unplugging the drive, stop all writers, run `sync`, and unmount it cleanly. Never edit anything under `raw/`.
 
 ## 10. Run preflight and smoke
 
@@ -167,7 +167,7 @@ cd ~/wafer
 ./eval/scripts/run-rpi5-validation.sh
 ```
 
-Preflight must report zero failures. The smoke command prints a result directory under the selected results root and runs the result-contract verifier against it. Repository-local `eval/results/` remains a local-test fallback, not the campaign storage path.
+Preflight must report zero failures. The smoke command writes its result under the repository-local `eval/results/e-smoke/` and runs the result-contract verifier against it; the validation command writes under `eval/results/e-val-1/`. Campaign batches write to the results root instead.
 
 ## Final checklist
 

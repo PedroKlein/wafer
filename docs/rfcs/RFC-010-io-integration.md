@@ -7,7 +7,7 @@
 
 ## Abstract
 
-This RFC defines how native I/O sources and sinks are wired into the new orchestrator to achieve WAFER's first end-to-end pipeline execution. It introduces source and sink adapter loops (spawned as per-node tokio tasks), extends the builder to construct I/O trait objects and compile Wasm nodes during the build phase, adds a `PluginTestHarness` for direct component testing without pipeline overhead, specifies the plugin rewrite from the legacy WIT contract to the current four-package model, establishes an E2E integration test with channel-based in-memory I/O, and eliminates an unnecessary allocation in the MQTT source path. The result is a runnable pipeline: TOML config → build → spawn → messages through real Wasm → arrive at sink.
+This RFC defines how native I/O sources and sinks are wired into the new orchestrator to achieve WAFER's first end-to-end pipeline execution. It introduces source and sink adapter loops (spawned as per-node tokio tasks), extends the builder to construct I/O trait objects and compile Wasm nodes during the build phase, adds a `PluginTestHarness` for direct component testing without pipeline overhead, specifies the plugin rewrite from the legacy WIT contract to the four-package model of that time (now the single `wafer:pipeline@0.1.0` package), establishes an E2E integration test with channel-based in-memory I/O, and eliminates an unnecessary allocation in the MQTT source path. The result is a runnable pipeline: TOML config → build → spawn → messages through real Wasm → arrive at sink.
 
 ## Context
 
@@ -55,7 +55,7 @@ Eliminates the unnecessary `publish.payload.to_vec()` allocation. rumqttc's `Pub
 
 ### Decision 10: Wasm Fixture Build Strategy
 
-Feature-gated pre-built artifact approach. Integration tests require `.wasm` artifacts pre-compiled via `mise run build-plugin`. Avoids circular dependency issues from cross-compilation inside `build.rs`.
+Feature-gated pre-built artifact approach. Integration tests require `.wasm` artifacts pre-compiled via `mise run //plugins:build-plugin`. Avoids circular dependency issues from cross-compilation inside `build.rs`.
 
 ### Decision 11: File Organization
 
@@ -84,4 +84,4 @@ New/modified files span `runner/source.rs`, `runner/sink.rs`, `testing.rs`, `tes
 - The builder constructs all node instances (native I/O and Wasm) during the build phase; the orchestrator's `spawn_bundles()` invokes real runner loops.
 - The MQTT zero-copy fix eliminates the `to_vec()` allocation in the MQTT source.
 - E2E integration tests use `ChannelSource` / `ChannelSink` from `wafer_core::testing`, which is compiled only for tests and benches (or with the `test-support` feature).
-- Code matches decisions; no divergence.
+- Source poll errors back off from 1 ms to 1 s and stop the source after 20 consecutive failures, which fails the run.

@@ -11,6 +11,7 @@ operator-facing reference, see
 
 - `dag-passthrough.toml` — minimal stdin → pass-through transform → stdout.
 - `dag-uppercase.toml` — stdin → uppercase transform → stdout.
+- `dag-json-parse.toml` — stdin → json-parse transform → stdout.
 - `dag-chain.toml` — multi-stage transform chain.
 - `dag-filter.toml` — filter example using the current runtime schema.
 - `dag-fanout.toml` — router fan-out example.
