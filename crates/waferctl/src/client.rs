@@ -172,27 +172,40 @@ impl WaferClient {
         let response = self.client.post(&url).send().await?;
 
         if !response.status().is_success() {
-            let status = response.status();
-            if let Ok(err) = response.json::<ErrorResponse>().await {
-                anyhow::bail!("{}", err.error.message);
-            }
-            anyhow::bail!("Request failed with status {status}");
+            return Err(Self::error_from(response).await);
         }
 
         Ok(())
+    }
+
+    async fn error_from(response: reqwest::Response) -> anyhow::Error {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::anyhow!("{}", error_message(status, &body))
     }
 
     async fn handle_response<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
         let status = response.status();
 
         if !status.is_success() {
-            if let Ok(err) = response.json::<ErrorResponse>().await {
-                anyhow::bail!("{}", err.error.message);
-            }
-            anyhow::bail!("Request failed with status {status}");
+            return Err(Self::error_from(response).await);
         }
 
         response.json().await.context("Failed to parse response")
+    }
+}
+
+/// The runtime answers some errors with a JSON body and others, such as
+/// axum's request rejections, with plain text.
+fn error_message(status: reqwest::StatusCode, body: &str) -> String {
+    if let Ok(err) = serde_json::from_str::<ErrorResponse>(body) {
+        return err.error.message;
+    }
+    let body = body.trim();
+    if body.is_empty() {
+        format!("Request failed with status {status}")
+    } else {
+        format!("Request failed with status {status}: {body}")
     }
 }
 
@@ -298,5 +311,32 @@ mod tests {
         assert_eq!(result.reason.as_deref(), Some("init failed"));
         assert!(!result.replacement_adopted);
         assert_eq!(result.timeline.rollback_ns, Some(50));
+    }
+
+    #[test]
+    fn error_message_uses_the_json_error_message() {
+        let body = json!({"error": {"code": "node_not_found", "message": "node 'x' not found"}})
+            .to_string();
+        let message = error_message(reqwest::StatusCode::NOT_FOUND, &body);
+        assert_eq!(message, "node 'x' not found");
+    }
+
+    #[test]
+    fn error_message_includes_a_plain_text_body() {
+        let message = error_message(
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            "Failed to deserialize the JSON body into the target type\n",
+        );
+        assert_eq!(
+            message,
+            "Request failed with status 422 Unprocessable Entity: \
+             Failed to deserialize the JSON body into the target type"
+        );
+    }
+
+    #[test]
+    fn error_message_falls_back_to_the_status_for_an_empty_body() {
+        let message = error_message(reqwest::StatusCode::BAD_GATEWAY, "");
+        assert_eq!(message, "Request failed with status 502 Bad Gateway");
     }
 }
