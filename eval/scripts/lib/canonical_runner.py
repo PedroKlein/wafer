@@ -5952,7 +5952,8 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
     output.mkdir(parents=True, exist_ok=True)
     print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
     telemetry: list[subprocess.Popen] | None = None
-    started_ns = time.monotonic_ns()
+    started_ns = time.time_ns()
+    started_monotonic_ns = time.monotonic_ns()
     started_at = utc_now()
     try:
         (output / "config.toml").write_text(
@@ -6000,7 +6001,8 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
             check=True,
         )
         facts = json.loads(facts_path.read_text())
-        finished_ns = time.monotonic_ns()
+        finished_ns = time.time_ns()
+        finished_monotonic_ns = time.monotonic_ns()
         (output / "measurement-window.json").write_text(
             json.dumps({"started_ns": started_ns, "finished_ns": finished_ns}, indent=2)
             + "\n"
@@ -6014,7 +6016,7 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
             "host_tag": HOST.tag,
             "generated_at": utc_now(),
             "started_at": started_at,
-            "duration_ns": finished_ns - started_ns,
+            "duration_ns": finished_monotonic_ns - started_monotonic_ns,
             **static_host_metadata(facts),
             "exit_codes": {"collector": 0},
             "plugin_count": len(actual_plugins),
@@ -6139,6 +6141,67 @@ def run_attempt(root: Path, item: RunItem, selection: AttemptSelection) -> bool:
     return finish_attempt(output, item)
 
 
+def branch_measurements_exported(output: Path) -> bool:
+    """Whether both E-Iso-7 branch sinks exported their files, so branch A's window ended."""
+    return all(
+        (output / branch / name).is_file()
+        for branch in ("branch-a", "branch-b")
+        for name in ("measurement-window.json", "sequence.csv", "throughput.csv", "latency.hdr")
+    )
+
+
+def write_branch_isolation(root: Path, item: RunItem, output: Path) -> None:
+    loadgen = root / "target/release/wafer-loadgen"
+    for branch_dir in ("branch-a", "branch-b"):
+        branch = output / branch_dir
+        subprocess.run(
+            [
+                str(loadgen),
+                "hdr-summary",
+                "--hdr",
+                str(branch / "latency.hdr"),
+                "--output",
+                str(branch / "percentiles.json"),
+            ],
+            check=True,
+        )
+    config = tomllib.loads((root / item.config).read_text())
+    branch_sources = {
+        branch_dir: next(
+            edge["from"]
+            for edge in config["edges"]
+            if edge["to"] == branch_node
+            and config["nodes"][edge["from"]].get("kind") == "bench-source"
+        )
+        for branch_dir, branch_node in (
+            ("branch-a", "branch_a"),
+            ("branch-b", "branch_b"),
+        )
+    }
+    source_configs = [config["nodes"][source] for source in branch_sources.values()]
+    target_messages = {
+        int(float(source["rate"]) * item.measurement_secs)
+        for source in source_configs
+    }
+    if len(target_messages) != 1:
+        raise ValueError("E-Iso-7 branch sources must use the same target measurement load")
+    branch_isolation = derive_branch_isolation(
+        output,
+        warmup_secs=item.warmup_secs,
+        measurement_secs=item.measurement_secs,
+        branch_sources=branch_sources,
+        target_messages=target_messages.pop(),
+    )
+    branch_isolation["condition"] = item.condition
+    branch_isolation["run_index"] = item.run_index
+    (output / "branch-isolation.json").write_text(
+        json.dumps(branch_isolation, indent=2) + "\n"
+    )
+    branch_a_window = output / "branch-a/measurement-window.json"
+    if branch_a_window.is_file():
+        shutil.copyfile(branch_a_window, output / "measurement-window.json")
+
+
 def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     metadata_path = output / "metadata.json"
     metadata = json.loads(metadata_path.read_text())
@@ -6219,6 +6282,11 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
         }
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     if incomplete_run(output, item):
+        if item.experiment == "e-iso-7" and branch_measurements_exported(output):
+            try:
+                write_branch_isolation(root, item, output)
+            except (OSError, ValueError, subprocess.CalledProcessError) as error:
+                print(f"[{utc_now()}] no branch measurement after runtime exit: {error}", flush=True)
         return
 
     subscriber_metadata = output / "subscriber-metadata.json"
@@ -6236,54 +6304,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
 
     loadgen = root / "target/release/wafer-loadgen"
     if item.experiment == "e-iso-7":
-        for branch_dir in ("branch-a", "branch-b"):
-            branch = output / branch_dir
-            subprocess.run(
-                [
-                    str(loadgen),
-                    "hdr-summary",
-                    "--hdr",
-                    str(branch / "latency.hdr"),
-                    "--output",
-                    str(branch / "percentiles.json"),
-                ],
-                check=True,
-            )
-        config = tomllib.loads((root / item.config).read_text())
-        branch_sources = {
-            branch_dir: next(
-                edge["from"]
-                for edge in config["edges"]
-                if edge["to"] == branch_node
-                and config["nodes"][edge["from"]].get("kind") == "bench-source"
-            )
-            for branch_dir, branch_node in (
-                ("branch-a", "branch_a"),
-                ("branch-b", "branch_b"),
-            )
-        }
-        source_configs = [config["nodes"][source] for source in branch_sources.values()]
-        target_messages = {
-            int(float(source["rate"]) * item.measurement_secs)
-            for source in source_configs
-        }
-        if len(target_messages) != 1:
-            raise ValueError("E-Iso-7 branch sources must use the same target measurement load")
-        branch_isolation = derive_branch_isolation(
-            output,
-            warmup_secs=item.warmup_secs,
-            measurement_secs=item.measurement_secs,
-            branch_sources=branch_sources,
-            target_messages=target_messages.pop(),
-        )
-        branch_isolation["condition"] = item.condition
-        branch_isolation["run_index"] = item.run_index
-        (output / "branch-isolation.json").write_text(
-            json.dumps(branch_isolation, indent=2) + "\n"
-        )
-        branch_a_window = output / "branch-a/measurement-window.json"
-        if branch_a_window.is_file():
-            shutil.copyfile(branch_a_window, output / "measurement-window.json")
+        write_branch_isolation(root, item, output)
 
     if item.experiment == "e-swap-3":
         timeline = json.loads((output / "disruption-timeline.json").read_text())
@@ -7515,7 +7536,9 @@ def capacity_brackets(
     try:
         content = path.read_bytes()
         scout = json.loads(content)
-        rates = derive_bracket_rates(scout, json.loads(CANONICAL_MATRIX_PATH.read_text()))
+        rates = derive_bracket_rates(
+            scout, json.loads(CANONICAL_MATRIX_PATH.read_text()), HOST.tag
+        )
     except (AttributeError, OSError, TypeError, ValueError) as error:
         message = f"no usable capacity scout summary at {layout.relative(path)}: {error}"
         if frozen is None and not (isinstance(scout, dict) and scout.get("action") == "stop"):

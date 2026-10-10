@@ -460,11 +460,12 @@ BRANCH_ISOLATION_CONDITIONS = ("control", "panic-attack", "epoch-loop-attack")
 def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     """Branch-A throughput, p95 and loss per E-Iso-7 condition, contrasted with the control.
 
-    ``records`` are the runs' ``branch-isolation.json`` documents. A run the runtime did not
-    survive has no branch measurement; it counts in ``N_runs`` and an attack condition with
-    such a run fails its condition. A record may carry ``branch_a_arrival_span_ns`` (see
-    ``focused.branch_isolation_runs``); unless every completed run of a condition has it, that
-    condition's arrival-span columns are empty.
+    ``records`` are the runs' ``branch-isolation.json`` documents. A run the runtime stopped
+    before branch A's measurement ended has no branch measurement; it counts in ``N_runs`` and
+    fails its attack condition. A run whose runtime exited only after branch A finished keeps
+    its measurement and is not counted as stopped. The drop verdict uses the arrival-span
+    throughput, from ``branch_a_arrival_span_ns`` (see ``focused.branch_isolation_runs``);
+    unless every measured run of a condition has it, that condition has no drop estimate.
     """
     grouped = _group_runs(records, BRANCH_ISOLATION_CONDITIONS, canonical=canonical)
     if not grouped["control"]:
@@ -474,11 +475,11 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
     stopped_rule = rules["e-iso-7-stopped-runs"]
     threshold = (
         f"one-sided 95% upper bound of the branch-A throughput drop < {drop_rule.value:g} percent; "
-        "no run stopped early"
+        "no run stopped before branch A's measurement ended"
     )
     admitted = {condition: len(runs) for condition, runs in grouped.items()}
     grouped = {
-        condition: [run for run in runs if not _stopped_early(run)]
+        condition: [run for run in runs if "branches" in run or not _stopped_early(run)]
         for condition, runs in grouped.items()
     }
 
@@ -583,9 +584,6 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
             )
         elif condition != "control":
             drop, drop_low, drop_high = median_shift_ci(throughput, control_throughput, relative=True)
-            _, bound_low, bound_high = median_shift_ci(
-                throughput, control_throughput, relative=True, ci=drop_rule.interval
-            )
             increase, increase_low, increase_high = median_shift_ci(p95, control_p95, relative=True)
             delta, magnitude = cliffs_delta(throughput, control_throughput)
             delta_low, delta_high = cliffs_delta_ci(throughput, control_throughput)
@@ -601,29 +599,36 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     "cliffs_delta_ci95_low": delta_low,
                     "cliffs_delta_ci95_high": delta_high,
                     "effect_magnitude": magnitude,
-                    **bound_verdict(
-                        "drop", drop_rule, (-100 * bound_high, -100 * bound_low), estimate=-100 * drop
-                    ),
+                    **bound_verdict("drop", drop_rule, None, estimate=None),
                 }
-            )
-            row["verdict"] = combined_verdict(
-                row["drop_verdict"], count_verdict(stopped_rule, stopped)
             )
             if arrival is not None and control_arrival is not None:
                 arrival_drop, arrival_low, arrival_high = median_shift_ci(
                     arrival, control_arrival, relative=True
+                )
+                _, bound_low, bound_high = median_shift_ci(
+                    arrival, control_arrival, relative=True, ci=drop_rule.interval
                 )
                 row.update(
                     {
                         "arrival_span_drop_percent": -100 * arrival_drop,
                         "arrival_span_drop_ci95_low_percent": -100 * arrival_high,
                         "arrival_span_drop_ci95_high_percent": -100 * arrival_low,
+                        **bound_verdict(
+                            "drop",
+                            drop_rule,
+                            (-100 * bound_high, -100 * bound_low),
+                            estimate=-100 * arrival_drop,
+                        ),
                     }
                 )
+            row["verdict"] = combined_verdict(
+                row["drop_verdict"], count_verdict(stopped_rule, stopped)
+            )
         row.update(
             {
                 "units": "messages/second, nanoseconds, percent, fraction",
-                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs over the runs that completed; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; verdict from the one-sided 95% upper bound of the drop, resampling each condition's runs apart; a run the runtime did not survive fails its condition; reported only, not used by the verdict: arrival-span throughput, the same messages over the time from the first post-warmup arrival to the end of the last interval row, which leaves out the sink's file export, and its drop against the control computed the same way",
+                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs over the runs that completed; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; arrival-span throughput, the same messages over the time from the first post-warmup arrival to the end of the last interval row, which leaves out the sink's file export, and its drop against the control computed the same way; verdict from the one-sided 95% upper bound of the arrival-span drop, resampling each condition's runs apart; a run the runtime stopped before branch A's measurement ended fails its condition; the window throughput, its drop and Cliff's delta are reported only",
                 "threshold": threshold,
                 "claim_boundary": "independently sourced branch A on the same runtime; no claim about branch B",
                 "thesis_evidence": canonical,

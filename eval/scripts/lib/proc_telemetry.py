@@ -24,6 +24,9 @@ SYS_CPU = Path("/sys/devices/system/cpu")
 TRACKED_COMMS = frozenset(
     {"wafer", "wafer-runtime", "wafer-loadgen", "kuiperd", "mosquitto"}
 )
+LAUNCHER_COMMS = frozenset(
+    {"taskset", "env", "sh", "bash", "dash", "docker-entrypoi", "runc:[2:INIT]"}
+)
 CORE_FIELDS = [
     "timestamp_ns",
     "cpu",
@@ -182,16 +185,22 @@ class ProcessTracker:
     """Keeps the pid to comm map so most seconds only new pids cost a read.
 
     A pid seen between fork and exec still carries the wrapper's name (the
-    runner launches the SUT through taskset), so untracked pids are re-read
-    every RECHECK_EVERY samples instead of being written off for good.
+    runner launches the SUT through taskset, systemd starts kuiperd through
+    its executor), so pids last seen as a launcher or interpreter are re-read
+    every RECHECK_EVERY samples. Everything else keeps the comm it had when
+    first seen.
     """
 
     RECHECK_EVERY = 5
 
     def __init__(self, comms: frozenset[str] = TRACKED_COMMS) -> None:
         self.comms = comms
-        self.known: dict[int, str | None] = {}
+        self.known: dict[int, str] = {}
         self.calls = 0
+
+    @staticmethod
+    def may_exec(comm: str) -> bool:
+        return comm in LAUNCHER_COMMS or comm.startswith(("python", "systemd", "("))
 
     def tracked_pids(self) -> list[int]:
         try:
@@ -204,12 +213,11 @@ class ProcessTracker:
             if pid not in live:
                 del self.known[pid]
         for pid in live:
-            if pid in self.known and (self.known[pid] is not None or not recheck):
+            if pid in self.known and not (recheck and self.may_exec(self.known[pid])):
                 continue
             text = read_text(PROC / str(pid) / "comm")
-            comm = text.strip() if text is not None else None
-            self.known[pid] = comm if comm in self.comms else None
-        return sorted(pid for pid, comm in self.known.items() if comm is not None)
+            self.known[pid] = text.strip() if text is not None else ""
+        return sorted(pid for pid, comm in self.known.items() if comm in self.comms)
 
 
 def sample_processes(tracker: ProcessTracker, page_size: int) -> list[dict[str, int | str]]:

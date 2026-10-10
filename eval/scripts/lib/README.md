@@ -18,5 +18,6 @@ imports `attempts`, `backpressure`, `capacity_brackets`, `rollback` and
 | `host_profiles.py` | Reads the expected host state (Pi 5, Jetson, x86) from the matrix `hosts` map. | runner, `validate-canonical.py`, verifier |
 | `host_facts.py` | Platform facts (CPU, SMT, turbo, OS, glibc, power mode) and CPU placement facts (isolated, housekeeping and default IRQ CPUs) for `host-facts.json` and `metadata.json`. | runner, `write_metadata.py`, `validate-canonical.py` |
 | `proc_telemetry.py` | Host-neutral `/proc` sampler (per-core CPU, scheduler and process counters) beside every run. | runner, `run-experiment.sh`, `run-rpi5-idle-baseline.sh` |
+| `page_cache.py` | Page-cache residency of the startup inputs for `startup-preparation.json`. | `run-experiment.sh` |
 | `provenance_match.py` | Checks that compared leaves share one source SHA and the same plugin bytes. | runner, verifier |
 | `preflight-common.sh` | Shared read-only preflight checks. | `preflight-pi5.sh`, `preflight-jetson.sh`, `preflight-x86.sh` |

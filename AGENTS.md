@@ -232,7 +232,7 @@ RUST_LOG=wafer=debug cargo run -p wafer-runtime -- --config examples/dag-passthr
 RUST_LOG=wafer=trace cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
 ```
 
-The runtime adds an INFO default to the `RUST_LOG` filter, so a bare level such as `RUST_LOG=debug` still logs at INFO. Name a target instead; `wafer` also matches the `wafer_*` crates.
+The runtime logs at INFO when `RUST_LOG` is unset or empty. A bare level such as `RUST_LOG=debug` applies to every target; a target such as `wafer` also matches the `wafer_*` crates.
 
 ---
 

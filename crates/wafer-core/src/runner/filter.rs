@@ -59,11 +59,7 @@ async fn recover_after_timeout(
     if !continue_after_policy_action(policy.handle(error, envelope), metrics) {
         return Err(policy_teardown());
     }
-    tracing::warn!(
-        node = filter.node_id(),
-        %error,
-        "Wasm call ran out of budget — replacing Store before continuing"
-    );
+    super::log_recovery_cause(metrics, filter.node_id(), error, true);
     state.transition_to_error();
     state.transition_to_recovering();
     match filter.recover_from_cached_pre().await {
@@ -190,11 +186,7 @@ pub async fn run_filter_loop(
                 metrics.record_error(error);
                 policy.record_condemned(envelope, error, &metrics);
                 let msg = error.to_string();
-                tracing::error!(
-                    node = filter.node_id(),
-                    error = %msg,
-                    "unrecoverable error — attempting recovery"
-                );
+                super::log_recovery_cause(&metrics, filter.node_id(), &msg, false);
                 state.transition_to_error();
                 state.transition_to_recovering();
                 match filter.recover_from_cached_pre().await {

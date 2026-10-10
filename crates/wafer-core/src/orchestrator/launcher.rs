@@ -428,7 +428,7 @@ async fn load_transform_node(
     }
     if let Some(n) = engine.epoch_deadline() {
         store.epoch_deadline_trap();
-        store.set_epoch_deadline(n.get());
+        store.set_epoch_deadline(crate::node::wasm::lifecycle_epoch_deadline(n));
     }
 
     let mut node = if capabilities.allow_inference {
@@ -623,7 +623,7 @@ async fn load_filter_node(
     }
     if let Some(n) = engine.epoch_deadline() {
         store.epoch_deadline_trap();
-        store.set_epoch_deadline(n.get());
+        store.set_epoch_deadline(crate::node::wasm::lifecycle_epoch_deadline(n));
     }
 
     let bindings = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
@@ -689,7 +689,7 @@ async fn load_router_node(
     }
     if let Some(n) = engine.epoch_deadline() {
         store.epoch_deadline_trap();
-        store.set_epoch_deadline(n.get());
+        store.set_epoch_deadline(crate::node::wasm::lifecycle_epoch_deadline(n));
     }
 
     let bindings = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {

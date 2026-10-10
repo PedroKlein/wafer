@@ -345,7 +345,7 @@ fn new_swap_store(
     }
     if let Some(n) = engine.epoch_deadline() {
         store.epoch_deadline_trap();
-        store.set_epoch_deadline(n.get());
+        store.set_epoch_deadline(crate::node::wasm::lifecycle_epoch_deadline(n));
     }
     Ok(store)
 }
