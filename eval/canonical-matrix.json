@@ -542,7 +542,8 @@
     },
     "e-perf-5": {
       "research_question": "rq1",
-      "purpose": "Compare WAFER/native overhead ratios across ARM64 and x86 Linux; this batch records the ARM64 half.",
+      "purpose": "Compare WAFER's in-process overhead over native across ARM64 and x86 Linux.",
+      "headline_estimand": "median over run pairs of WAFER minus native service-time p50 (service.hdr), per host; the latency p50 ratio is reported, not the headline, because latency includes each host's bench-source lag (since 2026-10-10)",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 30,
@@ -565,6 +566,7 @@
       },
       "required_outputs": [
         "latency.hdr",
+        "service.hdr",
         "throughput.csv",
         "sequence.csv"
       ],
@@ -1220,7 +1222,15 @@
         "max_rate": "the highest delivery-good MQTT-loopback rate of the scout; higher candidates are dropped",
         "max_extra_rates": 6,
         "selection": "candidates in the order WAFER 0.95x and 1.05x, eKuiper 0.95x and 1.05x, then the two decision points; rates on the common grid, repeated or above max_rate are dropped and the first max_extra_rates remain",
-        "runs_per_rate": "the e-perf-10 repetitions for every e-perf-10 system, MQTT loopback included"
+        "runs_per_rate": "the e-perf-10 repetitions for every e-perf-10 system, MQTT loopback included",
+        "host_rates_msg_s": {
+          "x86": [
+            5000,
+            6000,
+            7000
+          ]
+        },
+        "host_rates": "fixed rates a host adds after the selection, outside max_extra_rates and max_rate; x86 fills the 4k to 8k gap of the common grid where both ceilings fell in the first campaign (added 2026-10-10)"
       }
     },
     "canonical_metering": {
@@ -1707,10 +1717,10 @@
         "value": 1.0,
         "unit": "percent",
         "direction": "<",
-        "statistic": "drop of the median branch-A run throughput below the control median, in percent of the control median",
+        "statistic": "drop of the median branch-A run arrival-span throughput (measured messages over the time from the first post-warmup arrival to the end of the last interval row) below the control median, in percent of the control median",
         "rule": "one-sided-bound",
         "role": "criterion",
-        "origin": "RQ2 healthy-branch criterion (under 1 percent throughput impact), recorded 2026-07-04 before the first E-Iso-7 run",
+        "origin": "RQ2 healthy-branch criterion (under 1 percent throughput impact), recorded 2026-07-04 before the first E-Iso-7 run; judged on the arrival span instead of the sink window since 2026-10-10, because the window also timed the sink's file export",
         "pilot_data_visible": false
       },
       {
@@ -1721,10 +1731,10 @@
         "value": 0,
         "unit": "runs",
         "direction": "<=",
-        "statistic": "attack runs the runtime did not survive",
+        "statistic": "attack runs the runtime stopped before both branch sinks exported their measurement",
         "rule": "exact-count",
         "role": "criterion",
-        "origin": "Runs the system under test ended counted as failures since 2026-10-01",
+        "origin": "Runs the system under test ended counted as failures since 2026-10-01; since 2026-10-10 a runtime exit after both branch measurements were exported no longer counts as stopped",
         "pilot_data_visible": true
       },
       {

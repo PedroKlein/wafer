@@ -7176,3 +7176,66 @@ if __name__ == "__main__":
     test_validation_gate_rejects_one_bad_repetition()
     test_validation_gate_accepts_all_repetitions()
     print("canonical runner tests: PASS")
+
+
+def test_branch_isolation_is_kept_when_the_runtime_exits_after_the_branches_exported(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "metadata.json").write_text("{}")
+    for branch in ("branch-a", "branch-b"):
+        branch_dir = tmp_path / branch
+        branch_dir.mkdir()
+        branch_dir.joinpath("throughput.csv").write_text(
+            "elapsed_secs,msg_count,bytes\n30.0,30000,3840000\n60.0,30000,3840000\n"
+        )
+        branch_dir.joinpath("sequence.csv").write_text(
+            "total_expected,total_received,received_unique,gap_ranges,gap_msgs,duplicates_count\n"
+            "60000,60000,60000,0,0,0\n"
+        )
+        branch_dir.joinpath("measurement-window.json").write_text(
+            json.dumps({"started_ns": 1_000_000_000, "finished_ns": 61_000_000_000})
+        )
+        branch_dir.joinpath("latency.hdr").write_bytes(b"")
+
+    def hdr_summary(command, check):
+        Path(command[command.index("--output") + 1]).write_text(
+            json.dumps({"total_count": 60000, "p50_ns": 1, "p95_ns": 2, "p99_ns": 3, "p999_ns": 4})
+        )
+
+    monkeypatch.setattr(runner, "incomplete_run", lambda output, item: True)
+    monkeypatch.setattr(runner.subprocess, "run", hdr_summary)
+    item = RunItem(
+        experiment="e-iso-7",
+        condition="panic",
+        run_index=1,
+        config="eval/configs/e-iso-7/pipeline.toml",
+        warmup_secs=10,
+        measurement_secs=60,
+    )
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    summary = json.loads((tmp_path / "branch-isolation.json").read_text())
+    assert summary["condition"] == "panic"
+    assert summary["branches"]["branch_a"]["received_messages"] == 60000
+    assert (tmp_path / "measurement-window.json").is_file()
+
+
+def test_branch_isolation_is_not_written_when_a_branch_never_exported(
+    tmp_path: Path, monkeypatch
+) -> None:
+    (tmp_path / "metadata.json").write_text("{}")
+    (tmp_path / "branch-a").mkdir()
+    monkeypatch.setattr(runner, "incomplete_run", lambda output, item: True)
+    item = RunItem(
+        experiment="e-iso-7",
+        condition="panic",
+        run_index=1,
+        config="eval/configs/e-iso-7/pipeline.toml",
+        warmup_secs=10,
+        measurement_secs=60,
+    )
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    assert not (tmp_path / "branch-isolation.json").exists()
