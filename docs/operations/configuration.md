@@ -151,15 +151,18 @@ type   = "filter"
 plugin = "./plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm"
 
 [nodes.threshold.config]
-field     = "temperature"
-threshold = 40.0
+field = "temperature"
+min   = 0.0
+max   = 40.0
 
 [nodes.route]
 type   = "router"
 plugin = "./plugins/content-router/target/wasm32-wasip2/release/wafer_content_router.wasm"
 
 [nodes.route.config]
-field = "level"
+route_field  = "level"
+default_port = "log"
+routes       = { alert = "alert" }
 
 [nodes.alert-sink]
 type   = "sink"
@@ -261,6 +264,6 @@ The runtime has no standalone `--check` flag. Repository examples and evaluation
 
 ## Full example — telemetry gateway
 
-The snippets above combine into a working config; look at
-`examples/dag-mqtt.toml` for a version with realistic defaults and
-comments.
+For runnable filter and router configs see `examples/dag-filter.toml` and
+`examples/dag-fanout.toml`; `examples/dag-mqtt.toml` shows the MQTT source and
+sink settings.

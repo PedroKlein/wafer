@@ -6,6 +6,8 @@ Current method/reference documents:
 
 - `hot-swap.md`: final hot-swap measurement boundaries.
 - `ekuiper-comparator.md`: native eKuiper comparator configuration.
+- `ekuiper-profile-diagnostic.md`: diagnostic eKuiper tail-profiling batch
+  (GC trace and `/proc` sampling); never thesis evidence.
 - E-Backpressure is defined by `eval/RESULT-CONTRACT.md`: separate `slow`,
   `drop`, and `dead-letter` conditions use policy-specific equations and
   serialize dropped, dead-lettered, downstream-closed, DLQ-full, and DLQ-closed

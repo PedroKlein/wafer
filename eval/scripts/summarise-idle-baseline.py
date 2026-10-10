@@ -32,8 +32,6 @@ clip_to_window = power_module.clip_to_window
 load_telemetry = power_module.load_telemetry
 summarize_power = power_module.summarize_power
 
-BUSY_COLUMNS = ("user", "nice", "system", "iowait", "irq", "softirq", "steal")
-ALL_COLUMNS = (*BUSY_COLUMNS, "idle")
 MAX_IDLE_BUSY_FRACTION = 0.02
 
 
@@ -51,7 +49,12 @@ def parse_cpu_list(text: str) -> set[int]:
     return cpus
 
 
-def core_busy_fraction(cpu_cores: Path, cpus: set[int]) -> float | None:
+def core_busy_fraction(cpu_cores: Path, cpus: set[int], ticks_per_second: int) -> float | None:
+    """Share of the elapsed time the cores were not idle.
+
+    A tickless kernel counts idle time exactly but samples busy time on the scheduler
+    tick, so the jiffies do not add up to the elapsed time.
+    """
     first: dict[int, dict[str, int]] = {}
     last: dict[int, dict[str, int]] = {}
     with cpu_cores.open(newline="") as stream:
@@ -59,12 +62,13 @@ def core_busy_fraction(cpu_cores: Path, cpus: set[int]) -> float | None:
             cpu = int(row["cpu"])
             if cpus and cpu not in cpus:
                 continue
-            values = {column: int(row[column]) for column in ALL_COLUMNS}
+            values = {column: int(row[column]) for column in ("timestamp_ns", "idle")}
             first.setdefault(cpu, values)
             last[cpu] = values
-    busy = sum(last[cpu][c] - first[cpu][c] for cpu in first for c in BUSY_COLUMNS)
-    total = sum(last[cpu][c] - first[cpu][c] for cpu in first for c in ALL_COLUMNS)
-    return busy / total if total > 0 else None
+    idle = sum(last[cpu]["idle"] - first[cpu]["idle"] for cpu in first)
+    elapsed_ns = sum(last[cpu]["timestamp_ns"] - first[cpu]["timestamp_ns"] for cpu in first)
+    total = elapsed_ns / 1e9 * ticks_per_second
+    return 1 - idle / total if total > 0 else None
 
 
 def summarise_sample(sample: Path) -> dict[str, object]:
@@ -83,7 +87,9 @@ def summarise_sample(sample: Path) -> dict[str, object]:
         "mean_proxy_watts": power["mean_proxy_watts"],
         "max_temperature_c": power["max_temperature_c"],
         "throttled": power["throttled"],
-        "sut_core_busy_fraction": core_busy_fraction(sample / "cpu-cores.csv", sut_cpus),
+        "sut_core_busy_fraction": core_busy_fraction(
+            sample / "cpu-cores.csv", sut_cpus, sidecar["clock_ticks_per_second"]
+        ),
         "sampler_cpu_seconds": sidecar.get("sampler_cpu_seconds"),
     }
 

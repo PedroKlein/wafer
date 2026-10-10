@@ -44,7 +44,7 @@ schedule_records=2351
 measured_leaves=2121
 ```
 
-The 2,351 records include shared-result aliases with `independent_n_contribution=0`. The 2,121 measured-or-static leaves are the processes/static measurements that produce new evidence. These counts are the common schedule that every host shares. Each host's final batch adds its E-Perf-10 bracket rates (see [Run the host's capacity scout](#run-the-hosts-capacity-scout)): 120 leaves per rate, at most six rates, so at most 720 leaves. The `BRACKETS` line of a dry run with `--scout-batch-id`, and the batch's `batch.json`, give the host's own figure. Without `--scout-batch-id`, as above, the dry run prints the common schedule and a `NOTE` that `--execute` refuses to start that final batch. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+The 2,351 records include shared-result aliases with `independent_n_contribution=0`. The 2,121 measured-or-static leaves are the processes/static measurements that produce new evidence. These counts are the common schedule that every host shares. Each host's final batch adds its E-Perf-10 bracket rates (see [Run the host's capacity scout](#run-the-hosts-capacity-scout)): 120 leaves per rate, at most six rates, so at most 720 leaves. The `BRACKETS` line of a dry run with `--scout-batch-id`, and the batch's `batch.json`, give the host's own figure. Without `--scout-batch-id`, as above, the dry run prints the common schedule and a `NOTE` that `--execute` refuses to start that final batch. The deterministic schedule is written only during execution, under `$WAFER_RESULTS_ROOT/manifests/canonical-batches/rpi5-<batch-id>/schedule.json`.
 
 The current estimate is:
 
@@ -98,15 +98,18 @@ Deploy the verified commit with `./eval/scripts/deploy-pi5.sh --host USER@wafer-
 ./eval/ekuiper/smoke-test.sh
 ```
 
-Do not continue if preflight reports a dirty source, a non-performance governor, a failed CPU affinity or load-balancing check, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
+Do not continue if preflight reports any `FAIL`, or if its `deployed source state` line shows `git_dirty=true`. Preflight does not check free disk space; check the results root yourself before each batch (see [Set the host's results root](#set-the-hosts-results-root)).
 
 On x86, repeat the governor and minimum/maximum frequency pinning commands from
 [x86 host setup](x86-host-setup.md) after every boot. The performance governor alone
-does not pin the policy limits. Preflight checks current frequency while CPUs 1-3
-are busy; runtime admission checks that every online policy remains `performance`
-with equal minimum/maximum limits and that the hardware core/package throttle
-counters do not increase. Active-mode `intel_pstate` per-core `scaling_cur_freq` is
-retained as audit data, not used as an idle-core throttle verdict.
+does not pin the policy limits. Preflight requires `scaling_min_freq` and
+`scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3, read after its
+load-balancing probe has stopped. During a run, the telemetry sampler records
+throttling when an online policy leaves `performance` or no longer has equal
+minimum/maximum limits, or when a hardware core/package throttle counter
+increases, and the run then fails its contract verification. Active-mode
+`intel_pstate` per-core `scaling_cur_freq` is retained as audit data during a run,
+not used as an idle-core throttle verdict.
 
 Before the final batch, record the idle-power baseline once on the same host state (broker up, no pipeline):
 
@@ -123,6 +126,17 @@ Also measure what the host telemetry sidecars cost on the Pi:
 ```
 
 It runs six pairs of E-Perf-1 WAFER runs (the canonical 30 s warmup, 60 s measurement, 60,000 messages, same cpusets), one with the Pi and `/proc` sidecars on and one with them off (`WAFER_HOST_SIDECARS=off`), alternating which goes first and pausing 60 s between runs, with eKuiper stopped in both arms. `analyze-instrument-ab.py` writes `instrument-ab.json` with the paired on-minus-off differences of p50, p95, p99 and achieved rate and the `/proc` sampler's CPU share, and exits non-zero unless the median p95 and achieved-rate differences are within 5%, every run is lossless and the sampler used at most 1% of one core. The pairs are diagnostic and never pooled with the final batch. About 25 minutes of Pi time.
+
+## Set the host's results root
+
+Each host writes its batches to its own results root: a mounted filesystem, or a Linux bind mount whose exact path appears in `/proc/self/mountinfo`. The runner refuses an ordinary directory. On every host, set the root in the shell that runs the batch commands below and check its free space:
+
+```sh
+export WAFER_RESULTS_ROOT=<this host's mounted results root>
+df -h "$WAFER_RESULTS_ROOT"
+```
+
+On the Pi the root is the `WAF_RESULTS` volume at `/mnt/wafer-results` (see [Pi 5 host setup](pi5-host-setup.md#9-mount-the-results-root)). The runner writes each leaf under `raw/<experiment>/<host>-<batch-id>/` and each ledger under `manifests/` in that root; the [result contract](../../eval/RESULT-CONTRACT.md#path-convention) defines the layout. Without `WAFER_RESULTS_ROOT` or `--results-root`, the runner falls back to the repository-local `eval/results/`, which is for local tests only. Before each batch, the root needs the required free space from the estimate above. Raw evidence is append-only and keeps failed and interrupted attempts; do not edit anything under `raw/`.
 
 ## Re-check the eKuiper comparator before each batch
 
@@ -233,8 +247,8 @@ Candidate experiments run as their own batch with `--experiments candidates`. Th
 Monitor the batch ledger and telemetry without changing result files:
 
 ```sh
-tail -f eval/results/canonical-batches/rpi5-<batch-id>/progress.jsonl
-find eval/results -path "*rpi5-<batch-id>*" -name canonical-status.json -print
+tail -f "$WAFER_RESULTS_ROOT/manifests/canonical-batches/rpi5-<batch-id>/progress.jsonl"
+find "$WAFER_RESULTS_ROOT/raw" -path "*rpi5-<batch-id>*" -name canonical-status.json -print
 ```
 
 Stop the runner normally with SIGINT. Do not delete partial attempts. The runner records a system outcome and moves on; it does not stop for one. Stop admission immediately for:
@@ -249,15 +263,11 @@ Stop the runner normally with SIGINT. Do not delete partial attempts. The runner
 
 A threshold miss, a crash, or a containment escape by the system under test is data, not a reason to rerun the unit or to tune the threshold or system during the batch.
 
-## Move the single evidence volume between hosts
+## Bring the host results together
 
-V9 raw evidence has one physical copy on the exFAT volume labeled `WAF_RESULTS`. Mount it at `/mnt/wafer-results` on Pi or Jetson and `/Volumes/WAF_RESULTS` on macOS. Manifests contain paths relative to the volume root, never host-specific absolute paths.
+`approve-batch` and canonical analysis read every host's batch from one results root. On the analysis machine, mount or bind-mount one root and copy each host's `raw/` and `manifests/` trees into it once that host's runner has finished, keeping their relative paths. Batch, scout and alias directories carry the host tag (`<host>-<batch-id>`), so the trees of the three hosts do not collide. Copy files, not links: the layout rejects symlinks, hardlinked evidence and case-only name collisions. Set `WAFER_RESULTS_ROOT` to that root for the steps below.
 
-On the Pi, create the SHA-256 manifest under `manifests/` from volume-root-relative raw paths and verify it there. Then stop every writer, run `sync`, and unmount the volume cleanly. Do not unplug a mounted or busy volume, and do not edit anything under `raw/`.
-
-After physically moving the drive, mount the same filesystem on macOS and confirm its UUID and label. Verify the same manifest in place before analysis reads any file. Repeat checksum verification after every host transition, including a return to Pi or a later Jetson check. A failed checksum, unexpected file, missing file, stale mount, or unclean unmount blocks use of the evidence.
-
-Raw evidence is append-only and retains failed and interrupted attempts. Analysis opens `raw/` read-only and writes only to `derived/` and `reports/`. Do not use `rsync`, Finder, hardlinks, symlinks, or another disk to create a second raw copy. Receipts and content-free manifests may be committed to the repository; raw artifacts remain on `WAF_RESULTS`.
+Analysis opens `raw/` read-only and writes only to `derived/` and `reports/`. Receipts and content-free manifests may be committed to the repository; raw artifacts stay in the results roots.
 
 ## Verify contracts
 
@@ -265,18 +275,18 @@ Verify every retrieved experiment batch:
 
 ```sh
 python3 eval/scripts/verify-result-contract.py --canonical \
-  eval/results/<experiment>/rpi5-<batch-id>
+  "$WAFER_RESULTS_ROOT/raw/<experiment>/rpi5-<batch-id>"
 ```
 
 Then re-run matrix validation and compare the accepted run population with `schedule.json`. All required conditions must have the declared N; shared aliases must point to their declared source leaf.
 
 ## Approve the finished batch
 
-On the analysis machine, with the volume mounted and the repository at a commit with the same `eval/canonical-matrix.json`:
+On the analysis machine, with the combined results root mounted and the repository at a commit with the same `eval/canonical-matrix.json`:
 
 ```sh
-WAFER_RESULTS_ROOT=/Volumes/WAF_RESULTS \
-  mise run approve-batch -- --batch-id <batch-id> --host rpi5
+export WAFER_RESULTS_ROOT=<combined results root>
+mise run approve-batch -- --batch-id <batch-id> --host rpi5
 ```
 
 It refuses the batch unless all of these hold:
@@ -288,10 +298,10 @@ It refuses the batch unless all of these hold:
 - `e-val-1-gate.json` reports a pass;
 - every admitted leaf has the batch SHA, a clean tree, `throttled=0x0`, and no `thesis_evidence=false`.
 
-It then writes `raw.sha256` into the ledger. That file holds the SHA-256 of every file of the batch under `raw/`, its alias receipts, and its ledger, including the copy of the scout summary its bracket rates came from, with paths relative to the volume root. Check it at any time:
+It then writes `raw.sha256` into the ledger. That file holds the SHA-256 of every file of the batch under `raw/`, its alias receipts, and its ledger, including the copy of the scout summary its bracket rates came from, with paths relative to the results root. Check it at any time:
 
 ```sh
-cd /Volumes/WAF_RESULTS
+cd "$WAFER_RESULTS_ROOT"
 shasum -a 256 -c manifests/canonical-batches/rpi5-<batch-id>/raw.sha256   # sha256sum -c on Linux
 ```
 
@@ -302,9 +312,9 @@ It also records the batch in `eval/final-batches.json`: the batch ID, the WAFER 
 ```sh
 cd eval/analysis
 uv sync
+export WAFER_RESULTS_ROOT=<combined results root>
 export WAFER_EVAL_BATCH_ID=<batch-id>
 export WAFER_ANALYSIS_OUTPUT_DIR=figures/final-<batch-id>
-uv run pytest -q
 uv run jupyter nbconvert --execute --to notebook --output-dir /tmp \
   notebooks/09-saturation.ipynb
 ```

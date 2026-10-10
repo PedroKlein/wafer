@@ -32,12 +32,21 @@ Ask yourself:
 ```toml
 # Root Cargo.toml
 [workspace]
-members = ["crates/*"]
+resolver = "2"
+members = [
+  "crates/wafer-config",
+  "crates/wafer-core",
+  "crates/wafer-loadgen",
+  "crates/wafer-plugin",
+  "crates/wafer-runtime",
+  "crates/wafer-types",
+  "crates/waferctl",
+]
 exclude = ["plugins/*"]  # Plugins have their own target; don't include in workspace builds
 
 [workspace.package]
 edition = "2024"  # Edition 2024 (Rust 1.85+) — enables let chains, RPIT lifetime capture
-rust-version = "1.85"
+rust-version = "1.98"
 
 [workspace.dependencies]
 # Shared version pins — crates reference these with { workspace = true }
@@ -47,18 +56,25 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 
-# Wasmtime: pinned to git main for async Component Model fixes
-wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", features = ["component-model"] }
-wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime" }
-wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", features = ["onnx"] }
+# The post-#12379 revision preserves async Component Model stability while keeping
+# wasmtime-wasi-nn on its compatible ort release candidate.
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1" }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1" }
+wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1", features = [
+  "onnx",
+] }
+wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1", default-features = false, features = [
+  "p2",
+] }
 ```
 
 **Why `exclude = ["plugins/*"]`?** Plugins target `wasm32-wasip2`. Including them in the
 workspace means `cargo build --workspace` tries to build them for the host target and fails.
 Plugins are built separately via `mise run //plugins:build-plugins`.
 
-**Why git dependency for wasmtime?** The released crate often lags behind async Component Model
-fixes. Once wasmtime publishes a stable release with full async CM support, switch to crates.io.
+**Why a git rev pin for wasmtime?** The pinned revision keeps async Component Model stability
+and a wasmtime-wasi-nn build that matches its `ort` release candidate. Move all wasmtime crates
+together when changing the rev.
 
 ---
 
@@ -127,8 +143,7 @@ wit-bindgen = "0.53"  # Must match wasmtime's expected bindgen version
 [profile.release]
 opt-level = "s"       # Optimize for SIZE (plugins should be small)
 lto = true            # Link-time optimization (eliminates dead code)
-strip = true          # Remove debug info from .wasm
-codegen-units = 1     # Better optimization (slower compile)
+strip = "debuginfo"   # Remove debug info from .wasm
 ```
 
 ### Size Impact
@@ -147,14 +162,18 @@ codegen-units = 1     # Better optimization (slower compile)
 ```toml
 # wafer-core/Cargo.toml
 [features]
-default = []
-http-api = ["axum", "tower-http"]  # Control plane (optional for testing)
-cuda = ["ort/cuda"]                # GPU inference on Jetson
+default = ["ort-download"]
+http-api = ["axum", "tower-http", "prometheus-client", "sysinfo"]
+cuda = ["wasmtime-wasi-nn/onnx-cuda"]   # GPU inference on NVIDIA devices
+ort-download = ["ort/download-binaries"]
+test-support = []
 
 # wafer-runtime/Cargo.toml
 [features]
-default = ["http-api"]
-cuda = ["wafer-core/cuda"]         # Forward to core
+default = ["http-api", "ort-download"]
+http-api = ["wafer-core/http-api"]
+cuda = ["wafer-core/cuda"]              # Forward to core
+ort-download = ["wafer-core/ort-download"]
 ```
 
 **Rules:**

@@ -110,14 +110,14 @@ system resources) then exceeding with latency histograms:
 | Requirement | Source | Implementation |
 |-------------|--------|----------------|
 | Saturating load generator | eKuiper methodology | Dedicated Rust MQTT publisher (not JMeter) |
-| Warm-up period | Standard practice | 10s warm-up, 60s measurement window |
+| Warm-up period | Standard practice | Per experiment in `eval/canonical-matrix.json` (commonly 30 s warm-up, 60 s or 120 s measurement) |
 | Latency histograms (p50/p95/p99) | Missing from eKuiper | hdrhist crate (HdrHistogram) |
 | Per-node metrics | eKuiper StatManager | Prometheus labels: node_id, node_type |
 | System resource monitoring | eKuiper methodology | /proc/stat + /proc/self/status polling |
 | Nop sink for throughput isolation | eKuiper pattern | Sink that counts + drops messages |
 | Multiple pipeline depths | WAFER-specific | 1-node, 3-node, 5-node, 10-node chains |
 | Hardware spec documentation | Standard | Exact model, kernel version, governor (performance) |
-| N≥30 repetitions | Thesis stats requirement | Bootstrap CI95 |
+| Matrix repetitions (30 for most experiments) | Thesis stats requirement | Bootstrap CI95 |
 
 The RQ1 criteria (matched-load p95 ratio, delivery-ceiling ratio, the 50 µs per-hop reference) are defined in `tcc-doc/research/analysis/thesis-statement-v3.md`; do not restate them from memory.
 
@@ -246,14 +246,18 @@ Use loom for proof of correctness, stress tests for confidence on real hardware.
 ## Test Organization
 
 ```
-crates/wafer-core/src/     # Unit tests inline (mod tests)
-tests/                     # Integration tests (full pipeline)
-  fixtures/                # TOML configs, test data
-  integration.rs
-  mqtt_integration.rs      # Needs broker (MQTT_TEST_BROKER env var)
-benches/                   # Criterion benchmarks
-  transform_throughput.rs  # WASM vs native latency (thesis RQ1)
-  pipeline_throughput.rs   # End-to-end pipeline (thesis RQ3)
+crates/*/src/                  # Unit tests inline (mod tests)
+crates/*/tests/                # Integration tests, one file per behavior
+  (e.g. wafer-core/tests/hotswap_success.rs, attack_containment.rs,
+   mqtt_source_reconnect.rs; wafer-runtime/tests/runtime_control_plane.rs)
+crates/wafer-core/tests/fixtures/     # Prebuilt component fixtures
+crates/wafer-core/benches/     # Criterion benchmarks
+  hot_path.rs
+  hot_swap.rs
+  metrics.rs
+  native_vs_wasm.rs            # WASM vs native cost (thesis RQ1)
+  overhead_of_memory_sampling.rs
+  throughput.rs
 ```
 
 ---

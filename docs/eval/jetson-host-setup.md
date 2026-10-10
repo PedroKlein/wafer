@@ -50,6 +50,13 @@ watts.
 
 ## Running a batch
 
+Set `WAFER_RESULTS_ROOT` to this host's own mounted or bind-mounted results root
+before any batch command, as the
+[runbook](pi5-experiment-runbook.md#set-the-hosts-results-root) describes.
+Approval and analysis read the batch from one root on the analysis machine that
+holds every host's copied results
+([runbook](pi5-experiment-runbook.md#bring-the-host-results-together)).
+
 Before each batch on this host, re-check the eKuiper comparator as the
 [runbook](pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch)
 describes, with `--host jetson`.

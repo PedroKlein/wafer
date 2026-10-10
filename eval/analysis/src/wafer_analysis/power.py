@@ -28,6 +28,11 @@ def measurement_label(leaf: Path) -> str:
 
 
 def load_telemetry(path: Path) -> list[dict[str, float | int | str]]:
+    """The samples of a leaf's `pi-telemetry.csv`, in the power quantity the leaf declares.
+
+    On x86 `rail_proxy_watts` adds every top-level RAPL zone, and `psys` already contains
+    the package, so an x86 leaf takes its watts from the package rows of `pmic-rails.csv`.
+    """
     with path.open(newline="") as stream:
         rows = []
         for row in csv.DictReader(stream):
@@ -41,7 +46,26 @@ def load_telemetry(path: Path) -> list[dict[str, float | int | str]]:
                     "rail_proxy_watts": float(row["rail_proxy_watts"]),
                 }
             )
+    leaf = path.parent
+    x86 = MEASUREMENT_LABELS["x86-rapl-package-energy"]
+    if (leaf / "power-boundary.json").is_file() and measurement_label(leaf) == x86:
+        package = _package_watts(leaf / "pmic-rails.csv")
+        rows = [
+            {**row, "rail_proxy_watts": package[row["timestamp_ns"]]}
+            for row in rows
+            if row["timestamp_ns"] in package
+        ]
     return rows
+
+
+def _package_watts(path: Path) -> dict[int, float]:
+    watts: dict[int, float] = {}
+    with path.open(newline="") as stream:
+        for row in csv.DictReader(stream):
+            if row["rail"].startswith("package"):
+                timestamp_ns = int(row["timestamp_ns"])
+                watts[timestamp_ns] = watts.get(timestamp_ns, 0.0) + float(row["power_w"])
+    return watts
 
 
 def clip_to_window(

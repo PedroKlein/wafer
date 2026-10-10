@@ -71,7 +71,7 @@ Both are O(V+E). **Kahn's is preferred for pipelines** because:
 - DFS post-order produces less intuitive interleaving (deep chain finished before shallow sibling)
 
 petgraph's `toposort()` uses DFS-based ordering. For WAFER, this is acceptable because
-the topo order is used for init/shutdown sequencing, not for explaining the pipeline to users.
+the topo order is retained for structural queries; startup and shutdown do not follow it.
 
 **Key insight**: Toposort IS your cycle detection. It returns `Err(Cycle(node))` if any
 cycle exists. A separate `has_cycle()` call is redundant computation.
@@ -153,13 +153,7 @@ One slow WASM plugin must not starve others. Isolation mechanisms:
 
 ## Port-Based Edge Addressing
 
-Edges use `"node_id:port_name"` format with default port `"default"`:
-
-```rust
-fn parse_node_port(key: &str) -> (&str, &str) {
-    key.split_once(':').unwrap_or((key, "default"))
-}
-```
+Edges have `from`, `to` and an optional `port` (required only on edges leaving a Router).
 
 ### Fan-Out (Router)
 ```toml
