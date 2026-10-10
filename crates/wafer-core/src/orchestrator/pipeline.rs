@@ -33,6 +33,11 @@ use crate::runner::{DownstreamSender, TrackedReceiver, send_downstream};
 use crate::runner::{HotSwapProgress, SwapPayload};
 use wafer_types::NodeState;
 
+/// Outgoing packet limit of the MQTT dead-letter client. A record carries the
+/// message base64-encoded inside JSON, so it is a third larger than the
+/// largest message the runtime accepts, plus room for the record's fields.
+const DLQ_MQTT_MAX_PACKET_BYTES: usize = MQTT_MAX_PACKET_BYTES * 4 / 3 + 64 * 1024;
+
 /// Default timeout for graceful shutdown (waiting for tasks to exit).
 ///
 /// Kept well below the stop deadlines of the evaluation scripts
@@ -1014,7 +1019,7 @@ async fn run_dlq_sink(
         crate::config::DeadLetterConfig::Mqtt { broker, port, topic, tls, auth, .. } => {
             let mut options = rumqttc::MqttOptions::new("wafer-dlq", broker, port);
             options.set_keep_alive(Duration::from_secs(30));
-            options.set_max_packet_size(MQTT_MAX_PACKET_BYTES, MQTT_MAX_PACKET_BYTES);
+            options.set_max_packet_size(MQTT_MAX_PACKET_BYTES, DLQ_MQTT_MAX_PACKET_BYTES);
             if let Some(auth) = auth {
                 options.set_credentials(auth.username, auth.password);
             }
@@ -1137,6 +1142,21 @@ mod tests {
             capacity: None,
             overflow: None,
         }
+    }
+
+    #[test]
+    fn dlq_mqtt_packet_limit_fits_a_record_of_the_largest_message() {
+        let mut envelope = dlq_test_envelope("");
+        envelope.original.payload = bytes::Bytes::from(vec![0xff; MQTT_MAX_PACKET_BYTES]);
+        let record = envelope.to_json_bytes().expect("record serializes");
+        // Fixed header, packet id and a generous topic.
+        let packet = record.len() + 5 + 2 + 2 + 256;
+
+        assert!(record.len() > MQTT_MAX_PACKET_BYTES, "the record outgrows the message");
+        assert!(
+            packet <= DLQ_MQTT_MAX_PACKET_BYTES,
+            "{packet} bytes exceed the DLQ limit of {DLQ_MQTT_MAX_PACKET_BYTES}"
+        );
     }
 
     fn dlq_test_envelope(payload: &str) -> DlqEnvelope {
