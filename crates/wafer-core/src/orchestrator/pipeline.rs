@@ -1097,6 +1097,9 @@ fn write_dlq_file(
         })?;
         line.push(b'\n');
         writer.write_all(&line)?;
+        if receiver.is_empty() {
+            writer.flush()?;
+        }
         if last_sync.elapsed() >= DLQ_SYNC_INTERVAL {
             writer.flush()?;
             writer.get_ref().sync_data()?;
@@ -1342,6 +1345,29 @@ mod tests {
             lines = std::fs::read_to_string(&path).map_or(0, |text| text.lines().count());
         }
         assert_eq!(lines, 2, "records written a sync interval apart must reach the file");
+
+        drop(tx);
+        sink.await.expect("sink task").expect("file DLQ must persist every record");
+    }
+
+    #[tokio::test]
+    async fn file_dlq_writes_a_lone_record_without_waiting_for_more() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dlq.jsonl");
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let sink = tokio::spawn(run_dlq_sink(
+            rx,
+            DeadLetterConfig::File { path: path.to_string_lossy().into_owned(), queue_capacity: 2 },
+        ));
+        tx.send(dlq_test_envelope("only")).await.expect("DLQ record");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut lines = 0;
+        while lines < 1 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            lines = std::fs::read_to_string(&path).map_or(0, |text| text.lines().count());
+        }
+        assert_eq!(lines, 1, "a record must reach the file while the sender stays open");
 
         drop(tx);
         sink.await.expect("sink task").expect("file DLQ must persist every record");
