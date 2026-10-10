@@ -29,6 +29,7 @@ use clap::{Parser, ValueEnum};
 use tokio::signal;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::level_filters::LevelFilter;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -69,6 +70,10 @@ impl std::fmt::Display for ConfigInvalid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("invalid configuration")
     }
+}
+
+fn log_filter(directives: &str) -> EnvFilter {
+    EnvFilter::builder().with_default_directive(LevelFilter::INFO.into()).parse_lossy(directives)
 }
 
 /// Map a startup error to its exit code: configuration errors (from loading,
@@ -182,7 +187,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     let args = Args::parse();
 
     // Initialize tracing
-    let env_filter = EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into());
+    let env_filter = log_filter(&std::env::var(EnvFilter::DEFAULT_ENV).unwrap_or_default());
     match args.log_format {
         LogFormat::Pretty => {
             tracing_subscriber::registry().with(fmt::layer()).with(env_filter).init();
@@ -924,5 +929,44 @@ impl ShutdownSignals {
             std::future::pending::<()>().await;
         }
         130
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing::Level;
+
+    fn debug_enabled(directives: &str) -> bool {
+        let subscriber = tracing_subscriber::registry().with(log_filter(directives));
+        tracing::subscriber::with_default(subscriber, || tracing::enabled!(Level::DEBUG))
+    }
+
+    fn info_enabled(directives: &str) -> bool {
+        let subscriber = tracing_subscriber::registry().with(log_filter(directives));
+        tracing::subscriber::with_default(subscriber, || tracing::enabled!(Level::INFO))
+    }
+
+    #[test]
+    fn log_filter_defaults_to_info() {
+        assert!(info_enabled(""));
+        assert!(!debug_enabled(""));
+    }
+
+    #[test]
+    fn log_filter_honours_bare_levels() {
+        assert!(debug_enabled("debug"));
+        assert!(debug_enabled("trace"));
+        assert!(!info_enabled("off"));
+        assert!(!info_enabled("warn"));
+    }
+
+    #[test]
+    fn log_filter_honours_targeted_directives() {
+        let subscriber = tracing_subscriber::registry().with(log_filter("wafer_core=debug"));
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(tracing::enabled!(target: "wafer_core::node", Level::DEBUG));
+            assert!(!tracing::enabled!(target: "wasmtime", Level::DEBUG));
+        });
     }
 }
