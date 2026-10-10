@@ -80,6 +80,10 @@ CANDIDATE_SCALING_EXPERIMENTS = {
     "e-perf-depth-extension",
 }
 DLQ_CONTAINMENT_EXPERIMENTS = {f"e-iso-{index}" for index in range(1, 7)}
+# MAX_RECOVERY_SAMPLES in crates/wafer-core/src/node/metrics.rs.
+RECOVERY_SAMPLE_CAP = 262_144
+# The cap before 262,144; leaves recorded under it hold exactly this many rows.
+LEGACY_RECOVERY_SAMPLE_CAP = 65_536
 CANDIDATE_SWAP_EXPERIMENTS = {
     "e-swap-independent-sessions",
     "e-swap-rollback-sessions",
@@ -2304,6 +2308,8 @@ def check_leaf(
         containment = _load_json(leaf / "containment.json", "containment.json", violations)
         if containment is not None:
             violations.extend(check_dlq_evidence(leaf, containment))
+    if "per_node_metrics.csv" in files:
+        violations.extend(check_recovery_samples(leaf))
     if experiment == "e-perf-10":
         for historical in ("rate-sweep.json", "published.csv", "received.csv"):
             if historical in files:
@@ -2407,6 +2413,34 @@ def check_dlq_evidence(leaf: Path, containment: dict) -> list[str]:
     if records != sent:
         return [f"dlq.jsonl holds {records} records but nodes sent {sent} to the dead-letter queue"]
     return []
+
+
+def check_recovery_samples(leaf: Path) -> list[str]:
+    """recovery.csv must hold one row per recovery a node counted, up to the runtime's cap."""
+    recovery_path = leaf / "recovery.csv"
+    try:
+        with (leaf / "per_node_metrics.csv").open(newline="", encoding="utf-8") as stream:
+            counts = {
+                row["node_id"]: int(row["recovery_count"])
+                for row in csv.DictReader(stream)
+                if row.get("node_id") and not row["node_id"].startswith("#")
+            }
+        samples: dict[str, int] = {}
+        if recovery_path.is_file():
+            with recovery_path.open(newline="", encoding="utf-8") as stream:
+                for row in csv.DictReader(stream):
+                    samples[row["node_id"]] = samples.get(row["node_id"], 0) + 1
+    except (OSError, KeyError, TypeError, ValueError):
+        return ["per_node_metrics.csv recovery_count or recovery.csv is unreadable"]
+    return [
+        f"recovery.csv holds {samples.get(node_id, 0)} samples for {node_id} "
+        f"but per_node_metrics.csv counts {count} recoveries"
+        for node_id, count in sorted(counts.items())
+        if count <= RECOVERY_SAMPLE_CAP
+        and samples.get(node_id, 0) != count
+        and not (count > LEGACY_RECOVERY_SAMPLE_CAP
+                 and samples.get(node_id, 0) == LEGACY_RECOVERY_SAMPLE_CAP)
+    ]
 
 
 def main() -> int:
