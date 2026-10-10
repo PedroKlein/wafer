@@ -5947,6 +5947,18 @@ def static_host_metadata(facts: dict) -> dict:
     return metadata
 
 
+def binary_size_plugins(path: Path) -> list[str]:
+    with path.open(newline="") as stream:
+        rows = list(csv.reader(stream))
+    if not rows:
+        raise RuntimeError(f"{path} is empty")
+    for line, row in enumerate(rows[1:], start=2):
+        if len(row) != len(rows[0]):
+            raise RuntimeError(f"{path}:{line} has {len(row)} fields, expected {len(rows[0])}: {row!r}")
+    column = rows[0].index("plugin")
+    return [row[column] for row in rows[1:]]
+
+
 def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> bool:
     output = selection.path
     output.mkdir(parents=True, exist_ok=True)
@@ -5976,8 +5988,7 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
             for line in (root / "eval/scripts/binary-sizes.index").read_text().splitlines()
             if line and not line.startswith("#")
         ]
-        with (output / "binary-sizes.csv").open(newline="") as stream:
-            actual_plugins = [row["plugin"] for row in csv.DictReader(stream)]
+        actual_plugins = binary_size_plugins(output / "binary-sizes.csv")
         if actual_plugins != expected_plugins:
             raise RuntimeError(
                 f"binary-size population differs from index: {actual_plugins!r} != {expected_plugins!r}"
