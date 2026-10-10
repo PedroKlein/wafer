@@ -27,6 +27,8 @@ waferctl nodes
 waferctl node passthrough
 ```
 
+`waferctl status`, `waferctl nodes` and `waferctl node` currently fail with a parse error against the runtime API, and a successful `waferctl hot-swap` is reported as an error even though the runtime applied it. The client expects field names (`swappable`, `status`) that the runtime responses do not send (#193).
+
 ## Configuration
 
 waferctl reads endpoints from `<config dir>/wafer/config.toml` (`~/.config/wafer/config.toml` on Linux) or uses `http://127.0.0.1:9090` by default.
@@ -106,6 +108,8 @@ waferctl metrics
 ```
 
 ## Output Formats
+
+The samples below show the intended output. Until #193 is fixed, `status`, `nodes`, `node` and a successful `hot-swap` behave as described under Quick Start.
 
 ### Human-Readable (Default)
 
