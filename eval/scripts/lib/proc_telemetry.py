@@ -212,6 +212,23 @@ class ProcessTracker:
         return sorted(pid for pid, comm in self.known.items() if comm is not None)
 
 
+def thread_context_switches(pid: int) -> dict[str, int] | None:
+    """/proc/<pid>/status counts only the thread-group leader, so sum every task."""
+    try:
+        tids = os.listdir(PROC / str(pid) / "task")
+    except OSError:
+        return None
+    totals = {"voluntary_ctxt_switches": 0, "nonvoluntary_ctxt_switches": 0}
+    for tid in tids:
+        text = read_text(PROC / str(pid) / "task" / tid / "status")
+        if text is None:
+            continue
+        status = parse_pid_status(text)
+        for key in totals:
+            totals[key] += int(status[key])
+    return totals
+
+
 def sample_processes(tracker: ProcessTracker, page_size: int) -> list[dict[str, int | str]]:
     rows = []
     for pid in tracker.tracked_pids():
@@ -221,6 +238,9 @@ def sample_processes(tracker: ProcessTracker, page_size: int) -> list[dict[str, 
             continue
         stat = parse_pid_stat(stat_text)
         status = parse_pid_status(status_text)
+        switches = thread_context_switches(pid)
+        if switches is not None:
+            status.update(switches)
         rows.append(
             {
                 "pid": pid,

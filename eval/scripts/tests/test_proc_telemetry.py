@@ -155,3 +155,26 @@ def test_sampler_records_a_failure_instead_of_dying_silently(tmp_path: Path) -> 
     assert proc_telemetry.run(tmp_path / "leaf", 0.1, "not-a-cpu-list", "") == 1
     error = json.loads((tmp_path / "leaf" / "host-sidecar-error.json").read_text())
     assert error["error"].startswith("ValueError")
+
+
+def test_context_switches_are_summed_over_threads(tmp_path: Path, monkeypatch) -> None:
+    import proc_telemetry
+
+    fake_proc = tmp_path / "proc"
+    pid_dir = fake_proc / "42"
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "comm").write_text("wafer\n")
+    (pid_dir / "stat").write_text(PID_STAT.replace("4242 (wafer load gen)", "42 (wafer)"))
+    (pid_dir / "status").write_text(PID_STATUS)
+    for tid, voluntary, nonvoluntary in [("42", 17, 3), ("43", 100, 7), ("44", 5, 1)]:
+        (pid_dir / "task" / tid).mkdir(parents=True)
+        (pid_dir / "task" / tid / "status").write_text(
+            f"voluntary_ctxt_switches:\t{voluntary}\nnonvoluntary_ctxt_switches:\t{nonvoluntary}\n"
+        )
+    (pid_dir / "task" / "45").mkdir()
+    monkeypatch.setattr(proc_telemetry, "PROC", fake_proc)
+    rows = proc_telemetry.sample_processes(proc_telemetry.ProcessTracker(), 4096)
+    assert len(rows) == 1
+    assert rows[0]["voluntary_ctxt_switches"] == 122
+    assert rows[0]["nonvoluntary_ctxt_switches"] == 11
+    assert rows[0]["cpus_allowed_list"] == "1-3"
