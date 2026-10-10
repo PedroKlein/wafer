@@ -305,6 +305,25 @@ def test_recovery_samples_are_not_checked_past_the_runtime_cap(tmp_path: Path) -
     assert CONTRACT.check_recovery_samples(leaf) == []
 
 
+def test_runtime_stub_per_node_metrics_is_not_a_recovery_violation(tmp_path: Path) -> None:
+    leaf = tmp_path / "run-01"
+    leaf.mkdir()
+    (leaf / "per_node_metrics.csv").write_text(
+        "node_id,messages_in,recovery_count\n"
+        "# per_node_metrics.csv: runtime did not emit (SIGKILL or endpoint disabled). "
+        "See stdout.log.\n"
+    )
+
+    assert CONTRACT.check_recovery_samples(leaf) == []
+
+
+def test_recovery_samples_truncated_by_the_old_cap_are_accepted(tmp_path: Path) -> None:
+    leaf = tmp_path / "run-01"
+    write_recovery_evidence(leaf, 90_000, CONTRACT.LEGACY_RECOVERY_SAMPLE_CAP)
+
+    assert CONTRACT.check_recovery_samples(leaf) == []
+
+
 def test_missing_recovery_csv_is_rejected_when_nodes_recovered(tmp_path: Path) -> None:
     leaf = tmp_path / "run-01"
     write_recovery_evidence(leaf, 1, 0)

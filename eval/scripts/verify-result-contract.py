@@ -82,6 +82,8 @@ CANDIDATE_SCALING_EXPERIMENTS = {
 DLQ_CONTAINMENT_EXPERIMENTS = {f"e-iso-{index}" for index in range(1, 7)}
 # MAX_RECOVERY_SAMPLES in crates/wafer-core/src/node/metrics.rs.
 RECOVERY_SAMPLE_CAP = 262_144
+# The cap before 262,144; leaves recorded under it hold exactly this many rows.
+LEGACY_RECOVERY_SAMPLE_CAP = 65_536
 CANDIDATE_SWAP_EXPERIMENTS = {
     "e-swap-independent-sessions",
     "e-swap-rollback-sessions",
@@ -2418,7 +2420,11 @@ def check_recovery_samples(leaf: Path) -> list[str]:
     recovery_path = leaf / "recovery.csv"
     try:
         with (leaf / "per_node_metrics.csv").open(newline="", encoding="utf-8") as stream:
-            counts = {row["node_id"]: int(row["recovery_count"]) for row in csv.DictReader(stream)}
+            counts = {
+                row["node_id"]: int(row["recovery_count"])
+                for row in csv.DictReader(stream)
+                if row.get("node_id") and not row["node_id"].startswith("#")
+            }
         samples: dict[str, int] = {}
         if recovery_path.is_file():
             with recovery_path.open(newline="", encoding="utf-8") as stream:
@@ -2430,7 +2436,10 @@ def check_recovery_samples(leaf: Path) -> list[str]:
         f"recovery.csv holds {samples.get(node_id, 0)} samples for {node_id} "
         f"but per_node_metrics.csv counts {count} recoveries"
         for node_id, count in sorted(counts.items())
-        if count <= RECOVERY_SAMPLE_CAP and samples.get(node_id, 0) != count
+        if count <= RECOVERY_SAMPLE_CAP
+        and samples.get(node_id, 0) != count
+        and not (count > LEGACY_RECOVERY_SAMPLE_CAP
+                 and samples.get(node_id, 0) == LEGACY_RECOVERY_SAMPLE_CAP)
     ]
 
 
