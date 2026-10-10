@@ -138,6 +138,7 @@ cp "$ROOT/eval/scripts/lib/host_facts.py" "$harness_root/eval/scripts/lib/host_f
 cp "$ROOT/eval/scripts/lib/pi_telemetry.py" "$harness_root/eval/scripts/lib/pi_telemetry.py"
 cp "$ROOT/eval/scripts/lib/proc_telemetry.py" "$harness_root/eval/scripts/lib/proc_telemetry.py"
 cp "$ROOT/eval/scripts/lib/interval_metrics.py" "$harness_root/eval/scripts/lib/interval_metrics.py"
+cp "$ROOT/eval/scripts/lib/page_cache.py" "$harness_root/eval/scripts/lib/page_cache.py"
 cat >"$harness_root/eval/startup.toml" <<'TOML'
 [pipeline]
 name = "startup-test"
@@ -146,14 +147,24 @@ name = "startup-test"
 type = "source"
 kind = "bench-source"
 
+[nodes.t1]
+type = "transform"
+plugin = "plugins/startup.wasm"
+
 [nodes.sink]
 type = "sink"
 kind = "bench-sink"
 
 [[edges]]
 from = "source"
+to = "t1"
+
+[[edges]]
+from = "t1"
 to = "sink"
 TOML
+mkdir -p "$harness_root/eval/plugins"
+head -c 10000 /dev/zero >"$harness_root/eval/plugins/startup.wasm"
 cat >"$harness_root/target/release/wafer" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -221,11 +232,21 @@ preparation = json.load(open(sys.argv[2]))
 startup = json.load(open(sys.argv[3]))
 assert metadata["exit_codes"]["wafer_runtime"] == 0
 assert metadata["duration_ns"] < 500_000_000, metadata["duration_ns"]
+residency = preparation.pop("page_cache_residency")
 assert preparation == {
     "cache_state": "warm",
     "action": "none",
     "completed_before_timing": True,
 }
+assert set(residency) == {"runtime_binary", "config", "plugins"}
+assert residency["runtime_binary"]["path"].endswith("/target/release/wafer")
+assert residency["config"]["path"].endswith("/eval/startup.toml")
+[plugin] = residency["plugins"]
+assert plugin["path"].endswith("/eval/plugins/startup.wasm"), plugin
+if sys.platform.startswith("linux"):
+    import mmap
+    assert plugin["total_pages"] == -(-10000 // mmap.PAGESIZE), plugin
+    assert 0 <= plugin["resident_pages"] <= plugin["total_pages"], plugin
 assert startup["cache_state"] == "warm"
 assert startup["cache_preparation"] == {
     "action": "none",
@@ -255,7 +276,9 @@ ORDER_LOG="$tmp/cold-order.log" PATH="$tmp/bin:$PATH" \
 python3 - "$tmp/startup-cold-result/startup-preparation.json" <<'PY'
 import json
 import sys
-assert json.load(open(sys.argv[1])) == {
+preparation = json.load(open(sys.argv[1]))
+assert set(preparation.pop("page_cache_residency")) == {"runtime_binary", "config", "plugins"}
+assert preparation == {
     "cache_state": "cold",
     "action": "drop-linux-page-cache",
     "completed_before_timing": True,

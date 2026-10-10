@@ -424,7 +424,18 @@ _stop_mem_sampler() {
     :
 }
 
+STARTED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+started_ns=$(python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1e9')
+
 if [ "$experiment" = "e-perf-9" ]; then
+    startup_plugins=()
+    config_dir="$(cd "$(dirname "$config")" && pwd)"
+    while IFS= read -r plugin; do
+        case "$plugin" in
+            /*) startup_plugins+=("$plugin") ;;
+            *) startup_plugins+=("$config_dir/$plugin") ;;
+        esac
+    done < <(sed -n 's/^[[:space:]]*plugin[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$config")
     startup_preparation="none"
     if [ "$startup_cache_state" = "cold" ]; then
         startup_preparation="drop-linux-page-cache"
@@ -438,16 +449,20 @@ if [ "$experiment" = "e-perf-9" ]; then
     _log "startup preparation: cache_state=$startup_cache_state action=$startup_preparation"
 fi
 
-STARTED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-started_ns=$(python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1e9')
-
 runtime_cmd=("$WAFER_RUNTIME_BIN" --config "$config")
 if [ -n "${WAFER_RUNTIME_CPUSET:-}" ]; then
     command -v taskset >/dev/null 2>&1 || { _log "taskset is required for WAFER_RUNTIME_CPUSET"; exit 4; }
     runtime_cmd=(taskset -c "$WAFER_RUNTIME_CPUSET" "${runtime_cmd[@]}")
 fi
 _log "launching wafer-runtime: ${runtime_cmd[*]}"
-runtime_started_ns=$(python3 -c 'import time; print(time.time_ns())')
+if [ "$experiment" = "e-perf-9" ]; then
+    runtime_started_ns=$(python3 "$REPO_ROOT/eval/scripts/lib/page_cache.py" \
+        "$OUT_DIR/startup-preparation.json" "$WAFER_RUNTIME_BIN" "$config" \
+        ${startup_plugins[@]+"${startup_plugins[@]}"})
+    started_ns="$runtime_started_ns"
+else
+    runtime_started_ns=$(python3 -c 'import time; print(time.time_ns())')
+fi
 "${runtime_cmd[@]}" >"$OUT_DIR/stdout.log" 2>&1 &
 RUNTIME_PID=$!
 _log "wafer-runtime pid=$RUNTIME_PID"
