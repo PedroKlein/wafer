@@ -31,6 +31,10 @@ pub use traits::{
     RouteOutcome, RouteResult, Router, Transform,
 };
 
+/// MQTT packet limit for the runtime's clients. rumqttc's 10 KiB default
+/// drops the connection on any larger PUBLISH.
+pub(crate) const MQTT_MAX_PACKET_BYTES: usize = 1024 * 1024;
+
 use crate::error::Result;
 use std::fmt;
 use std::sync::Arc;

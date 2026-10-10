@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::error::{ConfigError, Result, WaferError};
-use crate::node::Lifecycle;
+use crate::node::{Lifecycle, MQTT_MAX_PACKET_BYTES};
 use crate::queue::RuntimeEnvelope;
 
 use super::Source;
@@ -173,6 +173,7 @@ impl Lifecycle for MqttSource {
         Box::pin(async move {
             let mut options = MqttOptions::new(&self.client_id, &self.broker, self.port);
             options.set_keep_alive(std::time::Duration::from_secs(30));
+            options.set_max_packet_size(MQTT_MAX_PACKET_BYTES, MQTT_MAX_PACKET_BYTES);
 
             let (client, eventloop) = AsyncClient::new(options, 10);
             let subscription = Subscription {

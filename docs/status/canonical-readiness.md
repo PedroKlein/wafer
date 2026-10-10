@@ -32,7 +32,7 @@ No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, an
 - E-Perf-1 is a matched 1,000 msg/s operating point, not capacity.
 - E-Perf-10 brackets each delivery ceiling between tested rates without interpolation. A delivery-bad MQTT loopback point censors higher SUT-only claims; a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - Pipeline A is `MQTT source -> threshold filter -> MQTT sink`.
-- E-Perf-4 payload results describe the in-process path only. The MQTT adapters keep rumqttc's 10 KiB packet limit, so no MQTT payload result is claimed.
+- E-Perf-4 payload results describe the in-process path only. The runtime that produced the final runs kept rumqttc's 10 KiB packet limit on its MQTT adapters, so no MQTT payload result is claimed; the adapters now accept packets up to 1 MiB.
 - Hot-swap is stateless.
 - The E-Density-1 container floor is one measured `FROM scratch` image of a Rust pass-through worker, not an image per plugin.
 - PMIC telemetry is an internal-rail proxy, not total board power.
