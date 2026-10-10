@@ -5952,7 +5952,8 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
     output.mkdir(parents=True, exist_ok=True)
     print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
     telemetry: list[subprocess.Popen] | None = None
-    started_ns = time.monotonic_ns()
+    started_ns = time.time_ns()
+    started_monotonic_ns = time.monotonic_ns()
     started_at = utc_now()
     try:
         (output / "config.toml").write_text(
@@ -6000,7 +6001,8 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
             check=True,
         )
         facts = json.loads(facts_path.read_text())
-        finished_ns = time.monotonic_ns()
+        finished_ns = time.time_ns()
+        finished_monotonic_ns = time.monotonic_ns()
         (output / "measurement-window.json").write_text(
             json.dumps({"started_ns": started_ns, "finished_ns": finished_ns}, indent=2)
             + "\n"
@@ -6014,7 +6016,7 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
             "host_tag": HOST.tag,
             "generated_at": utc_now(),
             "started_at": started_at,
-            "duration_ns": finished_ns - started_ns,
+            "duration_ns": finished_monotonic_ns - started_monotonic_ns,
             **static_host_metadata(facts),
             "exit_codes": {"collector": 0},
             "plugin_count": len(actual_plugins),
