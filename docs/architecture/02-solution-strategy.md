@@ -66,7 +66,7 @@ Fan-in (multiple upstream edges converging on one downstream node) is expressed 
 Why this matters strategically:
 
 - **Zero runtime cost.** A merge adds no task, no Wasm call, no fuel consumption, and no per-message allocation beyond the channel capacity already provisioned for the downstream node.
-- **Reduced WIT surface.** The world set stays at three user-facing worlds (`transform-node`, `filter-node`, `router-node`) rather than four. Less surface means fewer bindgen modules, fewer runner-loop variants, and fewer hot-swap paths.
+- **Reduced WIT surface.** There is no merge world. The worlds are `transform-node`, `filter-node`, `router-node`, and the capability-gated `inference-node` variant of Transform. Less surface means fewer bindgen modules, fewer runner-loop variants, and fewer hot-swap paths.
 - **Backpressure is automatic.** All upstream paths share the same bounded channel. If the downstream node stalls, every upstream sender blocks (or overflows per its configured `OverflowPolicy`). No merge-specific backpressure logic required.
 
 The trade-off is that merge provides no ordering guarantees across branches — messages arrive in tokio scheduling order. If deterministic ordering is needed, the downstream plugin must sort internally.

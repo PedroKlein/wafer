@@ -68,9 +68,10 @@ record output-message {
 
 A Transform owns all six output fields. The host preserves the guest-provided
 id, timestamp, source, content type, metadata, and payload when lifting the
-result. Host lineage and retry state remain separate fields on
-`RuntimeEnvelope` and are inherited from the input rather than exposed to the
-guest.
+result. Host lineage and benchmark stamps are host-only data on
+`RuntimeEnvelope`; they are inherited from the input and never exposed to the
+guest. The output's `retry_count` starts at zero, because retries are budgeted
+per node.
 
 ### `variant process-error`
 

@@ -65,6 +65,13 @@ printf 'hello wafer\n' | mise run run examples/dag-uppercase.toml
 The example loads this pipeline:
 
 ```toml
+[engine]
+default_queue_capacity = 1024
+
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "stdin"

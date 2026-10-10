@@ -2,8 +2,8 @@
 
 Python modules shared by the harness entry points in `eval/scripts/`. They
 are plain scripts on `sys.path`, not an installed package; the runner also
-imports `backpressure`, `rollback` and `results_layout` from
-`eval/analysis/src/wafer_analysis` the same way.
+imports `attempts`, `backpressure`, `capacity_brackets`, `rollback` and
+`results_layout` from `eval/analysis/src/wafer_analysis` the same way.
 
 | Module | Role | Imported by |
 |---|---|---|

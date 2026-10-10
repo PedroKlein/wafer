@@ -110,6 +110,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 | Document | Summary |
 |----------|---------|
 | `docs/architecture/` | arc42-lite architecture views: vision, goals & constraints, solution strategy, building blocks, runtime view, deployment, cross-cutting concepts, quality requirements, risks, comparators. |
+| `docs/learn/` | Source-guided learning path for reading the code. `docs/learn/README.md` gives a numbered first-read order. `workspace-map.md` maps the crates, the `wafer-core` modules and the top-level directories, and lists the build, run and test commands. `rust-in-context.md`, `tokio-in-context.md` and `wasmtime-in-context.md` explain the techniques the code uses. `reading-paths.md` gives shorter routes by role, and the remaining pages trace configuration loading, one message through Wasm, the plugin boundary, shutdown and failure, hot-swap, and the evaluation harness. |
 | `docs/status/implementation-status.md` | Current implementation status — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP status doc. |
 | `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Eleven RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, I/O integration, and WASI 0.3 / Component Model evolution. |
 | `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). Eighteen ADRs at present. See `docs/adr/README.md` for the index and conventions. |
@@ -133,8 +134,8 @@ When you need deeper context on any aspect of the project, consult these files. 
 | File | Summary |
 |------|---------|
 | `README.md` | Project README — quick start, prerequisites, project structure, development setup, running pipelines, building plugins. Post-migration, this is a one-page quickstart that points into `docs/`. |
-| `mise.toml` | Primary non-Rust developer toolchain and command-runner config. Run `mise run setup` for helper tools and `mise tasks ls` for tasks. |
-| `rust-toolchain.toml` | Pinned Rust toolchain (stable channel, `wasm32-wasip2` target). |
+| `mise.toml` | Primary non-Rust developer toolchain and command-runner config. Run `mise run setup` for helper tools and `mise tasks ls --all` for tasks. |
+| `rust-toolchain.toml` | Pinned Rust toolchain (1.98.1, `wasm32-wasip2` target). |
 | `rustfmt.toml` | Formatter configuration. |
 | `Cargo.toml` | Workspace root. Defines workspace members, shared dependencies, and profiles. |
 
@@ -148,7 +149,7 @@ This project uses [`mise`](https://mise.jdx.dev/) as the primary non-Rust develo
 
 ```bash
 mise run setup          # Verify Rust/rustup, then install pinned helper tools
-mise tasks ls           # List all available tasks
+mise tasks ls --all     # List all available tasks
 mise run build          # Build entire workspace
 mise run test           # Run all tests
 mise run test-eval      # Run the evaluation harness tests (Python and shell)
@@ -170,12 +171,13 @@ mise run //plugins:build-plugin NAME  # Build a specific plugin (e.g., mise run 
 
 ```bash
 mise run cross-build-pi        # Build wafer, wafer-loadgen, waferctl for aarch64 Linux
-                               # via docker run --platform linux/arm64 rust:1-slim-bookworm.
+                               # via docker run --platform linux/arm64 rust:<toolchain>-slim-bookworm
+                               # (toolchain from rust-toolchain.toml).
                                # Output: target/docker-aarch64-linux/release/{wafer,wafer-loadgen,waferctl}
 mise run cross-build-pi-check  # Verify the three binaries are aarch64 ELF via `file(1)`. CI-friendly.
 ```
 
-See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. The `.github/workflows/cross-arch.yml` job builds the same binaries natively on an arm64 runner on push + PR; `.github/workflows/ci.yml` runs fmt, clippy and the test suite.
+See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. `.github/workflows/cross-arch.yml` builds the release binaries for aarch64 (on a native arm64 runner) and x86_64 when Rust sources, Cargo files, `rust-toolchain.toml`, `mise.toml` or the glibc script change; `.github/workflows/ci.yml` runs the docs check, fmt, clippy, the workspace tests and the evaluation tests, and on pull requests skips the suites the diff cannot affect.
 
 ### Analysis Notebooks
 
@@ -186,11 +188,11 @@ mise run //eval:notebooks-execute                  # Re-execute all notebooks ag
 mise run //eval:figures                            # Re-execute notebooks + list regenerated PDFs under eval/analysis/figures/
 ```
 
-Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) pins JupyterLab, matplotlib, pandas, HdrHistogram, statsmodels, scipy. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. See `eval/analysis/notebooks/README.md` for the notebook ↔ experiment ↔ RQ mapping.
+Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) declares numpy, matplotlib, seaborn, pandas and Jupyter. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. See `eval/analysis/notebooks/README.md` for the notebook-to-experiment mapping.
 
 ### Evaluation Campaign
 
-Run these on the evaluation host itself (from its `~/wafer` checkout), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`), and `approve-batch`, which runs on the analysis machine against the results volume. The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
+Run these on the evaluation host itself (from its `~/wafer` checkout), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`), and `approve-batch`, which runs on the analysis machine against the results root that holds the host's copied batch. The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
 
 ```bash
 mise run preflight-pi5                               # or preflight-jetson / preflight-x86 on those hosts
@@ -226,9 +228,11 @@ cargo test --workspace -- --nocapture           # With stdout output
 ### Debugging
 
 ```bash
-RUST_LOG=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
-RUST_LOG=trace cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+RUST_LOG=wafer=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+RUST_LOG=wafer=trace cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
 ```
+
+The runtime adds an INFO default to the `RUST_LOG` filter, so a bare level such as `RUST_LOG=debug` still logs at INFO. Name a target instead; `wafer` also matches the `wafer_*` crates.
 
 ---
 

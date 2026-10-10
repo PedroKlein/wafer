@@ -19,6 +19,7 @@ from wafer_analysis.canonical import (
     backpressure_table,
     bucket_band,
     branch_isolation_table,
+    capacity_loss_location_table,
     capacity_tables,
     ekuiper_profile_tables,
     failed_replacement_summary,
@@ -41,7 +42,7 @@ from wafer_analysis.canonical import (
     validation_gate_table,
 )
 from wafer_analysis import paths
-from wafer_analysis.focused import admitted_runs
+from wafer_analysis.focused import admitted_runs, capacity_loss_records
 from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
 from wafer_analysis.verdicts import concordance_table
 
@@ -60,6 +61,8 @@ def percentile_runs(conditions: tuple[str, ...], n: int = 30) -> list[dict]:
             "achieved_rate_msg_s": 1_000.0,
             "achieved_ratio": 1.0,
             "duplicates": 0,
+            "publisher_lag_p50_ns": 150_000 - index * 10_000 + run,
+            "publisher_lag_p99_ns": 300_000 + run,
         }
         for index, condition in enumerate(conditions)
         for run in range(1, n + 1)
@@ -93,6 +96,17 @@ def test_target_latency_uses_runs_and_reports_ci_effect_threshold_and_boundary()
     assert "pooled loss <= 0.01" in wafer["threshold"]
     assert wafer["claim_boundary"] == "matched 1,000 msg/s target load; not capacity"
     assert table["thesis_evidence"].eq(True).all()
+
+
+def test_target_latency_reports_the_median_publisher_lag_of_each_system() -> None:
+    table = target_latency_table(percentile_runs(("wafer", "native", "ekuiper"))).set_index("condition")
+
+    assert table["median_publisher_lag_p50_ns"].to_dict() == {
+        "wafer": 150_015.5,
+        "native": 140_015.5,
+        "ekuiper": 130_015.5,
+    }
+    assert table["median_publisher_lag_p99_ns"].eq(300_015.5).all()
 
 
 def test_target_latency_ratio_and_effect_resample_run_pairs() -> None:
@@ -139,6 +153,7 @@ def contrast_runs(conditions: tuple[str, ...], wafer_p95_extra, n: int = 30) -> 
             "run_index": run,
             "p50_ns": (1.2 if condition == "wafer" else 1.0) * BLOCKS[run],
             "p95_ns": 2 * BLOCKS[run] + (wafer_p95_extra(run) if condition == "wafer" else 0),
+            "service_p50_ns": (8.0 if condition == "wafer" else 1.0) * BLOCKS[run] / 50,
         }
         for condition in conditions
         for run in range(1, n + 1)
@@ -175,6 +190,20 @@ def test_overhead_contrast_resamples_run_pairs_for_the_ratio() -> None:
     assert (row["ratio_ci95_low"], row["ratio_ci95_high"]) == pytest.approx((1.2, 1.2))
     assert row["difference_ns"] == pytest.approx(0.2 * np.median(list(BLOCKS.values())))
     assert "no cross-architecture claim" in row["claim_boundary"]
+
+
+def test_overhead_contrast_adds_the_service_time_contrast_next_to_the_latency_ratio() -> None:
+    table = overhead_contrast_table(contrast_runs(("wafer", "native"), lambda run: 0))
+    row = table.iloc[0]
+
+    block = np.median(list(BLOCKS.values()))
+    assert row["median_ratio"] == pytest.approx(1.2)
+    assert (row["service_wafer_median_ns"], row["service_native_median_ns"]) == pytest.approx((8 * block / 50, block / 50))
+    assert row["service_median_ratio"] == pytest.approx(8)
+    assert (row["service_ratio_ci95_low"], row["service_ratio_ci95_high"]) == pytest.approx((8, 8))
+    assert row["service_difference_ns"] == pytest.approx(7 * block / 50)
+    assert list(table.columns).index("service_wafer_median_ns") == list(table.columns).index("mdd_ns") + 1
+    assert "service_median_ratio" not in target_contrast_table(contrast_runs(("wafer", "native", "ekuiper"), lambda run: 0))
 
 
 def test_contrasts_need_complete_canonical_runs_but_pair_what_a_diagnostic_batch_has() -> None:
@@ -705,6 +734,149 @@ def test_capacity_tables_reject_pooled_counters_that_disagree_with_their_runs() 
         capacity_tables(summary)
 
 
+def publisher_log(total: int, acked: int) -> str:
+    """The colourised line `wafer-loadgen publish` logs when it finishes."""
+    fields = (("total", total), ("errors", total - acked), ("acked", acked), ("unacked_at_exit", 0))
+    return (
+        "\x1b[2m2026-10-07T04:39:33Z\x1b[0m \x1b[32m INFO\x1b[0m wafer_loadgen::publish: "
+        "Load generation complete "
+        + " ".join(f"\x1b[3m{name}\x1b[0m\x1b[2m=\x1b[0m{value}" for name, value in fields)
+        + "\n"
+    )
+
+
+def write_capacity_leaf(
+    batch: Path,
+    system: str,
+    run: int,
+    *,
+    intended: int,
+    rejected: int,
+    received: int,
+    warmup_acked: int,
+    sut: tuple[int, int] | None = None,
+    rate: int = 15_000,
+) -> Path:
+    leaf = batch / system / f"rate-{rate:05d}" / f"run-{run:02d}-attempt-01"
+    leaf.mkdir(parents=True)
+    (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+    acked = intended - rejected
+    messages = {
+        "intended": intended,
+        "rejected": rejected,
+        "enqueued": acked,
+        "acked": acked,
+        "received_events": received,
+        "received_unique": received,
+        "downstream_lost": acked - received,
+        "total_undelivered": intended - received,
+        "duplicates": 0,
+        "ignored_warmup": 0,
+    }
+    (leaf / "capacity-run.json").write_text(
+        json.dumps({"system": system, "rate_msg_s": rate, "run_index": run, "messages": messages})
+    )
+    (leaf / "stdout.log").write_text(
+        publisher_log(intended // 2, warmup_acked) + publisher_log(intended, acked)
+    )
+    if system == "ekuiper":
+        before = (50, 40)
+        after = tuple(start + count for start, count in zip(before, sut))
+        snapshots = {
+            name: {
+                "rule_status": {
+                    "source_wafer_telemetry_0_records_in_total": source,
+                    "sink_mqtt_0_0_records_out_total": sink,
+                }
+            }
+            for name, (source, sink) in (("before", before), ("after", after))
+        }
+        (leaf / "ekuiper-health.json").write_text(json.dumps(snapshots))
+    elif sut is not None:
+        sut_in, sut_out = sut
+        (leaf / "per_node_metrics.csv").write_text(
+            "node_id,messages_in,messages_out\n"
+            f"filter,{sut_in},{sut_in}\nmqtt-in,0,{sut_in}\nmqtt-out,{sut_in},{sut_out}\n"
+        )
+    return leaf
+
+
+def test_capacity_loss_location_reports_where_each_cell_lost_its_messages(tmp_path) -> None:
+    # The warm-up publisher had 150 of its 450 publishes rejected, so the SUT took in every
+    # message the broker accepted: 300 in the warm-up and 900 measured.
+    for run, received in ((1, 400), (2, 400), (3, 700)):
+        write_capacity_leaf(
+            tmp_path, "wafer", run,
+            intended=900, rejected=0, received=received, warmup_acked=300, sut=(1_200, 1_200),
+        )
+    # A run the SUT failed holds no capacity result, as in the rate table.
+    failed = write_capacity_leaf(
+        tmp_path, "wafer", 4,
+        intended=900, rejected=0, received=0, warmup_acked=300, sut=(600, 0),
+    )
+    (failed / "canonical-status.json").write_text(
+        '{"status":"failed","failure_class":"sut_outcome","reasons":["runtime-exit"]}'
+    )
+    # eKuiper's rule counters stand above zero in the snapshot taken before the run.
+    write_capacity_leaf(
+        tmp_path, "ekuiper", 1,
+        intended=480, rejected=0, received=440, warmup_acked=240, sut=(715, 690),
+    )
+    write_capacity_leaf(
+        tmp_path, "mqtt-loopback", 1, intended=900, rejected=100, received=700, warmup_acked=450
+    )
+
+    table = capacity_loss_location_table(capacity_loss_records(tmp_path), canonical=False)
+
+    rows = table.set_index("system")
+    wafer, ekuiper, loopback = (rows.loc[system] for system in ("wafer", "ekuiper", "mqtt-loopback"))
+    assert wafer["N_runs"] == 3
+    assert wafer["pooled_loss"] == pytest.approx(1_200 / 2_700)
+    assert wafer["pooled_accepted_undelivered_share"] == pytest.approx(1_200 / 2_700)
+    assert wafer["median_accepted_undelivered_share"] == pytest.approx(500 / 900)
+    for share in (
+        "publisher_rejected_share", "sut_missed_share_of_accepted", "sut_dropped_share_of_accepted"
+    ):
+        assert wafer[f"pooled_{share}"] == wafer[f"median_{share}"] == 0
+    assert ekuiper["pooled_accepted_undelivered_share"] == pytest.approx(40 / 480)
+    assert ekuiper["pooled_sut_missed_share_of_accepted"] == pytest.approx(5 / 720)
+    assert ekuiper["pooled_sut_dropped_share_of_accepted"] == pytest.approx(25 / 720)
+    assert loopback["pooled_publisher_rejected_share"] == pytest.approx(100 / 900)
+    assert loopback["pooled_accepted_undelivered_share"] == pytest.approx(100 / 900)
+    for share in ("sut_missed_share_of_accepted", "sut_dropped_share_of_accepted"):
+        assert pd.isna(loopback[f"pooled_{share}"])
+        assert pd.isna(loopback[f"median_{share}"])
+    assert np.allclose(
+        table["pooled_publisher_rejected_share"] + table["pooled_accepted_undelivered_share"],
+        table["pooled_loss"],
+    )
+    assert not table["thesis_evidence"].any()
+
+
+def test_capacity_loss_location_rejects_a_log_without_the_warmup_publisher(tmp_path) -> None:
+    leaf = write_capacity_leaf(
+        tmp_path, "native", 1,
+        intended=900, rejected=0, received=900, warmup_acked=450, sut=(1_350, 1_350),
+    )
+    (leaf / "stdout.log").write_text(publisher_log(900, 900))
+
+    with pytest.raises(ValueError, match="warm-up publisher"):
+        capacity_loss_records(tmp_path)
+
+
+def test_capacity_loss_location_rejects_a_run_without_the_acked_count(tmp_path) -> None:
+    leaf = write_capacity_leaf(
+        tmp_path, "native", 1,
+        intended=900, rejected=0, received=900, warmup_acked=450, sut=(1_350, 1_350),
+    )
+    run = json.loads((leaf / "capacity-run.json").read_text())
+    del run["messages"]["acked"]
+    (leaf / "capacity-run.json").write_text(json.dumps(run))
+
+    with pytest.raises(ValueError, match="capacity-run.json lacks acked"):
+        capacity_loss_records(tmp_path)
+
+
 def swap5_record(run_index: int = 1) -> dict:
     requests = []
     events = []
@@ -890,6 +1062,43 @@ def test_swap_phase_table_reports_the_run_level_tail_of_cached_swaps() -> None:
         10_000 + 200_000 + 5_000 + 100_046.6 + 50_000
     )
     assert pd.isna(table.loc["first-use", "median_run_p95_sink_observed_output_gap_ns"])
+
+
+def test_swap_phase_table_reports_swap_work_apart_from_the_wait_for_the_next_message() -> None:
+    runs = swap_runs()
+    for run in runs:
+        for event in run["events"]:
+            event["first_post_replacement_local_outcome_ns"] = 20_000 * event["event_index"]
+    cached = swap_phase_table(runs).set_index("event_class").loc["cached"]
+    assert cached["median_swap_work_ns"] == 10_000 + 200_000 + 5_000 + 100_025
+    assert cached["median_run_p95_swap_work_ns"] == pytest.approx(10_000 + 200_000 + 5_000 + 100_046.6)
+    assert cached["median_phase_total_ns"] == 10_000 + 200_000 + 5_000 + 100_025 + 20_000 * 25
+    assert "wait for the next input message" in cached["estimator"]
+
+
+def test_swap_phase_table_reports_mean_phases_that_add_up_to_the_mean_total() -> None:
+    runs = swap_runs()
+    for run in runs:
+        for event in run["events"][1:]:
+            if event["event_index"] <= 5 * run["run_index"]:
+                event["compile_ns"] = 700_000
+    cached = swap_phase_table(runs).set_index("event_class").loc["cached"]
+    phases = [
+        "compile_ns",
+        "instantiate_ns",
+        "signal_ns",
+        "replacement_adopted_ns",
+        "first_post_replacement_local_outcome_ns",
+    ]
+    slow = sum(min(5 * run, 49) for run in range(1, 11))
+    assert cached["mean_compile_ns"] == pytest.approx((700_000 * slow + 10_000 * (490 - slow)) / 490)
+    assert sum(cached[f"mean_{phase}"] for phase in phases[:-1]) == pytest.approx(cached["mean_swap_work_ns"])
+    assert sum(cached[f"mean_{phase}"] for phase in phases) == pytest.approx(cached["mean_phase_total_ns"])
+    assert (
+        cached["mean_phase_total_ci95_low_ns"]
+        < cached["mean_phase_total_ns"]
+        < cached["mean_phase_total_ci95_high_ns"]
+    )
 
 
 def test_swap_phase_table_requires_ten_full_runs_unless_diagnostic() -> None:
@@ -1598,6 +1807,19 @@ def test_capacity_intervals_bootstrap_the_run_values() -> None:
         capacity_tables(summary)
 
 
+def fine_buckets(*dark_ms: tuple[int, int]) -> list[dict]:
+    return [
+        {
+            "start_offset_ns": start,
+            "end_offset_ns": start + 10_000_000,
+            "rate_msg_s": 0.0
+            if any(low * 1_000_000 <= start < high * 1_000_000 for low, high in dark_ms)
+            else 1_000.0,
+        }
+        for start in range(-2_000_000_000, 2_000_000_000, 10_000_000)
+    ]
+
+
 def swap3_runs() -> list[dict]:
     return [
         {
@@ -1613,6 +1835,7 @@ def swap3_runs() -> list[dict]:
             "action_duration_ns": 10_000_000,
             "loss": 0,
             "duplicates": 0,
+            "fine_buckets": fine_buckets(),
         }
         for strategy in (
             "wafer-hotswap",
@@ -1631,7 +1854,8 @@ def test_swap3_table_separates_event_metrics_and_applies_hot_swap_threshold() ->
         "median_dip_percent",
         "median_interruption_ns",
         "median_action_duration_ns",
-        "median_recovery_ns",
+        "median_zero_output_ns",
+        "median_loss_equivalent_outage_ns",
         "total_loss",
         "total_duplicates",
     } <= set(table.columns)
@@ -1642,6 +1866,28 @@ def test_swap3_table_separates_event_metrics_and_applies_hot_swap_threshold() ->
     )
     assert wafer["dip_ci95_high_percent"] < 5
     assert wafer["verdict"] == "PASS"
+
+
+def test_swap3_table_measures_the_outage_at_10_ms_not_the_100_ms_recovery_grid() -> None:
+    runs = swap3_runs()
+    for run in runs:
+        if run["strategy"] == "wafer-restart":
+            run |= {
+                "loss": 405,
+                "interruption_ns": 400_000_000,
+                "recovery_ns": 84_576_668,
+                "fine_buckets": fine_buckets((-1_000, -300), (0, 420), (600, 650)),
+            }
+    table = swap3_table(runs).set_index("strategy")
+    assert not {"median_recovery_ns", "recovery_ci95_low_ns", "recovery_ci95_high_ns"} & set(table)
+    restart = table.loc["wafer-restart"]
+    assert restart["median_interruption_ns"] == 400_000_000
+    assert restart["median_zero_output_ns"] == 420_000_000
+    assert (restart["zero_output_ci95_low_ns"], restart["zero_output_ci95_high_ns"]) == (420_000_000, 420_000_000)
+    assert restart["median_loss_equivalent_outage_ns"] == 405_000_000
+    hotswap = table.loc["wafer-hotswap"]
+    assert (hotswap["median_zero_output_ns"], hotswap["median_loss_equivalent_outage_ns"]) == (0, 0)
+    assert hotswap["verdict"] == "PASS"
 
 
 def test_swap3_table_reports_the_placebo_dip_of_every_arm_without_judging_it() -> None:
@@ -1846,6 +2092,65 @@ def test_branch_isolation_table_contrasts_each_attack_with_the_control() -> None
     assert table.loc["epoch-loop-attack", "throughput_cliffs_delta"] == -1.0
     assert pd.isna(table.loc["control", "throughput_drop_percent"])
     assert table["pooled_loss"].eq(0).all() and table["thesis_evidence"].all()
+
+
+def test_branch_isolation_reports_the_arrival_span_drop_beside_the_window_drop() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 1_000})
+    window = branch_isolation_table(records)
+    for record in records:
+        record["branches"]["branch_a"]["throughput"]["total_messages"] = 60_000
+        arrival_rate = 998 if record["condition"] == "panic-attack" else 1_000
+        record["branch_a_arrival_span_ns"] = 60_000 * 10**9 // (arrival_rate + record["run_index"] % 3)
+
+    table = branch_isolation_table(records).set_index("condition")
+
+    assert table.loc["control", "median_arrival_span_throughput_msg_s"] == pytest.approx(1_001)
+    assert table.loc["panic-attack", "median_arrival_span_throughput_msg_s"] == pytest.approx(999)
+    assert table.loc["panic-attack", "arrival_span_drop_percent"] == pytest.approx(100 * 2 / 1_001)
+    low, high = table.loc[
+        "panic-attack", ["arrival_span_drop_ci95_low_percent", "arrival_span_drop_ci95_high_percent"]
+    ]
+    assert low <= 100 * 2 / 1_001 <= high
+    assert table.loc["epoch-loop-attack", "arrival_span_drop_percent"] == 0
+    assert pd.isna(table.loc["control", "arrival_span_drop_percent"])
+    assert table.loc["panic-attack", "throughput_drop_percent"] == pytest.approx(100 * 5 / 1_001)
+    unchanged = [column for column in window.columns if "arrival_span" not in column]
+    pd.testing.assert_frame_equal(table.reset_index()[unchanged], window[unchanged])
+
+
+def test_branch_isolation_arrival_span_is_missing_when_a_run_lacks_it() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 900})
+    window = branch_isolation_table(records)
+    for record in records:
+        record["branches"]["branch_a"]["throughput"]["total_messages"] = 60_000
+        record["branch_a_arrival_span_ns"] = 60_000_000_000
+    records[0]["branch_a_arrival_span_ns"] = None
+
+    table = branch_isolation_table(records).set_index("condition")
+
+    assert pd.isna(table.loc["control", "median_arrival_span_throughput_msg_s"])
+    assert table.loc["panic-attack", "median_arrival_span_throughput_msg_s"] == 1_000
+    assert table["arrival_span_drop_percent"].isna().all()
+    unchanged = [column for column in window.columns if "arrival_span" not in column]
+    pd.testing.assert_frame_equal(table.reset_index()[unchanged], window[unchanged])
+
+
+def test_branch_isolation_arrival_span_is_missing_only_for_the_attack_that_lacks_it() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 900})
+    for record in records:
+        record["branches"]["branch_a"]["throughput"]["total_messages"] = 60_000
+        record["branch_a_arrival_span_ns"] = 60_000_000_000
+    next(record for record in records if record["condition"] == "panic-attack")[
+        "branch_a_arrival_span_ns"
+    ] = None
+
+    table = branch_isolation_table(records).set_index("condition")
+
+    assert table.loc["control", "median_arrival_span_throughput_msg_s"] == 1_000
+    arrival_span = [column for column in table.columns if "arrival_span" in column]
+    assert table.loc["panic-attack", arrival_span].isna().all()
+    assert table.loc["epoch-loop-attack", "arrival_span_drop_percent"] == 0
+    assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
 
 
 def test_branch_isolation_table_requires_full_n_unless_diagnostic() -> None:

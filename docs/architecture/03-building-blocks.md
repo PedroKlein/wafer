@@ -35,12 +35,12 @@ C4Container
     Rel(ctl, runtime, "HTTP API", "JSON over /api/v1/*")
     Rel(operator, runtime, "provides pipeline.toml")
     Rel(runtime, core, "delegates pipeline lifecycle")
-    Rel(core, config, "calls load_config + validate")
+    Rel(runtime, config, "calls load_config + validate")
     Rel(core, types, "uses domain types")
     Rel(config, types, "uses domain types")
     Rel(core, wasm_component, "instantiates + calls via wasmtime")
     Rel(wasm_component, plugin_sdk, "links (guest-side)")
-    Rel(loadgen, runtime, "MQTT / stdin messages")
+    Rel(loadgen, runtime, "MQTT messages")
 ```
 
 ## Crate dependency graph
@@ -107,8 +107,8 @@ representation:
 2. `validate` — semantic checks: edge endpoints exist, source/sink
    direction, router edges carry a `port` and non-router edges do not, no
    duplicate edges, every processing node has an input and an output,
-   `[dead_letter]` present when an edge uses `overflow = "dead-letter"`,
-   non-zero queue capacities and `epoch_tick_ms`, orphan and cycle
+   `[dead_letter]` present when an edge uses `overflow = "dead-letter"` or
+   a node's error policy sends to `dlq`, non-zero queue capacities and `epoch_tick_ms`, orphan and cycle
    detection. Accumulates `ValidationError` values.
 3. `DagGraph` — a petgraph `DiGraph` built from the config. The runtime
    orchestrator does not use this type; `wafer-core` builds its own
@@ -130,9 +130,11 @@ The largest crate. Contains all runtime logic grouped into modules:
 | `metrics` | Hot-swap phase and recovery histograms (`HotSwapMetrics`). `GET /metrics` is rendered in `api` from per-node `NodeMetrics` counters and those histograms. `MetricsRegistry` and its snapshot builder are not wired into the runtime, so families such as `wafer_queue_depth` do not appear on the live endpoint. |
 | `bench` | Measurement helpers: `MemoryRecorder` (RSS from `/proc/self/statm`) and `QueueDepthRecorder`, which writes `queue-depth.csv` when `WAFER_QUEUE_DEPTH_OUTPUT` is set. |
 | `config` | Re-exports the shared `wafer-types` configuration surface for core consumers. |
-| `testing` | `TestPipeline` harness shared by unit tests, integration tests, and benchmarks. |
+| `testing` | In-memory `ChannelSource` / `ChannelSink` I/O and `PluginTestHarness` / `TransformHarness` for direct component calls; compiled for tests and benches or with the `test-support` feature. |
 | `api` | Axum HTTP server: route wiring, handlers (health, ready, list-nodes, get-node, hot-swap, reconfigure, shutdown, metrics scrape). |
 | `error` | `WaferError`, `RegistryError`, top-level `Result` alias. |
+| `registry` | OCI reference parsing, pulls and the tag-keyed plugin cache (24 h default TTL). |
+| `util` | Small shared helpers (time conversion, file writes). |
 
 ### `wafer-plugin`
 
@@ -162,22 +164,27 @@ Binary `wafer` (`main.rs`, plus `startup.rs` and `metadata.rs` for evaluation ar
 
 CLI client for the running control plane. Built with `clap` derive API
 and dual-output formatting (human-readable tables via `tabled`, machine-
-parseable JSON via `--json`). Subcommands map 1:1 to the HTTP API:
+parseable JSON via `--json`). Subcommands call the HTTP API:
 
+- `health` → `GET /health`.
 - `status` → `GET /ready` + `GET /api/v1/nodes`.
 - `nodes` → `GET /api/v1/nodes`.
-- `hot-swap <id> <path>` → `POST /api/v1/nodes/{id}/hot-swap`.
+- `node <id>` → `GET /api/v1/nodes/{id}`.
+- `hot-swap <node-id> --wasm-path <path>` → `POST /api/v1/nodes/{id}/hot-swap`.
 - `shutdown` → `POST /api/v1/pipeline/shutdown`.
-- raw metrics → `GET /metrics`.
+- `metrics --raw` → `GET /metrics`. Without `--raw`, `metrics` calls no endpoint and prints an empty default snapshot.
+
+`reload` and `drain` exist but exit with an error, because the runtime exposes no such endpoints; `config` manages local endpoint settings.
 
 The server also exposes `POST /api/v1/nodes/{id}/reconfigure`; the current CLI has no reconfigure subcommand. Handler errors are plain text, not RFC 9457 Problem Details.
 
 ### `wafer-loadgen`
 
 Open-loop load generator for the evaluation harness. Reads a rate schedule
-(messages/sec over time) and a payload template, emits messages at the
-configured rate to the pipeline's source (MQTT or stdin), records end-to-end
-latencies with HdrHistogram, and writes results to CSV / `.hgrm` files.
+(messages/sec over time) and a payload template, publishes to the pipeline's
+MQTT source at the configured rate profile, subscribes to its MQTT sink,
+records end-to-end latency with HdrHistogram, and writes `latency.hdr`,
+`sequence.csv` and JSON summaries.
 Used exclusively during benchmarking — not part of production deployment.
 
 ---

@@ -21,24 +21,37 @@ def cpu_row(timestamp: int, cpu: int, busy: int, idle: int, iowait: int = 0) -> 
     }
 
 
-def test_core_utilisation_uses_jiffy_differences_per_core() -> None:
+SECOND = 1_000_000_000
+
+
+def test_core_utilisation_is_the_window_time_a_core_was_not_idle() -> None:
+    # A tickless kernel counts idle and iowait exactly but samples busy time on the
+    # tick: over 10 s at 100 ticks/s cpu 0 shows 20 busy ticks and 750 idle or iowait.
     rows = [
-        cpu_row(2, 0, 175, 1_000, 10),
-        cpu_row(1, 0, 100, 900),
-        cpu_row(1, 1, 50, 50),
-        cpu_row(2, 1, 60, 140),
+        cpu_row(10 * SECOND, 0, 20, 700, 50),
+        cpu_row(0, 0, 0, 0),
+        cpu_row(20 * SECOND, 0, 20, 1_700, 50),
+        cpu_row(0, 1, 0, 0),
+        cpu_row(10 * SECOND, 1, 0, 1_000),
+        cpu_row(20 * SECOND, 1, 1_000, 1_000),
     ]
-    table = core_utilisation(rows).set_index("cpu")
-    assert table.loc[0, "busy_percent"] == pytest.approx(75 / 185 * 100)
-    assert table.loc[0, "iowait_percent"] == pytest.approx(10 / 185 * 100)
-    assert table.loc[1, "busy_percent"] == pytest.approx(10)
+    table = core_utilisation(rows, 100, 0, 10 * SECOND).set_index("cpu")
+    assert table.loc[0, "busy_percent"] == pytest.approx(25)
+    assert table.loc[0, "iowait_percent"] == pytest.approx(5)
+    assert table.loc[1, "busy_percent"] == pytest.approx(0)
 
 
 def test_core_utilisation_rejects_a_single_or_decreasing_sample() -> None:
     with pytest.raises(ValueError, match="cpu 0 needs two increasing samples"):
-        core_utilisation([cpu_row(1, 0, 100, 900)])
+        core_utilisation([cpu_row(SECOND, 0, 100, 900)], 100, 0, 2 * SECOND)
     with pytest.raises(ValueError, match="cpu 0 needs two increasing samples"):
-        core_utilisation([cpu_row(1, 0, 100, 900), cpu_row(2, 0, 90, 1_000)])
+        core_utilisation(
+            [cpu_row(SECOND, 0, 100, 900), cpu_row(2 * SECOND, 0, 90, 1_000)], 100, 0, 2 * SECOND
+        )
+    with pytest.raises(ValueError, match="cpu 0 needs two increasing samples"):
+        core_utilisation(
+            [cpu_row(SECOND, 0, 100, 900), cpu_row(3 * SECOND, 0, 100, 1_100)], 100, 0, 2 * SECOND
+        )
 
 
 def test_attempts_table_counts_classes_retries_and_missing_units(tmp_path) -> None:

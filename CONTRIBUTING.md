@@ -14,17 +14,18 @@ the design that the thesis defends. In particular:
 - The runtime targets edge gateways, not cloud servers. Proposals that
   trade footprint for peak throughput will usually be declined.
 - The plugin sandbox uses the Wasm Component Model. Changes to the
-  WIT contracts under `wit/` need to keep the four package boundaries
-  intact.
+  WIT contracts under `wit/` need to keep the single
+  `wafer:pipeline@0.1.0` package and its four worlds intact.
 - The DAG topology is validated before execution. Runtime shapes that
   cannot be statically checked are out of scope.
 
 ## Local development
 
-Install `mise` and let it fetch the pinned toolchains:
+Install Rust with rustup and install `mise`, then let mise fetch the
+pinned helper tools:
 
 ```sh
-mise install
+mise trust
 mise run setup
 ```
 
@@ -38,8 +39,10 @@ mise run test
 
 If you touch the runtime hot path, run the criterion benches under
 `crates/wafer-core/benches/` (e.g. `cargo bench -p wafer-core`) before
-opening a PR. If you touch a Wasm plugin, run `mise run //plugins:build-*` for
-that plugin and confirm the produced `.wasm` still loads.
+opening a PR. If you touch a Wasm plugin, run
+`mise run //plugins:build-plugin <name>` (`build-plugin-go` or
+`build-plugin-py` for the Go and Python plugins) for that plugin and
+confirm the produced `.wasm` still loads.
 
 ## Pull request checklist
 

@@ -1,7 +1,12 @@
 name: ci
 
 # Formatting, lints and the workspace test suite on every push to main and
-# every pull request. No path filter, so this can be a required check.
+# every pull request. The workflow itself has no path filter, so its jobs can
+# be required checks. On a pull request the `changes` job decides whether the
+# diff can affect the Rust suite (clippy, cargo test, Docker tests) or the
+# evaluation suite, and skips the other; a skipped job still satisfies a
+# required check. Pushes to main and manual runs run everything,
+# and so does any run where `changes` did not produce an answer.
 #
 # The commands mirror the mise tasks (`fmt`, `clippy`, `test`,
 # `//plugins:build-plugins`) but call cargo directly, because `mise install`
@@ -29,8 +34,47 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
+  changes:
+    name: changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      eval: ${{ steps.filter.outputs.eval }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Match changed files against what each suite reads
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        # rust: what cargo builds, lints and tests, including the fixtures,
+        #   model and eval configs the Rust tests load.
+        # eval: the harness and analysis code, the plugins its deploy test
+        #   needs, and the mise tasks and scripts its shell tests inspect.
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "rust=true" >>"$GITHUB_OUTPUT"
+            echo "eval=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE...$HEAD")
+          printf '%s\n' "$changed"
+          rust='^(crates|plugins|wit|tests|models|eval/configs)/|^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|clippy\.toml|rustfmt\.toml|eval/canonical-matrix\.json|eval/result-schema\.json|eval/RESULT-CONTRACT\.md|\.github/workflows/ci\.yml)$'
+          eval='^(eval|plugins|wit|scripts|crates/wafer-plugin)/|^(mise\.toml|rust-toolchain\.toml|\.github/workflows/ci\.yml)$'
+          for suite in rust eval; do
+            if grep -qE "${!suite}" <<<"$changed"; then hit=true; else hit=false; fi
+            echo "$suite=$hit" | tee -a "$GITHUB_OUTPUT"
+          done
+
   lint:
     name: fmt + clippy
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -40,6 +84,7 @@ jobs:
         run: scripts/check-docs.sh
 
       - name: Install Rust toolchain from rust-toolchain.toml
+        if: needs.changes.outputs.rust != 'false'
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-shared-key: ci-lint
@@ -48,13 +93,17 @@ jobs:
           rustflags: ""
 
       - name: cargo fmt
+        if: needs.changes.outputs.rust != 'false'
         run: cargo fmt --all --check
 
       - name: cargo clippy
+        if: needs.changes.outputs.rust != 'false'
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: test
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -86,6 +135,42 @@ jobs:
           WAFER_REQUIRE_PLUGINS: "1"
         run: cargo test --locked --workspace
 
+      - name: Docker-backed tests
+        # Mirrors `mise run test-docker`; the runner has a Docker daemon.
+        run: |
+          cargo test --locked -p wafer-core --lib -- --ignored configured_mqtt_dlq_delivers_serialized_record
+          cargo test --locked -p wafer-core --test mqtt_source_reconnect -- --ignored
+          cargo test --locked -p wafer-loadgen --test roundtrip -- --ignored
+
+  eval:
+    name: eval tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.eval != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # Only the plugins are compiled here, and they are cached below.
+          cache: false
+          rustflags: ""
+
+      - name: Cache plugin builds
+        # Plugins are separate cargo projects with their own target/ dirs.
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugins/*/target
+            plugins/attacks/*/target
+          key: plugins-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'wit/**', 'crates/wafer-plugin/**', 'plugins/**/Cargo.lock', 'plugins/**/Cargo.toml', 'plugins/**/*.rs', 'plugins/**/*.wit') }}
+          restore-keys: plugins-${{ runner.os }}-
+
+      - name: Build Wasm plugins
+        run: plugins/build-plugins.sh
+
       - name: Install uv for the analysis package
         uses: astral-sh/setup-uv@v6
         with:
@@ -110,10 +195,3 @@ jobs:
           eval/scripts/tests/test_preflight_hosts.sh
           eval/scripts/tests/test_run_experiment_canonical.sh
           uv run --directory eval/analysis --frozen pytest -q
-
-      - name: Docker-backed tests
-        # Mirrors `mise run test-docker`; the runner has a Docker daemon.
-        run: |
-          cargo test --locked -p wafer-core --lib -- --ignored configured_mqtt_dlq_delivers_serialized_record
-          cargo test --locked -p wafer-core --test mqtt_source_reconnect -- --ignored
-          cargo test --locked -p wafer-loadgen --test roundtrip -- --ignored

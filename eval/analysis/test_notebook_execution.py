@@ -8,6 +8,7 @@ import pandas as pd
 from nbclient import NotebookClient
 
 from wafer_analysis.rollback import SWAP5_PLUGIN, build_post_rollback_continuity, build_swap5_rollback
+from test_focused import benchsink_hdr_log
 
 NOTEBOOKS = sorted((Path(__file__).parent / "notebooks").glob("*.ipynb"))
 
@@ -200,6 +201,9 @@ def build_complete_fixture(root: Path) -> None:
                         }
                     )
                 )
+                (leaf / "publisher-summary.json").write_text(json.dumps({"source_lag_ns": {"p50": 150_000, "p99": 320_000}}))
+            if experiment == "e-perf-5":
+                (leaf / "service.hdr").write_text(benchsink_hdr_log({32 if condition == "wafer" else 4: 60_000}))
             if experiment == "e-perf-4":
                 (leaf / "service-percentiles.json").write_text(
                     json.dumps(
@@ -232,15 +236,35 @@ def build_complete_fixture(root: Path) -> None:
     for system in ("wafer", "native"):
         for rate in (1_000, 4_000):
             leaf = root / "e-perf-10" / system / f"rate-{rate:05d}" / "run-01-attempt-01"
-            write_passed_artifact(leaf, "host-sidecar.json", {"sut_cpus": "1-3"})
-            busy = rate // 100
-            (leaf / "cpu-cores.csv").write_text(
-                "timestamp_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal,frequency_hz\n"
-                + "".join(
-                    f"{stamp},{cpu},{stamp * (busy if cpu else 2 * busy)},0,0,{stamp * 100},0,0,0,0,2400000000\n"
-                    for stamp in (1, 2)
-                    for cpu in range(4)
+            write_passed_artifact(
+                leaf, "host-sidecar.json", {"sut_cpus": "1-3", "clock_ticks_per_second": 100}
+            )
+            (leaf / "measurement-window.json").write_text(
+                json.dumps({"started_ns": 1_000_000_000, "finished_ns": 2_000_000_000})
+            )
+            lines = ["timestamp_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal,frequency_hz\n"]
+            for cpu in range(4):
+                busy = rate // 100 if cpu else rate // 50
+                # Idle outside the window; inside it the tick sampled a tenth of the busy time.
+                counters = ((0, 0), (0, 100), (busy // 10, 200 - busy), (busy // 10, 300 - busy))
+                lines += [
+                    f"{second * 1_000_000_000},{cpu},{user},0,0,{idle},0,0,0,0,2400000000\n"
+                    for second, (user, idle) in enumerate(counters)
+                ]
+            (leaf / "cpu-cores.csv").write_text("".join(lines))
+            intended = rate * 60
+            messages = {"intended": intended, "rejected": 0, "acked": intended, "received_unique": intended}
+            (leaf / "capacity-run.json").write_text(
+                json.dumps({"system": system, "rate_msg_s": rate, "run_index": 1, "messages": messages})
+            )
+            (leaf / "stdout.log").write_text(
+                "".join(
+                    f"Load generation complete total={count} errors=0 acked={count}\n"
+                    for count in (rate * 30, intended)
                 )
+            )
+            (leaf / "per_node_metrics.csv").write_text(
+                f"node_id,messages_in,messages_out\nmqtt-in,0,{rate * 90}\nmqtt-out,{rate * 90},{rate * 90}\n"
             )
     (root / "progress.jsonl").write_text(
         "".join(
@@ -391,11 +415,19 @@ def build_complete_fixture(root: Path) -> None:
                         "branch_a": {
                             "offered_messages": 60_000,
                             "lost_messages": 0,
-                            "throughput": {"mean_messages_per_second": 1_000 - run},
+                            "throughput": {
+                                "total_messages": 60_000,
+                                "mean_messages_per_second": 1_000 - run,
+                            },
                             "latency_ns": {"p95": 120_000 + run},
                         }
                     },
                 },
+            )
+            branch_a = root / "e-iso-7" / condition / f"run-{run:02d}" / "branch-a"
+            branch_a.mkdir()
+            (branch_a / "interval-latency.json").write_text(
+                json.dumps({"rows": [{"interval_start_ns": 0, "interval_end_ns": 60_000_000_000}]})
             )
     for run in (1, 2):
         leaf = root / "e-iso-8" / "panic-recovery" / f"run-{run:02d}-attempt-02"
@@ -619,7 +651,9 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert (rendered / "rq1/depth-rss.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-depth-rss-slope.csv").is_file()
     assert (rendered / "rq2/branch-isolation.pdf").stat().st_size > 1_000
-    assert (rendered / "rq2-branch-isolation.csv").is_file()
+    branch = pd.read_csv(rendered / "rq2-branch-isolation.csv").set_index("condition")
+    assert branch.median_arrival_span_throughput_msg_s.eq(1_000).all()
+    assert branch.loc[["panic-attack", "epoch-loop-attack"], "arrival_span_drop_percent"].eq(0).all()
     assert (rendered / "rq2/recovery.pdf").stat().st_size > 1_000
     assert (rendered / "rq2-recovery.csv").is_file()
     assert (rendered / "e-perf-1-target-load.csv").is_file()
@@ -636,6 +670,7 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert overhead.host.tolist() == ["rpi5", "jetson", "x86"]
     assert overhead.columns[0] == "host" and "status" not in overhead
     assert overhead.median_ratio.eq(1.2).all()
+    assert overhead.service_difference_ns.eq(16_895 - 2_559).all()
     assert overhead.runs_stopped_early.eq(0).all()
     assert (rendered / "e-perf-10-rate-estimates.csv").is_file()
     assert (rendered / "e-swap-4-burst.tex").is_file()
@@ -656,7 +691,21 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert density[0].startswith("plugin,wasm_bytes,container_floor_bytes,floor_to_wasm_ratio,")
     assert all(",450000," in row for row in density[1:])
     assert (rendered / "rq1/core-utilisation.pdf").stat().st_size > 1_000
-    assert (rendered / "e-perf-10-core-utilisation.csv").is_file()
+    cores = pd.read_csv(rendered / "e-perf-10-core-utilisation.csv")
+    assert set(zip(cores.offered_rate_msg_s, cores.cores, cores.median_busy_percent.round(6))) == {
+        (1_000, "support cores", 20.0),
+        (1_000, "SUT cores", 10.0),
+        (4_000, "support cores", 80.0),
+        (4_000, "SUT cores", 40.0),
+    }
+    loss = pd.read_csv(rendered / "e-perf-10-loss-location.csv")
+    assert loss[["system", "offered_rate_msg_s", "N_runs"]].values.tolist() == [
+        ["native", 1_000, 1],
+        ["native", 4_000, 1],
+        ["wafer", 1_000, 1],
+        ["wafer", 4_000, 1],
+    ]
+    assert loss.pooled_sut_missed_share_of_accepted.eq(0).all()
     assert (rendered / "campaign/temperature.pdf").stat().st_size > 1_000
     assert (rendered / "campaign-attempts.csv").is_file()
     assert (rendered / "campaign-timing.csv").is_file()

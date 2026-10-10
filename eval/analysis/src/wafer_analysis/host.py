@@ -23,24 +23,35 @@ _BUSY_FIELDS = ("user", "nice", "system", "irq", "softirq", "steal")
 _TOTAL_FIELDS = (*_BUSY_FIELDS, "idle", "iowait")
 
 
-def core_utilisation(rows: list[dict]) -> pd.DataFrame:
-    """Busy and iowait percent per core between its first and last ``cpu-cores.csv`` sample."""
+def core_utilisation(
+    rows: list[dict], ticks_per_second: int, started_ns: int, finished_ns: int
+) -> pd.DataFrame:
+    """Busy and iowait percent per core over its ``cpu-cores.csv`` samples inside the window.
+
+    A tickless kernel counts idle and iowait time exactly but samples busy time on the
+    scheduler tick, so the jiffies do not add up to the elapsed time. Busy is the elapsed
+    time the core was neither idle nor waiting on I/O.
+    """
     by_cpu: dict[int, list[dict]] = {}
     for row in rows:
-        by_cpu.setdefault(int(row["cpu"]), []).append(row)
+        samples = by_cpu.setdefault(int(row["cpu"]), [])
+        if started_ns <= int(row["timestamp_ns"]) <= finished_ns:
+            samples.append(row)
     result = []
     for cpu, samples in sorted(by_cpu.items()):
+        if len(samples) < 2:
+            raise ValueError(f"cpu {cpu} needs two increasing samples")
         samples.sort(key=lambda sample: int(sample["timestamp_ns"]))
         first, last = samples[0], samples[-1]
         delta = {field: int(last[field]) - int(first[field]) for field in _TOTAL_FIELDS}
-        total = sum(delta.values())
-        if len(samples) < 2 or total <= 0 or min(delta.values()) < 0:
+        ticks = (int(last["timestamp_ns"]) - int(first["timestamp_ns"])) / 1e9 * ticks_per_second
+        if ticks <= 0 or min(delta.values()) < 0:
             raise ValueError(f"cpu {cpu} needs two increasing samples")
         result.append(
             {
                 "cpu": cpu,
-                "busy_percent": 100 * sum(delta[field] for field in _BUSY_FIELDS) / total,
-                "iowait_percent": 100 * delta["iowait"] / total,
+                "busy_percent": 100 * (1 - (delta["idle"] + delta["iowait"]) / ticks),
+                "iowait_percent": 100 * delta["iowait"] / ticks,
             }
         )
     return pd.DataFrame(result)

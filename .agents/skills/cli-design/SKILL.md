@@ -3,7 +3,7 @@ name: cli-design
 description: >
   CLI design patterns for waferctl using clap derive API. Covers dual-consumer error
   messages (human-readable + machine-parseable for automation), structured JSON output
-  with RFC 9457 Problem Details, endpoint configuration, output formatting with tabled,
+  and errors, endpoint configuration, output formatting with tabled,
   and interactive vs scripted UX. Use when adding CLI commands, formatting output,
   handling CLI errors, designing subcommand interfaces, or making waferctl agent-friendly.
   Triggers on: waferctl, CLI, clap, subcommand, Parser, Subcommand, tabled, --json,
@@ -37,30 +37,26 @@ the table. (zircote, "CLI Error Messages Are a Dual-Consumer Problem")
 ### Human Output (default)
 
 ```
-Error: Cannot connect to runtime at http://localhost:8080
+Error: Cannot connect to runtime at http://127.0.0.1:9090
   Is the pipeline running? Try: wafer --config pipeline.toml
 ```
 
 ### Machine Output (--json)
 
-Follow RFC 9457 Problem Details + extension fields:
+Errors go to stderr as one JSON object (`CliError::format_json` in
+`crates/waferctl/src/error.rs`):
 ```json
 {
-  "type": "urn:wafer:error:connection-refused",
-  "title": "Cannot connect to runtime",
-  "status": 1,
-  "detail": "TCP connection refused at http://localhost:8080",
-  "instance": "/health",
-  "suggested_fix": "Start the pipeline: wafer --config pipeline.toml",
-  "retry_after": null,
-  "docs_url": "https://github.com/PedroKlein/wafer#quickstart"
+  "error": {
+    "message": "Cannot connect to runtime at http://127.0.0.1:9090",
+    "exit_code": 3,
+    "hint": "Check that the WAFER runtime is running and the endpoint URL is correct."
+  }
 }
 ```
 
-Key extension fields:
-- `suggested_fix`: free-text recovery action (agent can attempt automatically)
-- `retry_after`: seconds to wait before retrying (null = don't retry)
-- `docs_url`: link to relevant documentation
+`hint` is present only when the error carries one. `exit_code` matches the
+process exit code.
 
 ---
 
@@ -86,7 +82,7 @@ enum Commands {
     Status,
     Nodes { #[arg(short, long)] wide: bool },
     Node { id: String },
-    HotSwap { node_id: String },
+    HotSwap { node_id: String, #[arg(long)] wasm_path: String },
     Reload,
     Drain,
     Shutdown,
@@ -146,15 +142,11 @@ struct NodeRow {
 ### Exit Codes (Semantic, Not Random)
 
 ```rust
-pub fn exit_code(err: &CliError) -> i32 {
-    match err {
-        CliError::ConnectionFailed(_) => 1,   // Runtime unreachable
-        CliError::NotFound(_) => 2,           // Resource doesn't exist
-        CliError::Conflict(_) => 3,           // Swap already in progress
-        CliError::InvalidInput(_) => 4,       // Bad arguments
-        CliError::Internal(_) => 5,           // Server error
-        CliError::Timeout(_) => 6,            // Operation timed out
-    }
+pub mod exit_code {
+    pub const SUCCESS: i32 = 0;           // Command completed
+    pub const USER_ERROR: i32 = 1;        // Bad arguments, invalid config
+    pub const API_ERROR: i32 = 2;         // Server returned an error (node not found, swap conflict)
+    pub const CONNECTION_ERROR: i32 = 3;  // Runtime unreachable
 }
 ```
 
@@ -167,7 +159,7 @@ eprintln!("Error: reqwest::Error {{ kind: Connect, url: ... }}");
 // GOOD — actionable message + context
 eprintln!("Error: Cannot connect to runtime at {endpoint}");
 eprintln!("  Hint: Is the pipeline running? Try: wafer --config pipeline.toml");
-eprintln!("  Endpoint resolved from: {source}");  // "~/.config/wafer/endpoints.toml"
+eprintln!("  Endpoint resolved from: {source}");  // "~/.config/wafer/config.toml"
 ```
 
 ### Threading Global Flags Through Commands
@@ -180,7 +172,9 @@ async fn run() -> Result<(), CliError> {
     
     match cli.command {
         Commands::Status => cmd_status(&client, cli.json).await,
-        Commands::HotSwap { node_id } => cmd_hotswap(&client, &node_id, cli.json).await,
+        Commands::HotSwap { node_id, wasm_path } => {
+            cmd_hot_swap(&client, &node_id, &wasm_path, cli.json).await
+        }
         // ...
     }
 }
@@ -190,22 +184,22 @@ async fn run() -> Result<(), CliError> {
 
 ## Endpoint Configuration
 
-Stored at `~/.config/wafer/endpoints.toml`:
+Stored at `<config dir>/wafer/config.toml` (`~/.config/wafer/config.toml` on Linux):
 ```toml
 default = "local"
 
 [endpoints.local]
-url = "http://localhost:8080"
+url = "http://127.0.0.1:9090"
 
 [endpoints.raspi]
-url = "https://192.168.1.100:8080"
+url = "http://192.168.1.100:9090"
 ```
 
 Resolution order (first match wins):
 1. `--endpoint http://...` — URL passed directly
 2. `--endpoint raspi` — name lookup in config
 3. Neither — use `default` from config
-4. No config file — fallback to `http://localhost:8080`
+4. No default and no endpoints configured — fallback to `http://127.0.0.1:9090`
 
 ---
 
@@ -227,11 +221,11 @@ Commands::Shutdown => {
 ### Progress for Long Operations
 
 ```rust
-Commands::HotSwap { node_id } => {
+Commands::HotSwap { node_id, wasm_path } => {
     if !cli.json {
         eprintln!("Hot-swapping node '{node_id}'...");  // stderr = progress
     }
-    let metrics = client.hot_swap(&node_id).await?;
+    let metrics = client.hot_swap(&node_id, &wasm_path).await?;
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&metrics)?);  // stdout = data
     } else {
@@ -257,6 +251,6 @@ Commands::HotSwap { node_id } => {
   context is undebuggable; always show which endpoint was tried and how it was resolved
 - **NEVER emit ANSI color codes to non-TTY output** — piped output becomes garbled;
   check `std::io::stdout().is_terminal()` before coloring
-- **NEVER treat errors as just strings** — structure them with type URIs, exit codes,
-  and `suggested_fix`; in 2026 your CLI's consumers include AI agents that can parse
+- **NEVER treat errors as just strings** — structure them with a message, exit code,
+  and recovery `hint`; in 2026 your CLI's consumers include AI agents that can parse
   structured diagnostics and retry autonomously

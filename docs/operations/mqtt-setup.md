@@ -63,7 +63,7 @@ Add `rumqttc` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rumqttc = "0.24"
+rumqttc = "0.25"
 tokio = { version = "1", features = ["full"] }
 ```
 

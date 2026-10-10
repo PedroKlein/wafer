@@ -233,9 +233,9 @@ write to the same node's input channel.
 
 ### WIT Design Rules for WAFER
 
-- **`borrow<buffer>` enables zero-copy routing** — router/filter plugins never call
-  `read()`, so payload bytes never cross the boundary. Transform plugins call
-  `read-all()` only when they need the data. This is WAFER's primary RQ1 optimization.
+- **`borrow<buffer>` lets a plugin skip copying the payload** when it does not need it;
+  plugins call `read-all()` only when they inspect the data (the current first-party
+  threshold-filter and content-router do).
 - **Typed return per interface** — `transform.process` returns `result<output-message,
   process-error>`; `filter.evaluate` returns `result<bool, process-error>`;
   `router.route` returns `result<list<port-id>, process-error>`. No wrapper enum.

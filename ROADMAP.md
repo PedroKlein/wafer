@@ -10,32 +10,26 @@ decisions that these items would build on are captured in
 The TG2 pre-campaign runtime and evaluation-contract remediation is verified on
 a clean candidate. The restored MNIST inference path is also verified locally
 and on Jetson. The async P2 host path and bounded outbound HTTP capability are
-implemented and reviewed with no changes requested. Cross-repository parity and
-the P3 adoption decision remain before any release, pilot, or final campaign.
+implemented and reviewed with no changes requested. The final campaign runs on
+that verified P2 contract (`wafer:pipeline@0.1.0`); the P3 PoC and its adoption
+decision come after it. Cross-repository parity remains before any release or pilot.
 The Jetson receipt confirms CUDA provider execution but not stable CUDA teardown
 or inference performance.
 The canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md) is the current operational boundary.
 
 Remaining work for thesis-grade numbers:
 
-- Complete the isolated P3 PoC and decide whether the first release migrates to
-  a new WIT package version or retains the verified P2 contract. Any migration
-  happens before canonical runs; P2 evidence is not relabeled as P3 evidence.
-- Run the frozen canonical experiment matrix (N=30, 30 s warmup,
-  experiment-specific windows) on the already provisioned Pi 5 host via
-  [`docs/eval/pi5-experiment-runbook.md`](docs/eval/pi5-experiment-runbook.md),
-  then the same matrix on the Jetson Orin Nano and x86 replication hosts
+- Finish the final campaign of the frozen canonical experiment matrix (30 runs
+  for 22 of the 27 experiments, 30 s warmup, experiment-specific windows), which
+  is running on the Jetson Orin Nano and x86 replication hosts first and the
+  Raspberry Pi 5 last, via
+  [`docs/eval/pi5-experiment-runbook.md`](docs/eval/pi5-experiment-runbook.md)
   ([`docs/eval/jetson-host-setup.md`](docs/eval/jetson-host-setup.md),
   [`docs/eval/x86-host-setup.md`](docs/eval/x86-host-setup.md)).
-  Pi 5 host setup (performance governor) and the native eKuiper install
-  and smoke path are done; see
-  [`docs/status/rpi5-canonical-transition.md`](docs/status/rpi5-canonical-transition.md).
-  The Pi was provisioned with `isolcpus=1-3` and has to move to the CPU 0
-  affinity setup in
+  Every host uses the CPU 0 affinity setup in
   [`docs/eval/pi5-host-setup.md`](docs/eval/pi5-host-setup.md#4-keep-cpu-0-for-everything-except-the-system-under-test)
-  before its preflight passes.
-  The comparator has since moved from eKuiper 2.1.0 to 2.1.5, so each host
-  reinstalls it with `eval/ekuiper/install-native.sh` before its batch.
+  and native eKuiper 2.1.5. No batch has been approved yet; each finished batch
+  still needs `mise run approve-batch` and a committed `eval/final-batches.json`.
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
   observability follow-up, ~1 h, not blocking thesis numbers.
 
@@ -63,10 +57,12 @@ adoption gates.
   current MNIST architecture check. CPU inference and actual CUDA-provider
   execution are implemented; performance, energy, and production-readiness
   claims remain out of scope.
-- **P3 production migration, conditional on the PoC** — adopt a new versioned
-  WIT package only if Rust and Go toolchains, payload ownership, cancellation,
-  hot-swap, per-message semantics, and matched performance all pass. Otherwise
-  ship the verified P2 contract first.
+- **P3 PoC and production migration, after the campaign** — complete the
+  isolated P3 PoC, then adopt a new versioned WIT package only if Rust and Go
+  toolchains, payload ownership, cancellation, hot-swap, per-message semantics,
+  and matched performance all pass. Otherwise ship the verified P2 contract
+  first. Campaign evidence stays P2 evidence and is not relabeled as P3
+  evidence.
 - **OTLP tracing exporter** — replace the stdout `tracing`
   subscriber with a Jaeger / OTLP exporter for distributed
   observability integration.
