@@ -47,8 +47,13 @@ def _support_ceiling(state: object) -> int:
     raise ValueError("the scout found no delivery-good MQTT-loopback rate")
 
 
-def derive_bracket_rates(scout: Mapping, matrix: Mapping) -> list[int]:
-    """The extra E-Perf-10 rates that the matrix's bracket rule takes from one scout summary."""
+def _host_rates(rule: Mapping, host: str) -> list[int]:
+    return list(rule.get("host_rates_msg_s", {}).get(host, []))
+
+
+def derive_bracket_rates(scout: Mapping, matrix: Mapping, host: str) -> list[int]:
+    """The extra E-Perf-10 rates for ``host``: the bracket rule applied to one scout summary,
+    plus the fixed rates the matrix declares for that host."""
     rule, common, threshold = _rule(matrix)
     states = scout.get("states")
     if scout.get("action") != "stop" or not isinstance(states, Mapping):
@@ -73,7 +78,9 @@ def derive_bracket_rates(scout: Mapping, matrix: Mapping) -> list[int]:
     for rate in candidates:
         if 0 < rate <= support and rate not in common and rate not in rates:
             rates.append(rate)
-    return sorted(rates[: int(rule["max_extra_rates"])])
+    rates = rates[: int(rule["max_extra_rates"])]
+    rates += [rate for rate in _host_rates(rule, host) if rate not in rates]
+    return sorted(rates)
 
 
 def frozen_bracket_rates(batch: Mapping, matrix: Mapping) -> list[int]:
@@ -85,7 +92,8 @@ def frozen_bracket_rates(batch: Mapping, matrix: Mapping) -> list[int]:
         not isinstance(rates, list)
         or any(type(rate) is not int or rate <= 0 or rate in common for rate in rates)
         or rates != sorted(set(rates))
-        or len(rates) > int(rule["max_extra_rates"])
+        or len(rates) > int(rule["max_extra_rates"]) + len(_host_rates(rule, batch.get("host")))
+        or not set(_host_rates(rule, batch.get("host"))) <= set(rates)
     ):
         raise ValueError("batch.json records no valid E-Perf-10 bracket rates")
     return rates

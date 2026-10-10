@@ -2060,6 +2060,10 @@ def test_containment_summary_rejects_duplicate_runs_in_any_mode() -> None:
         containment_table(records, canonical=False)
 
 
+def arrival_span_ns(rate: float) -> float:
+    return 60_000 * 10**9 / rate
+
+
 def branch_records(throughput: dict[str, float], runs: int = 30) -> list[dict]:
     return [
         {
@@ -2069,10 +2073,14 @@ def branch_records(throughput: dict[str, float], runs: int = 30) -> list[dict]:
                 "branch_a": {
                     "offered_messages": 60_000,
                     "lost_messages": 0,
-                    "throughput": {"mean_messages_per_second": rate + run % 3},
+                    "throughput": {
+                        "mean_messages_per_second": rate + run % 3,
+                        "total_messages": 60_000,
+                    },
                     "latency_ns": {"p95": 120_000 + run},
                 }
             },
+            "branch_a_arrival_span_ns": arrival_span_ns(rate + run % 3),
         }
         for condition, rate in throughput.items()
         for run in range(1, runs + 1)
@@ -2094,62 +2102,49 @@ def test_branch_isolation_table_contrasts_each_attack_with_the_control() -> None
     assert table["pooled_loss"].eq(0).all() and table["thesis_evidence"].all()
 
 
-def test_branch_isolation_reports_the_arrival_span_drop_beside_the_window_drop() -> None:
-    records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 1_000})
-    window = branch_isolation_table(records)
+def test_branch_isolation_judges_the_drop_on_the_arrival_span_not_the_window() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 970, "epoch-loop-attack": 1_000})
     for record in records:
-        record["branches"]["branch_a"]["throughput"]["total_messages"] = 60_000
         arrival_rate = 998 if record["condition"] == "panic-attack" else 1_000
-        record["branch_a_arrival_span_ns"] = 60_000 * 10**9 // (arrival_rate + record["run_index"] % 3)
+        record["branch_a_arrival_span_ns"] = arrival_span_ns(arrival_rate + record["run_index"] % 3)
 
     table = branch_isolation_table(records).set_index("condition")
 
-    assert table.loc["control", "median_arrival_span_throughput_msg_s"] == pytest.approx(1_001)
-    assert table.loc["panic-attack", "median_arrival_span_throughput_msg_s"] == pytest.approx(999)
-    assert table.loc["panic-attack", "arrival_span_drop_percent"] == pytest.approx(100 * 2 / 1_001)
-    low, high = table.loc[
-        "panic-attack", ["arrival_span_drop_ci95_low_percent", "arrival_span_drop_ci95_high_percent"]
-    ]
+    attack = table.loc["panic-attack"]
+    assert attack["throughput_drop_percent"] == pytest.approx(100 * 30 / 1_001)
+    assert attack["median_arrival_span_throughput_msg_s"] == pytest.approx(999)
+    assert attack["arrival_span_drop_percent"] == pytest.approx(100 * 2 / 1_001)
+    low, high = attack[["arrival_span_drop_ci95_low_percent", "arrival_span_drop_ci95_high_percent"]]
     assert low <= 100 * 2 / 1_001 <= high
-    assert table.loc["epoch-loop-attack", "arrival_span_drop_percent"] == 0
+    assert attack["drop_estimate"] == attack["arrival_span_drop_percent"]
+    assert (attack["drop_verdict"], attack["verdict"]) == ("PASS", "PASS")
+    assert table.loc["epoch-loop-attack", "arrival_span_drop_percent"] == pytest.approx(0)
     assert pd.isna(table.loc["control", "arrival_span_drop_percent"])
-    assert table.loc["panic-attack", "throughput_drop_percent"] == pytest.approx(100 * 5 / 1_001)
-    unchanged = [column for column in window.columns if "arrival_span" not in column]
-    pd.testing.assert_frame_equal(table.reset_index()[unchanged], window[unchanged])
 
 
-def test_branch_isolation_arrival_span_is_missing_when_a_run_lacks_it() -> None:
+def test_branch_isolation_has_no_drop_verdict_when_a_control_run_lacks_the_arrival_span() -> None:
     records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 900})
-    window = branch_isolation_table(records)
-    for record in records:
-        record["branches"]["branch_a"]["throughput"]["total_messages"] = 60_000
-        record["branch_a_arrival_span_ns"] = 60_000_000_000
     records[0]["branch_a_arrival_span_ns"] = None
 
     table = branch_isolation_table(records).set_index("condition")
 
     assert pd.isna(table.loc["control", "median_arrival_span_throughput_msg_s"])
-    assert table.loc["panic-attack", "median_arrival_span_throughput_msg_s"] == 1_000
     assert table["arrival_span_drop_percent"].isna().all()
-    unchanged = [column for column in window.columns if "arrival_span" not in column]
-    pd.testing.assert_frame_equal(table.reset_index()[unchanged], window[unchanged])
+    assert table.loc[["panic-attack", "epoch-loop-attack"], "drop_verdict"].eq("PENDING").all()
+    assert table.loc["epoch-loop-attack", "throughput_drop_percent"] == pytest.approx(100 * 100 / 1_001)
 
 
 def test_branch_isolation_arrival_span_is_missing_only_for_the_attack_that_lacks_it() -> None:
     records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 900})
-    for record in records:
-        record["branches"]["branch_a"]["throughput"]["total_messages"] = 60_000
-        record["branch_a_arrival_span_ns"] = 60_000_000_000
     next(record for record in records if record["condition"] == "panic-attack")[
         "branch_a_arrival_span_ns"
     ] = None
 
     table = branch_isolation_table(records).set_index("condition")
 
-    assert table.loc["control", "median_arrival_span_throughput_msg_s"] == 1_000
     arrival_span = [column for column in table.columns if "arrival_span" in column]
     assert table.loc["panic-attack", arrival_span].isna().all()
-    assert table.loc["epoch-loop-attack", "arrival_span_drop_percent"] == 0
+    assert table.loc["panic-attack", "drop_verdict"] == "PENDING"
     assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
 
 
@@ -2554,6 +2549,21 @@ def test_branch_isolation_counts_an_attack_run_the_runtime_did_not_survive() -> 
     assert table.loc["epoch-loop-attack", "verdict"] == "PASS"
 
 
+def test_branch_isolation_keeps_a_run_whose_runtime_exited_after_the_branches_exported() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 1_000, "epoch-loop-attack": 1_000})
+    exited = next(
+        record
+        for record in records
+        if record["condition"] == "panic-attack" and record["run_index"] == 7
+    )
+    exited["sut_outcome_reasons"] = ["runtime-exit"]
+
+    table = branch_isolation_table(records).set_index("condition")
+
+    assert table.loc["panic-attack", "runs_stopped_early"] == 0
+    assert table.loc["panic-attack", "verdict"] == "PASS"
+
+
 def test_recovery_table_counts_a_run_the_runtime_did_not_survive() -> None:
     records = recovery_records()
     records[4] = {"condition": "panic-recovery", "run_index": 5, "sut_outcome_reasons": ["runtime-exit"]}
@@ -2634,15 +2644,13 @@ def test_branch_isolation_is_inconclusive_when_the_drop_bounds_straddle_the_thre
     records = branch_records({"control": 1_000, "panic-attack": 990, "epoch-loop-attack": 900})
     for record in records:
         rate = {"control": 1_000, "panic-attack": 990, "epoch-loop-attack": 900}[record["condition"]]
-        record["branches"]["branch_a"]["throughput"]["mean_messages_per_second"] = (
-            rate + 2 * (record["run_index"] - 15.5)
-        )
+        record["branch_a_arrival_span_ns"] = arrival_span_ns(rate + 2 * (record["run_index"] - 15.5))
     table = branch_isolation_table(records).set_index("condition")
     attack = table.loc["panic-attack"]
-    assert attack["throughput_drop_percent"] == pytest.approx(1.0)
+    assert attack["arrival_span_drop_percent"] == pytest.approx(1.0)
     assert (attack["drop_verdict"], attack["verdict"]) == ("INCONCLUSIVE", "INCONCLUSIVE")
     assert attack["drop_threshold"] == 1.0
-    assert attack["drop_estimate"] == attack["throughput_drop_percent"]
+    assert attack["drop_estimate"] == attack["arrival_span_drop_percent"]
     assert attack["drop_flips_at"] - attack["drop_ci_half_width"] < 1.0 < attack["drop_flips_at"]
     assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
     assert pd.isna(table.loc["control", "verdict"]) and pd.isna(table.loc["control", "drop_verdict"])
