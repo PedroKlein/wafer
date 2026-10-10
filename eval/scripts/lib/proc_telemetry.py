@@ -185,9 +185,10 @@ class ProcessTracker:
     """Keeps the pid to comm map so most seconds only new pids cost a read.
 
     A pid seen between fork and exec still carries the wrapper's name (the
-    runner launches the SUT through taskset), so pids last seen as a launcher
-    or interpreter are re-read every RECHECK_EVERY samples. Everything else
-    keeps the comm it had when first seen.
+    runner launches the SUT through taskset, systemd starts kuiperd through
+    its executor), so pids last seen as a launcher or interpreter are re-read
+    every RECHECK_EVERY samples. Everything else keeps the comm it had when
+    first seen.
     """
 
     RECHECK_EVERY = 5
@@ -199,7 +200,7 @@ class ProcessTracker:
 
     @staticmethod
     def may_exec(comm: str) -> bool:
-        return comm in LAUNCHER_COMMS or comm.startswith("python")
+        return comm in LAUNCHER_COMMS or comm.startswith(("python", "systemd", "("))
 
     def tracked_pids(self) -> list[int]:
         try:

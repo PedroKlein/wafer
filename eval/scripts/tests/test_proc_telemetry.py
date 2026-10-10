@@ -161,7 +161,7 @@ def test_only_launcher_pids_are_rechecked(tmp_path: Path, monkeypatch) -> None:
     import proc_telemetry
 
     fake_proc = tmp_path / "proc"
-    for pid, comm in {10: "kworker/0:1", 11: "systemd-journal", 12: "python3", 13: "bash"}.items():
+    for pid, comm in {10: "kworker/0:1", 11: "rsyslogd", 12: "python3", 13: "bash", 14: "(kuiperd)"}.items():
         (fake_proc / str(pid)).mkdir(parents=True)
         (fake_proc / str(pid) / "comm").write_text(f"{comm}\n")
     monkeypatch.setattr(proc_telemetry, "PROC", fake_proc)
@@ -176,10 +176,10 @@ def test_only_launcher_pids_are_rechecked(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(proc_telemetry, "read_text", counting_read_text)
     tracker = proc_telemetry.ProcessTracker()
     assert tracker.tracked_pids() == []
-    assert sorted(reads) == [10, 11, 12, 13]
-    for pid in (10, 11, 12, 13):
+    assert sorted(reads) == [10, 11, 12, 13, 14]
+    for pid in (10, 11, 12, 13, 14):
         (fake_proc / str(pid) / "comm").write_text("wafer\n")
     reads.clear()
     seen = [tracker.tracked_pids() for _ in range(tracker.RECHECK_EVERY)]
-    assert sorted(reads) == [12, 13]
-    assert seen[-1] == [12, 13]
+    assert sorted(reads) == [12, 13, 14]
+    assert seen[-1] == [12, 13, 14]
