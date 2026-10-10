@@ -260,6 +260,26 @@ def test_x86_backend_derives_package_power_from_rapl_energy_deltas(tmp_path: Pat
     assert abs(float(wrapped[0]["power_w"]) - (262143328850 - 11000000) / 1e6) < 1e-6
 
 
+def test_x86_proxy_counts_package_domains_but_keeps_psys_rows(tmp_path: Path, monkeypatch) -> None:
+    import pi_telemetry
+    from pi_telemetry import make_backend, sample
+
+    root = _x86_sysroot(tmp_path)
+    psys = root / "sys/class/powercap/intel-rapl:1"
+    _write(psys / "name", "psys\n")
+    _write(psys / "energy_uj", "2000000\n")
+    _write(psys / "max_energy_range_uj", "262143328850\n")
+    backend = make_backend("x86", root)
+    clock = iter([1_000_000_000, 2_000_000_000])
+    monkeypatch.setattr(pi_telemetry.time, "time_ns", lambda: next(clock))
+    sample(backend)
+    _write(root / "sys/class/powercap/intel-rapl:0/energy_uj", "16000000\n")
+    _write(psys / "energy_uj", "22000000\n")
+    summary, rails = sample(backend)
+    assert {rail["rail"]: rail["power_w"] for rail in rails} == {"package-0": 15.0, "psys": 20.0}
+    assert summary["rail_proxy_watts"] == 15.0
+
+
 def test_x86_backend_ignores_idle_average_pstate_and_offline_policies(
     tmp_path: Path,
 ) -> None:

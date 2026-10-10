@@ -33,6 +33,37 @@ use std::time::Instant;
 
 use wafer_types::config::{HotSwapConfig, OverflowPolicy};
 
+/// Logs why a node is about to rebuild its Store. Only the node's first
+/// recovery is logged at `warn` or `error`: a guest that fails every call
+/// would otherwise write one wasm backtrace per message, synchronously on the
+/// node's task. `per_node_metrics.csv` still counts every trap.
+fn log_recovery_cause(
+    metrics: &NodeMetrics,
+    node: &str,
+    error: &dyn std::fmt::Display,
+    out_of_budget: bool,
+) {
+    let first = metrics.recovery_count() == 0;
+    match (first, out_of_budget) {
+        (true, true) => tracing::warn!(
+            node,
+            %error,
+            "Wasm call ran out of budget — replacing Store before continuing"
+        ),
+        (true, false) => {
+            tracing::error!(node, %error, "unrecoverable error — attempting recovery");
+        }
+        (false, true) => tracing::debug!(
+            node,
+            %error,
+            "Wasm call ran out of budget — replacing Store before continuing"
+        ),
+        (false, false) => {
+            tracing::debug!(node, %error, "unrecoverable error — attempting recovery");
+        }
+    }
+}
+
 // =============================================================================
 // Replacement progress: runner-reported adoption and first local outcome
 // =============================================================================
@@ -896,6 +927,48 @@ async fn send_one(sender: &DownstreamSender, envelope: RuntimeEnvelope) {
 mod tests {
     use super::*;
     use tokio_util::sync::CancellationToken;
+
+    #[derive(Clone, Default)]
+    struct LevelRecorder(Arc<Mutex<Vec<tracing::Level>>>);
+
+    impl tracing::Subscriber for LevelRecorder {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            self.0.lock().expect("recorder lock").push(*event.metadata().level());
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn only_the_first_recovery_cause_is_logged_above_debug() {
+        let recorder = LevelRecorder::default();
+        let metrics = NodeMetrics::new();
+        tracing::subscriber::with_default(recorder.clone(), || {
+            log_recovery_cause(&metrics, "attack", &"wasm trap: unreachable", false);
+            metrics.record_recovery(1_000);
+            log_recovery_cause(&metrics, "attack", &"wasm trap: unreachable", false);
+            log_recovery_cause(&metrics, "attack", &"wasm trap: interrupt", true);
+        });
+        let levels = recorder.0.lock().expect("recorder lock").clone();
+        assert_eq!(levels, [tracing::Level::ERROR, tracing::Level::DEBUG, tracing::Level::DEBUG]);
+    }
+
+    #[test]
+    fn a_first_out_of_budget_recovery_is_a_warning() {
+        let recorder = LevelRecorder::default();
+        tracing::subscriber::with_default(recorder.clone(), || {
+            log_recovery_cause(&NodeMetrics::new(), "attack", &"wasm trap: interrupt", true);
+        });
+        assert_eq!(*recorder.0.lock().expect("recorder lock"), [tracing::Level::WARN]);
+    }
 
     #[tokio::test]
     async fn hot_swap_progress_reports_init_failure() {

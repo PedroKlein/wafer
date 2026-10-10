@@ -82,8 +82,8 @@ To turn up the logs, name the targets:
 RUST_LOG=wafer=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
 ```
 
-The runtime always adds an `info` default after reading `RUST_LOG`, so a
-level-only value such as `RUST_LOG=debug` cannot change that default.
+A level-only value such as `RUST_LOG=debug` raises every target. Without
+`RUST_LOG` the runtime logs at `info`.
 
 ## 4 — Explore the control plane
 

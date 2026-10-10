@@ -12,7 +12,7 @@ use std::future::Future;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
@@ -39,6 +39,7 @@ use wafer_types::NodeState;
 /// (`run-experiment.sh` waits 12 s after SIGTERM, the canonical runner 10 s),
 /// so the bench artifacts written after the drain are not lost to a SIGKILL.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const DLQ_SYNC_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Exit value of one supervised node task: `Err` means the node failed before
 /// or while running (for example a source/sink `init()` error), which fails
@@ -1006,15 +1007,9 @@ async fn run_dlq_sink(
 ) -> Result<()> {
     match config {
         crate::config::DeadLetterConfig::File { path, .. } => {
-            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-            while let Some(envelope) = receiver.recv().await {
-                let mut line = envelope.to_json_bytes().map_err(|error| {
-                    WaferError::Runtime(format!("failed to serialize DLQ record: {error}"))
-                })?;
-                line.push(b'\n');
-                file.write_all(&line)?;
-            }
-            file.sync_all()?;
+            tokio::task::spawn_blocking(move || write_dlq_file(receiver, &path)).await.map_err(
+                |error| WaferError::Runtime(format!("DLQ file writer panicked: {error}")),
+            )??;
         }
         crate::config::DeadLetterConfig::Mqtt { broker, port, topic, tls, auth, .. } => {
             let mut options = rumqttc::MqttOptions::new("wafer-dlq", broker, port);
@@ -1082,6 +1077,37 @@ async fn run_dlq_sink(
                 })?;
         }
     }
+    Ok(())
+}
+
+/// Writes on a blocking thread so a burst of records never stalls a runtime
+/// worker, and syncs every [`DLQ_SYNC_INTERVAL`] so the sync at the end only
+/// covers the last interval instead of every page written since the start,
+/// which on slow storage can outlast the shutdown wait for this task.
+fn write_dlq_file(
+    mut receiver: tokio::sync::mpsc::Receiver<DlqEnvelope>,
+    path: &str,
+) -> Result<()> {
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    let mut last_sync = Instant::now();
+    while let Some(envelope) = receiver.blocking_recv() {
+        let mut line = envelope.to_json_bytes().map_err(|error| {
+            WaferError::Runtime(format!("failed to serialize DLQ record: {error}"))
+        })?;
+        line.push(b'\n');
+        writer.write_all(&line)?;
+        if receiver.is_empty() {
+            writer.flush()?;
+        }
+        if last_sync.elapsed() >= DLQ_SYNC_INTERVAL {
+            writer.flush()?;
+            writer.get_ref().sync_data()?;
+            last_sync = Instant::now();
+        }
+    }
+    writer.flush()?;
+    writer.get_ref().sync_all()?;
     Ok(())
 }
 
@@ -1297,6 +1323,54 @@ mod tests {
         assert_eq!(record["source_node"], "source");
         assert_eq!(record["reason"]["type"], "queue_full");
         assert_eq!(record["original"]["retry_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn file_dlq_reaches_the_file_while_records_keep_coming() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dlq.jsonl");
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let sink = tokio::spawn(run_dlq_sink(
+            rx,
+            DeadLetterConfig::File { path: path.to_string_lossy().into_owned(), queue_capacity: 2 },
+        ));
+        tx.send(dlq_test_envelope("first")).await.expect("first DLQ record");
+        tokio::time::sleep(DLQ_SYNC_INTERVAL + Duration::from_millis(100)).await;
+        tx.send(dlq_test_envelope("second")).await.expect("second DLQ record");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut lines = 0;
+        while lines < 2 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            lines = std::fs::read_to_string(&path).map_or(0, |text| text.lines().count());
+        }
+        assert_eq!(lines, 2, "records written a sync interval apart must reach the file");
+
+        drop(tx);
+        sink.await.expect("sink task").expect("file DLQ must persist every record");
+    }
+
+    #[tokio::test]
+    async fn file_dlq_writes_a_lone_record_without_waiting_for_more() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dlq.jsonl");
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let sink = tokio::spawn(run_dlq_sink(
+            rx,
+            DeadLetterConfig::File { path: path.to_string_lossy().into_owned(), queue_capacity: 2 },
+        ));
+        tx.send(dlq_test_envelope("only")).await.expect("DLQ record");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut lines = 0;
+        while lines < 1 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            lines = std::fs::read_to_string(&path).map_or(0, |text| text.lines().count());
+        }
+        assert_eq!(lines, 1, "a record must reach the file while the sender stays open");
+
+        drop(tx);
+        sink.await.expect("sink task").expect("file DLQ must persist every record");
     }
 
     #[tokio::test]

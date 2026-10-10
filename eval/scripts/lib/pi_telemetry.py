@@ -409,13 +409,18 @@ def sample(
         "cpu_frequency_hz": read_cpu_frequency_hz(backend.sysroot),
         "governor": read_governor(backend.sysroot),
         "throttled": backend.throttled(),
-        "rail_proxy_watts": proxy_watts(rails),
+        "rail_proxy_watts": proxy_watts(rails, backend.name),
     }
     return summary, rails
 
 
-def proxy_watts(rails: list[dict[str, float | str]]) -> float:
-    """Sum the rails, or take the Jetson module input alone, which already feeds the others."""
+def proxy_watts(rails: list[dict[str, float | str]], backend_name: str = "") -> float:
+    """Sum the rails, or take the Jetson module input alone, which already feeds the others.
+
+    On x86 only the package domains count: psys already contains them.
+    """
+    if backend_name == "x86":
+        return sum(float(rail["power_w"]) for rail in rails if str(rail["rail"]).startswith("package"))
     inputs = [rail for rail in rails if rail["rail"] in JETSON_INPUT_RAILS]
     return sum(float(rail["power_w"]) for rail in inputs or rails)
 

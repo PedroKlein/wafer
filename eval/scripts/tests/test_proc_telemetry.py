@@ -155,3 +155,31 @@ def test_sampler_records_a_failure_instead_of_dying_silently(tmp_path: Path) -> 
     assert proc_telemetry.run(tmp_path / "leaf", 0.1, "not-a-cpu-list", "") == 1
     error = json.loads((tmp_path / "leaf" / "host-sidecar-error.json").read_text())
     assert error["error"].startswith("ValueError")
+
+
+def test_only_launcher_pids_are_rechecked(tmp_path: Path, monkeypatch) -> None:
+    import proc_telemetry
+
+    fake_proc = tmp_path / "proc"
+    for pid, comm in {10: "kworker/0:1", 11: "rsyslogd", 12: "python3", 13: "bash", 14: "(kuiperd)"}.items():
+        (fake_proc / str(pid)).mkdir(parents=True)
+        (fake_proc / str(pid) / "comm").write_text(f"{comm}\n")
+    monkeypatch.setattr(proc_telemetry, "PROC", fake_proc)
+    reads: list[int] = []
+    real_read_text = proc_telemetry.read_text
+
+    def counting_read_text(path: Path) -> str | None:
+        if path.name == "comm":
+            reads.append(int(path.parent.name))
+        return real_read_text(path)
+
+    monkeypatch.setattr(proc_telemetry, "read_text", counting_read_text)
+    tracker = proc_telemetry.ProcessTracker()
+    assert tracker.tracked_pids() == []
+    assert sorted(reads) == [10, 11, 12, 13, 14]
+    for pid in (10, 11, 12, 13, 14):
+        (fake_proc / str(pid) / "comm").write_text("wafer\n")
+    reads.clear()
+    seen = [tracker.tracked_pids() for _ in range(tracker.RECHECK_EVERY)]
+    assert sorted(reads) == [12, 13, 14]
+    assert seen[-1] == [12, 13, 14]
