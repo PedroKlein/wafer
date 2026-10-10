@@ -34,7 +34,7 @@ def scout(**states: dict) -> dict:
 
 
 def test_rates_bracket_both_ceilings_and_hit_both_threshold_points() -> None:
-    rates = derive_bracket_rates(scout(), MATRIX)
+    rates = derive_bracket_rates(scout(), MATRIX, "rpi5")
 
     assert rates == [4_500, 5_700, 6_300, 9_500, 10_500, 15_100]
     # WAFER delivering 4,500 and eKuiper failing 6,300 is a PASS on its own.
@@ -44,7 +44,7 @@ def test_rates_bracket_both_ceilings_and_hit_both_threshold_points() -> None:
 
 
 def test_a_point_exactly_on_the_threshold_stays_on_the_deciding_side() -> None:
-    rates = derive_bracket_rates(scout(ekuiper=resolved(9_500, 10_000)), MATRIX)
+    rates = derive_bracket_rates(scout(ekuiper=resolved(9_500, 10_000)), MATRIX, "rpi5")
 
     assert {7_000, 10_000} <= set(rates)
     assert 7_000 / 10_000 >= 0.70
@@ -60,11 +60,11 @@ def test_the_threshold_comes_from_the_declared_verdict_rule() -> None:
     )
     row["value"] = 0.8
 
-    assert derive_bracket_rates(scout(), matrix) == [5_100, 5_700, 6_300, 9_500, 10_500, 13_200]
+    assert derive_bracket_rates(scout(), matrix, "rpi5") == [5_100, 5_700, 6_300, 9_500, 10_500, 13_200]
 
 
 def test_common_grid_rates_are_not_added_but_still_anchor_a_threshold_point() -> None:
-    rates = derive_bracket_rates(scout(ekuiper=resolved(3_800, 4_000)), MATRIX)
+    rates = derive_bracket_rates(scout(ekuiper=resolved(3_800, 4_000)), MATRIX, "rpi5")
 
     assert 4_000 not in rates
     assert {3_600, 2_800} <= set(rates)
@@ -72,7 +72,7 @@ def test_common_grid_rates_are_not_added_but_still_anchor_a_threshold_point() ->
 
 def test_rates_above_the_support_path_are_dropped_with_their_threshold_point() -> None:
     rates = derive_bracket_rates(
-        scout(**{"mqtt-loopback": resolved(10_200, 10_800)}), MATRIX
+        scout(**{"mqtt-loopback": resolved(10_200, 10_800)}), MATRIX, "rpi5"
     )
 
     assert rates == [4_500, 5_700, 6_300, 9_500]
@@ -85,6 +85,7 @@ def test_an_unsaturated_support_path_caps_at_its_last_doubling() -> None:
             wafer=resolved(20_000, 22_000),
         ),
         MATRIX,
+        "rpi5",
     )
 
     assert rates == [4_500, 5_700, 6_300]
@@ -96,14 +97,14 @@ def test_censored_scout_states_add_no_rates() -> None:
         ekuiper={"phase": "left-censored", "rate_msg_s": 500},
     )
 
-    assert derive_bracket_rates(summary, MATRIX) == []
+    assert derive_bracket_rates(summary, MATRIX, "rpi5") == []
 
 
 def test_extra_rates_stop_at_the_declared_maximum() -> None:
     matrix = copy.deepcopy(MATRIX)
     matrix["final_campaign"]["capacity_grid"]["bracket_rates"]["max_extra_rates"] = 3
 
-    assert derive_bracket_rates(scout(), matrix) == [5_700, 9_500, 10_500]
+    assert derive_bracket_rates(scout(), matrix, "rpi5") == [5_700, 9_500, 10_500]
 
 
 @pytest.mark.parametrize(
@@ -122,7 +123,7 @@ def test_extra_rates_stop_at_the_declared_maximum() -> None:
 )
 def test_an_unusable_scout_summary_is_refused(summary: dict, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        derive_bracket_rates(summary, MATRIX)
+        derive_bracket_rates(summary, MATRIX, "rpi5")
 
 
 def test_frozen_rates_are_read_back_only_when_they_fit_the_rule() -> None:
@@ -144,3 +145,21 @@ def test_frozen_rates_are_read_back_only_when_they_fit_the_rule() -> None:
             frozen_bracket_rates({"capacity_brackets": {"rates_msg_s": rates}}, MATRIX)
     with pytest.raises(ValueError, match="no valid E-Perf-10 bracket rates"):
         frozen_bracket_rates({}, MATRIX)
+
+
+def test_a_host_with_fixed_rates_adds_them_beside_its_bracket_rates() -> None:
+    rates = derive_bracket_rates(scout(ekuiper=resolved(3_500, 3_700)), MATRIX, "x86")
+
+    assert {5_000, 6_000, 7_000} <= set(rates)
+    assert rates == sorted(set(rates))
+    assert derive_bracket_rates(scout(ekuiper=resolved(3_500, 3_700)), MATRIX, "rpi5") == [
+        rate for rate in rates if rate not in {5_000, 6_000, 7_000}
+    ]
+
+
+def test_frozen_rates_of_a_host_with_fixed_rates_must_include_them() -> None:
+    x86 = {"host": "x86"}
+    rates = [3_300, 3_700, 5_000, 6_000, 7_000, 9_500, 10_500]
+    assert frozen_bracket_rates({**x86, "capacity_brackets": {"rates_msg_s": rates}}, MATRIX) == rates
+    with pytest.raises(ValueError, match="no valid E-Perf-10 bracket rates"):
+        frozen_bracket_rates({**x86, "capacity_brackets": {"rates_msg_s": [3_300, 3_700]}}, MATRIX)
