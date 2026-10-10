@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use wafer_types::{ErrorResponse, MetricsSnapshot};
+use wafer_types::ErrorResponse;
 
 /// HTTP client for WAFER runtime.
 pub struct WaferClient {
@@ -40,19 +40,42 @@ pub struct NodeInfo {
     pub state: String,
     pub processed: u64,
     pub failed: u64,
-    pub swappable: bool,
+    pub replacement_eligible: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[expect(clippy::struct_field_names, reason = "field names match the runtime's JSON keys")]
 pub struct HotSwapTimeline {
     pub compile_ns: Option<u64>,
     pub instantiate_ns: Option<u64>,
+    pub signal_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_adopted_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_post_replacement_local_outcome_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_ns: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalOutcome {
+    pub disposition: String,
+    pub after_adoption_ns: u64,
+}
+
+/// Body of a 200 or 202 hot-swap response, or of a 200 `rolled_back` one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotSwapResult {
     pub node_id: String,
-    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub replacement_adopted: bool,
+    #[serde(default)]
+    pub first_post_replacement_local_outcome: Option<LocalOutcome>,
+    pub compile_cache: Option<String>,
     pub timeline: HotSwapTimeline,
 }
 
@@ -110,22 +133,6 @@ impl WaferClient {
     /// Shutdown pipeline.
     pub async fn shutdown(&self) -> Result<()> {
         self.post_empty("/api/v1/pipeline/shutdown").await
-    }
-
-    /// Get metrics as structured data.
-    ///
-    /// Currently returns a default snapshot; will call the runtime API when
-    /// the structured metrics endpoint is implemented.
-    #[expect(
-        clippy::unused_self,
-        reason = "Will use self.get() once runtime metrics endpoint exists"
-    )]
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "Maintains consistent Result<T> API with other client methods"
-    )]
-    pub fn metrics(&self) -> Result<MetricsSnapshot> {
-        Ok(MetricsSnapshot::default())
     }
 
     /// Get raw Prometheus metrics.
@@ -186,5 +193,110 @@ impl WaferClient {
         }
 
         response.json().await.context("Failed to parse response")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn node_json(id: &str, replacement_eligible: bool) -> serde_json::Value {
+        json!({
+            "id": id,
+            "state": "running",
+            "processed": 42,
+            "failed": 1,
+            "replacement_eligible": replacement_eligible,
+        })
+    }
+
+    #[test]
+    fn parses_node_list() {
+        let body = json!([node_json("source", false), node_json("transform", true)]);
+        let nodes: Vec<NodeInfo> = serde_json::from_value(body).unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(!nodes[0].replacement_eligible);
+        assert!(nodes[1].replacement_eligible);
+        assert_eq!(nodes[1].state, "running");
+    }
+
+    #[test]
+    fn parses_single_node() {
+        let node: NodeInfo = serde_json::from_value(node_json("transform", true)).unwrap();
+        assert_eq!(node.id, "transform");
+        assert_eq!((node.processed, node.failed), (42, 1));
+        assert!(node.replacement_eligible);
+    }
+
+    #[test]
+    fn parses_adopted_hot_swap() {
+        let body = json!({
+            "node_id": "transform",
+            "replacement_adopted": true,
+            "first_post_replacement_local_outcome": {
+                "disposition": "forwarded/enqueued",
+                "after_adoption_ns": 900,
+            },
+            "compile_cache": "compiled",
+            "timeline": {
+                "compile_ns": 1000,
+                "instantiate_ns": 200,
+                "signal_ns": 30,
+                "replacement_adopted_ns": 400,
+                "first_post_replacement_local_outcome_ns": 900,
+            }
+        });
+        let result: HotSwapResult = serde_json::from_value(body).unwrap();
+        assert_eq!(result.status, None);
+        assert!(result.replacement_adopted);
+        assert_eq!(
+            result.first_post_replacement_local_outcome.unwrap().disposition,
+            "forwarded/enqueued"
+        );
+        assert_eq!(result.compile_cache.as_deref(), Some("compiled"));
+        assert_eq!(result.timeline.replacement_adopted_ns, Some(400));
+    }
+
+    #[test]
+    fn parses_accepted_hot_swap() {
+        let body = json!({
+            "node_id": "transform",
+            "replacement_adopted": false,
+            "first_post_replacement_local_outcome": null,
+            "compile_cache": "memory_hit",
+            "timeline": {
+                "compile_ns": 1000,
+                "instantiate_ns": 200,
+                "signal_ns": 30,
+                "replacement_adopted_ns": null,
+                "first_post_replacement_local_outcome_ns": null,
+            }
+        });
+        let result: HotSwapResult = serde_json::from_value(body).unwrap();
+        assert!(!result.replacement_adopted);
+        assert!(result.first_post_replacement_local_outcome.is_none());
+        assert_eq!(result.timeline.replacement_adopted_ns, None);
+    }
+
+    #[test]
+    fn parses_rolled_back_hot_swap() {
+        let body = json!({
+            "node_id": "transform",
+            "status": "rolled_back",
+            "reason": "init failed",
+            "compile_cache": null,
+            "timeline": {
+                "compile_ns": null,
+                "instantiate_ns": 200,
+                "signal_ns": 30,
+                "rollback_ns": 50,
+            }
+        });
+        let result: HotSwapResult = serde_json::from_value(body).unwrap();
+        assert_eq!(result.status.as_deref(), Some("rolled_back"));
+        assert_eq!(result.reason.as_deref(), Some("init failed"));
+        assert!(!result.replacement_adopted);
+        assert_eq!(result.timeline.rollback_ns, Some(50));
     }
 }

@@ -186,5 +186,5 @@ sink. Observe process exit to confirm completion.
 There is no `GET /api/v1/pipeline`, `/pipeline/reload`, independent
 `/pipeline/drain`, structured metrics endpoint, WebSocket/SSE stream, or
 per-node metrics endpoint. `waferctl` calls only route paths listed above but
-has no reconfigure command. Its structured `metrics` command returns a local
-default snapshot; raw metrics reads `/metrics`.
+has no reconfigure command. Its `metrics` command prints the Prometheus text
+from `/metrics`.

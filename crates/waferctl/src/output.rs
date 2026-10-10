@@ -1,7 +1,6 @@
 //! Output formatting for waferctl.
 
 use tabled::{Table, Tabled};
-use wafer_types::MetricsSnapshot;
 
 use crate::client::{HotSwapResult, NodeInfo, PipelineStatus};
 use crate::config::CtlConfig;
@@ -67,9 +66,9 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
             .iter()
             .map(|n| NodeRowWide {
                 id: n.id.clone(),
-                node_type: if n.swappable { "wasm" } else { "native" }.to_string(),
+                node_type: if n.replacement_eligible { "wasm" } else { "native" }.to_string(),
                 state: n.state.clone(),
-                swappable: if n.swappable { "yes" } else { "no" }.to_string(),
+                swappable: if n.replacement_eligible { "yes" } else { "no" }.to_string(),
                 processed: n.processed,
                 failed: n.failed,
                 avg_ms: "-".to_string(),
@@ -84,7 +83,7 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
             .iter()
             .map(|n| NodeRow {
                 id: n.id.clone(),
-                node_type: if n.swappable { "wasm" } else { "native" }.to_string(),
+                node_type: if n.replacement_eligible { "wasm" } else { "native" }.to_string(),
                 state: n.state.clone(),
                 processed: n.processed,
                 avg_ms: "-".to_string(),
@@ -99,9 +98,9 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
 /// Prints detailed node information.
 pub fn print_node_detail(node: &NodeInfo) {
     println!("Node: {}", node.id);
-    println!("Type:       {}", if node.swappable { "wasm" } else { "native" });
+    println!("Type:       {}", if node.replacement_eligible { "wasm" } else { "native" });
     println!("State:      {}", node.state);
-    println!("Swappable:  {}", if node.swappable { "yes" } else { "no" });
+    println!("Swappable:  {}", if node.replacement_eligible { "yes" } else { "no" });
     println!();
     println!("Metrics:");
     println!("  Processed: {}", node.processed);
@@ -110,55 +109,34 @@ pub fn print_node_detail(node: &NodeInfo) {
 
 /// Prints hot-swap result.
 pub fn print_hot_swap_result(result: &HotSwapResult) {
-    println!("✓ Hot-swap request sent for node '{}'", result.node_id);
-    println!("Status: {}", result.status);
+    if let Some(status) = &result.status {
+        println!("✗ Hot-swap of node '{}': {status}", result.node_id);
+        if let Some(reason) = &result.reason {
+            println!("Reason: {reason}");
+        }
+    } else if result.replacement_adopted {
+        println!("✓ Node '{}' adopted the replacement", result.node_id);
+    } else {
+        println!("Node '{}' has not adopted the replacement yet", result.node_id);
+    }
+    if let Some(outcome) = &result.first_post_replacement_local_outcome {
+        println!("First outcome: {}", outcome.disposition);
+    }
+    if let Some(compile_cache) = &result.compile_cache {
+        println!("Compile cache: {compile_cache}");
+    }
     println!();
     println!("Timing:");
-    if let Some(compile_ns) = result.timeline.compile_ns {
-        println!("  Compile:     {compile_ns} ns");
-    }
-    if let Some(instantiate_ns) = result.timeline.instantiate_ns {
-        println!("  Instantiate: {instantiate_ns} ns");
-    }
-}
-
-/// Prints metrics in human-readable format.
-pub fn print_metrics(metrics: &MetricsSnapshot) {
-    if metrics.counters.is_empty() && metrics.gauges.is_empty() {
-        println!("No metrics available");
-        return;
-    }
-
-    if !metrics.counters.is_empty() {
-        println!("Counters:");
-        for (name, metric) in &metrics.counters {
-            println!("  {} - {}", name, metric.description);
-            for value in &metric.values {
-                let labels: Vec<String> =
-                    value.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                if labels.is_empty() {
-                    println!("    {}", value.value);
-                } else {
-                    println!("    {{{}}} {}", labels.join(", "), value.value);
-                }
-            }
-        }
-    }
-
-    if !metrics.gauges.is_empty() {
-        println!();
-        println!("Gauges:");
-        for (name, metric) in &metrics.gauges {
-            println!("  {} - {}", name, metric.description);
-            for value in &metric.values {
-                let labels: Vec<String> =
-                    value.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                if labels.is_empty() {
-                    println!("    {}", value.value);
-                } else {
-                    println!("    {{{}}} {}", labels.join(", "), value.value);
-                }
-            }
+    let timeline = &result.timeline;
+    for (label, value) in [
+        ("Compile:     ", timeline.compile_ns),
+        ("Instantiate: ", timeline.instantiate_ns),
+        ("Signal:      ", timeline.signal_ns),
+        ("Adopted:     ", timeline.replacement_adopted_ns),
+        ("Rollback:    ", timeline.rollback_ns),
+    ] {
+        if let Some(ns) = value {
+            println!("  {label}{ns} ns");
         }
     }
 }
