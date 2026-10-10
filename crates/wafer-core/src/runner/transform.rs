@@ -34,11 +34,7 @@ async fn recover_after_timeout(
     if !continue_after_policy_action(policy.handle(error, envelope), metrics) {
         return Err(policy_teardown());
     }
-    tracing::warn!(
-        node = transform.node_id(),
-        %error,
-        "Wasm call ran out of budget — replacing Store before continuing"
-    );
+    super::log_recovery_cause(metrics, transform.node_id(), error, true);
     state.transition_to_error();
     state.transition_to_recovering();
     match transform.recover_from_cached_pre().await {
@@ -311,11 +307,7 @@ pub async fn run_transform_loop_with_config(
 
                 // Standard recovery path (existing A7 behavior)
                 policy.record_condemned(safety, error, &metrics);
-                tracing::error!(
-                    node = transform.node_id(),
-                    error = %msg,
-                    "unrecoverable error — attempting recovery"
-                );
+                super::log_recovery_cause(&metrics, transform.node_id(), &msg, false);
                 state.transition_to_error();
                 state.transition_to_recovering();
                 match transform.recover_from_cached_pre().await {
