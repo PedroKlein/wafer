@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::engine::WaferEngine;
 use crate::error::{Result, WaferError};
-use crate::node::{NodeMetrics, NodeStateTracker};
+use crate::node::{MQTT_MAX_PACKET_BYTES, NodeMetrics, NodeStateTracker};
 use crate::orchestrator::builder::{BuildOutput, NodeBundleKind, QueueProbe};
 use crate::runner::error_policy::DlqEnvelope;
 use crate::runner::filter::run_filter_loop;
@@ -1019,6 +1019,7 @@ async fn run_dlq_sink(
         crate::config::DeadLetterConfig::Mqtt { broker, port, topic, tls, auth, .. } => {
             let mut options = rumqttc::MqttOptions::new("wafer-dlq", broker, port);
             options.set_keep_alive(Duration::from_secs(30));
+            options.set_max_packet_size(MQTT_MAX_PACKET_BYTES, MQTT_MAX_PACKET_BYTES);
             if let Some(auth) = auth {
                 options.set_credentials(auth.username, auth.password);
             }
