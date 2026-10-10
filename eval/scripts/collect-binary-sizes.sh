@@ -50,7 +50,7 @@ while IFS='|' read -r name path; do
     fi
     bytes=$(_stat_size "$path")
     # KB with one decimal, with awk to avoid bash floating-point issues.
-    kb=$(awk "BEGIN {printf \"%.1f\", $bytes/1024}")
+    kb=$(LC_ALL=C awk "BEGIN {printf \"%.1f\", $bytes/1024}")
     printf '%s,%s,%s\n' "$name" "$bytes" "$kb" >> "$OUT_CSV"
 done < "$INDEX"
 

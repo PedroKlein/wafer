@@ -9,7 +9,7 @@ use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
 use tokio::task::JoinHandle;
 
 use crate::error::{ConfigError, Result, WaferError};
-use crate::node::Lifecycle;
+use crate::node::{Lifecycle, MQTT_MAX_PACKET_BYTES};
 use crate::queue::RuntimeEnvelope;
 
 use super::batch::BatchBuffer;
@@ -176,6 +176,7 @@ impl Lifecycle for MqttSink {
         Box::pin(async move {
             let mut mqtt_options = MqttOptions::new(&self.client_id, &self.broker, self.port);
             mqtt_options.set_keep_alive(Duration::from_secs(30));
+            mqtt_options.set_max_packet_size(MQTT_MAX_PACKET_BYTES, MQTT_MAX_PACKET_BYTES);
             if let Some(max_inflight) = self.max_inflight {
                 mqtt_options.set_inflight(max_inflight.get());
             }

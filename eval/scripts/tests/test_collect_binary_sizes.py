@@ -2,6 +2,7 @@
 
 import csv
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -64,3 +65,25 @@ def test_refuses_to_run_without_a_measured_floor(tmp_path: Path) -> None:
     assert f"missing eval/container-floor/{FLOOR_NAME}" in completed.stderr
     assert "measure-container-floor.py" in completed.stderr
     assert not (output / "binary-sizes.csv").exists()
+
+
+def test_formats_kilobytes_in_the_c_locale(tmp_path: Path) -> None:
+    script = make_tree(tmp_path)
+    floor = tmp_path / "eval/container-floor" / FLOOR_NAME
+    floor.parent.mkdir(parents=True)
+    floor.write_text(json.dumps({"base": "scratch", "image_bytes": 400_000}) + "\n")
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "awk").write_text(
+        f'#!/bin/sh\n[ "$LC_ALL" = C ] || exit 7\nexec {shutil.which("awk")} "$@"\n'
+    )
+    (shim / "awk").chmod(0o755)
+    env = {**os.environ, "PATH": f"{shim}:{os.environ['PATH']}", "LC_ALL": "de_DE.UTF-8"}
+
+    completed = subprocess.run(
+        [str(script), str(tmp_path / "leaf")], capture_output=True, text=True, check=False, env=env
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    rows = (tmp_path / "leaf/binary-sizes.csv").read_text().splitlines()
+    assert rows[1:] == ["pass-through,2048,2.0", "json-parse,3072,3.0"]

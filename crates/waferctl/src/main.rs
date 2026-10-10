@@ -72,10 +72,10 @@ enum Commands {
     /// Shutdown the pipeline gracefully
     Shutdown,
 
-    /// Show pipeline metrics
+    /// Print the runtime's Prometheus metrics
     Metrics {
-        /// Output raw Prometheus format
-        #[arg(long)]
+        /// Accepted for compatibility; the output is always Prometheus text
+        #[arg(long, hide = true)]
         raw: bool,
     },
 
@@ -143,7 +143,7 @@ async fn run(cli: Cli) -> error::Result<()> {
         Commands::Reload => cmd_reload(&client, cli.json),
         Commands::Drain => cmd_drain(&client, cli.json),
         Commands::Shutdown => cmd_shutdown(&client, cli.json).await,
-        Commands::Metrics { raw } => cmd_metrics(&client, cli.json, raw).await,
+        Commands::Metrics { raw: _ } => cmd_metrics(&client).await,
         Commands::Config { .. } => {
             #[expect(
                 clippy::unreachable,
@@ -303,18 +303,9 @@ async fn cmd_shutdown(client: &WaferClient, json: bool) -> error::Result<()> {
     Ok(())
 }
 
-async fn cmd_metrics(client: &WaferClient, json: bool, raw: bool) -> error::Result<()> {
-    if raw {
-        let metrics = client.metrics_raw().await.classify()?;
-        println!("{metrics}");
-    } else {
-        let metrics = client.metrics().classify()?;
-        if json {
-            println!("{}", serde_json::to_string_pretty(&metrics).user_err()?);
-        } else {
-            output::print_metrics(&metrics);
-        }
-    }
+async fn cmd_metrics(client: &WaferClient) -> error::Result<()> {
+    let metrics = client.metrics_raw().await.classify()?;
+    println!("{metrics}");
     Ok(())
 }
 

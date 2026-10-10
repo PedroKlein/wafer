@@ -10,7 +10,10 @@
 //!   sent in that gap must be adopted within milliseconds, and no message may
 //!   be processed between the signal and the adoption.
 //! - Under 1 000 msg/s: swapping `pass-through-v1` for `pass-through-v2` loses
-//!   and duplicates nothing, and `plugin.version` flips exactly once.
+//!   and duplicates nothing, and `plugin.version` flips exactly once. The
+//!   source would run for a minute, so a slow v2 compile cannot outlast the
+//!   input stream; the test shuts the pipeline down once v2 has handled
+//!   traffic.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -166,7 +169,7 @@ name = "traffic-swap"
 type = "source"
 kind = "bench-source"
 rate = 1000.0
-total_messages = 1000
+total_messages = 60000
 warmup_messages = 0
 payload_size = 64
 
@@ -232,17 +235,33 @@ async fn swap_under_traffic_flips_version_once_without_loss() {
         .expect("progress sender")
         .expect("swap succeeds");
 
-    tokio::time::timeout(Duration::from_secs(10), orchestrator.run_until_complete())
+    let processed = || handle.node_metrics("transform").map_or(0, |m| m.processed());
+    let processed_at_adoption = processed();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while processed() < processed_at_adoption + 200 {
+        assert!(Instant::now() < deadline, "v2 stopped processing after the swap");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    tokio::time::timeout(Duration::from_secs(10), orchestrator.shutdown())
         .await
-        .expect("pipeline completes")
+        .expect("pipeline shuts down")
         .expect("pipeline shuts down cleanly");
 
     let sequence = std::fs::read_to_string(bench_dir.join("sequence.csv")).expect("sequence.csv");
-    let row = sequence.lines().nth(1).expect("sequence.csv data row");
-    let columns: Vec<_> = row.split(',').collect();
-    assert_eq!(columns[0], columns[1], "swap must not lose messages: {row}");
-    assert_eq!(columns[3], "0", "swap must not leave gaps: {row}");
-    assert_eq!(columns[4], "0", "swap must not duplicate messages: {row}");
+    let mut lines = sequence.lines();
+    let header: Vec<_> = lines.next().expect("sequence.csv header").split(',').collect();
+    let row = lines.next().expect("sequence.csv data row");
+    let column = |name: &str| -> u64 {
+        let index = header.iter().position(|h| *h == name).expect("sequence.csv column");
+        row.split(',').nth(index).and_then(|v| v.parse().ok()).expect("numeric column")
+    };
+    // Shutdown leaves the unsent tail of the population missing, which is
+    // one gap range; any loss around the swap would add a second.
+    assert_eq!(column("gap_ranges"), 1, "swap must not lose messages: {row}");
+    assert_eq!(column("total_received"), column("received_unique"), "duplicates: {row}");
+    assert_eq!(column("duplicates_count"), 0, "swap must not duplicate messages: {row}");
+    assert_eq!(column("out_of_order"), 0, "swap must not reorder messages: {row}");
 
     let timeline =
         std::fs::read_to_string(bench_dir.join("swap_timeline.json")).expect("swap_timeline.json");

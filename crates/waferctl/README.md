@@ -103,11 +103,8 @@ Use per-node `hot-swap` or restart the runtime for config changes.
 ### Metrics
 
 ```bash
-# Human-readable summary: not implemented yet (prints "No metrics available")
+# Prometheus text from the runtime's /metrics endpoint
 waferctl metrics
-
-# Raw Prometheus format (for debugging)
-waferctl metrics --raw
 ```
 
 ## Output Formats

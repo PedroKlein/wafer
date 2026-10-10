@@ -150,6 +150,16 @@ def test_density_dispatches_static_collector_before_generic_config(
     assert len(observed) == 1
 
 
+def test_binary_size_rows_must_match_the_header_width(tmp_path: Path) -> None:
+    sizes = tmp_path / "binary-sizes.csv"
+    sizes.write_text("plugin,wasm_bytes,wasm_kb\npass-through,12595,12.3\n")
+    assert runner.binary_size_plugins(sizes) == ["pass-through"]
+
+    sizes.write_text("plugin,wasm_bytes,wasm_kb\npass-through,12595,12,3\n")
+    with pytest.raises(RuntimeError, match=r"binary-sizes.csv:2 has 4 fields, expected 3"):
+        runner.binary_size_plugins(sizes)
+
+
 def test_density_window_uses_unix_epoch_timestamps(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
