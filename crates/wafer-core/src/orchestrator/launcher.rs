@@ -3,7 +3,7 @@
 //! Absorbs all startup orchestration: engine creation, plugin resolution,
 //! Wasm compilation, source/sink construction, and topology wiring.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use wasmtime::Store;
 
 use crate::config::{
     BenchSinkConfigToml, BenchSourceConfigToml, Capabilities as ConfigCapabilities, Config,
-    NodeDef, SinkDef, SourceDef, WasmNodeDef,
+    EdgeDef, NodeDef, SinkDef, SourceDef, WasmNodeDef,
 };
 use crate::engine::{Capabilities, WaferEngine, WaferState};
 use crate::error::{ConfigError, Result, WaferError};
@@ -183,19 +183,19 @@ pub async fn launch_pipeline_timed(
                 );
             }
             (NodeBundleKind::Router { node, .. }, NodeDef::Router(wasm)) => {
-                *node = Some(
-                    load_router_node(
-                        &bundle.node_id,
-                        wasm,
-                        config.engine.memory.router,
-                        &engine,
-                        &registry,
-                        config_path,
-                        &mut plugin_hashes,
-                        &mut timings,
-                    )
-                    .await?,
-                );
+                let mut router = load_router_node(
+                    &bundle.node_id,
+                    wasm,
+                    config.engine.memory.router,
+                    &engine,
+                    &registry,
+                    config_path,
+                    &mut plugin_hashes,
+                    &mut timings,
+                )
+                .await?;
+                check_router_edge_ports(&bundle.node_id, &mut router, &config.edges).await?;
+                *node = Some(router);
             }
             _ => {}
         }
@@ -214,6 +214,28 @@ pub async fn launch_pipeline_timed(
         .saturating_sub(timings.component_load_compile)
         .saturating_sub(timings.instantiation);
     Ok(TimedPipelineLaunch { orchestrator, timings, task_activation_started })
+}
+
+/// Reject a router edge whose port the router does not declare: records routed
+/// to the declared name would otherwise match no queue and be dropped.
+async fn check_router_edge_ports(
+    node_id: &str,
+    router: &mut WasmRouterNode,
+    edges: &[EdgeDef],
+) -> Result<()> {
+    let declared = router.output_ports().await?;
+    let unknown: BTreeSet<&str> = edges
+        .iter()
+        .filter(|edge| edge.from == node_id)
+        .map(|edge| edge.port.as_deref().unwrap_or("default"))
+        .filter(|port| !declared.iter().any(|d| d == port))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    Err(WaferError::Config(ConfigError::Message(format!(
+        "router '{node_id}' has edges on undeclared port(s) {unknown:?}; it declares {declared:?}"
+    ))))
 }
 
 fn mark_replacement_eligible(build_output: &mut crate::orchestrator::builder::BuildOutput) {
@@ -1069,6 +1091,65 @@ port = "default"
         assert!(!eligible.contains(&"sink"));
 
         orchestrator.shutdown().await.expect("shutdown wasm pipeline");
+    }
+
+    #[tokio::test]
+    async fn router_edge_on_undeclared_port_fails_launch() {
+        let router = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../plugins/content-router/target/wasm32-wasip2/release/wafer_content_router.wasm",
+        );
+        if !crate::testing::artifact_available(&router) {
+            return;
+        }
+        let config: Config = toml::from_str(&format!(
+            r#"
+[pipeline]
+name = "router-port-typo"
+
+[nodes.source]
+type = "source"
+kind = "stdin"
+
+[nodes.router]
+type = "router"
+plugin = {router:?}
+
+[nodes.router.config]
+route_field = "type"
+default_port = "log"
+routes = {{ alert = "alert" }}
+
+[nodes.alerts]
+type = "sink"
+kind = "stdout"
+
+[nodes.logs]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "router"
+
+[[edges]]
+from = "router"
+to = "alerts"
+port = "alret"
+
+[[edges]]
+from = "router"
+to = "logs"
+port = "log"
+"#,
+            router = router.display(),
+        ))
+        .expect("router config");
+
+        let Err(err) = Box::pin(launch_pipeline(config, None)).await else {
+            panic!("an edge on a port the router does not declare must fail launch");
+        };
+        assert!(matches!(err, WaferError::Config(_)), "{err}");
+        assert!(err.to_string().contains(r#"undeclared port(s) {"alret"}"#), "{err}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -16,7 +16,7 @@ That last rule shapes WAFER. A guest call such as `transform.process(envelope).a
 
 | Work | How it starts | Code |
 |---|---|---|
-| One task per node | `JoinSet::spawn` | `crates/wafer-core/src/orchestrator/pipeline.rs` (`spawn_bundles`, `spawn_wasm_runner`) |
+| One task per node | `JoinSet::spawn` | `crates/wafer-core/src/orchestrator/pipeline.rs` (`spawn_bundles`, `spawn_node_task`) |
 | DLQ writer | `tokio::spawn`, handle kept in `dlq_handle` | `crates/wafer-core/src/orchestrator/pipeline.rs` (`from_build_output`) |
 | API and metrics servers, bench samplers, timed swap trigger | `tokio::spawn` | `crates/wafer-runtime/src/main.rs` (`launch_control_plane`, `run`) |
 | Swap compile and link, plugin hashing | `tokio::task::spawn_blocking` | `crates/wafer-core/src/orchestrator/hotswap.rs` (`compile_and_link`), `crates/wafer-core/src/api/handlers.rs` (`hot_swap`) |
@@ -28,9 +28,9 @@ That last rule shapes WAFER. A guest call such as `transform.process(envelope).a
 
 `PipelineOrchestrator` keeps every node task in one `JoinSet<NodeTaskResult>`. `run_until_complete` calls `join_next_with_id`, which returns whichever task finishes next together with its Tokio task `Id`. The `task_nodes` map turns that `Id` back into a node name for the failure report. A task that panicked comes back as a `JoinError`: the release profile in the root `Cargo.toml` keeps `panic = "unwind"`, and Tokio catches the panic at the task boundary. At the shutdown deadline, `abort_stuck_tasks` calls `JoinSet::shutdown`, which aborts the remaining tasks and waits for them to stop. Dropping a `JoinSet` would also abort them.
 
-`spawn_wasm_runner` wraps each Transform, Filter, and Router runner in an outer `async move` block before spawning it. When the runner returns `Err`, the wrapper cancels the pipeline token, so one failed processing node stops the whole run. The DLQ writer is not in the `JoinSet`. It is spawned with `tokio::spawn`, and its `JoinHandle` is kept in `dlq_handle`. The writer drains until the last node drops its DLQ sender, so `run_until_complete` waits for it only after the node tasks are joined, with its own 5 s timeout.
+`spawn_node_task` wraps each node task in an outer `async move` block before spawning it. The wrapper holds a drop guard of the pipeline token and disarms it only when the task returns `Ok`, so a task that returns `Err` or panics cancels the token and one failed node stops the whole run. The DLQ writer is not in the `JoinSet`. It is spawned with `tokio::spawn`, and its `JoinHandle` is kept in `dlq_handle`. The writer drains until the last node drops its DLQ sender, so `run_until_complete` waits for it only after the node tasks are joined, with its own 5 s timeout.
 
-`JoinSet::spawn`, `tokio::spawn`, and the `runner` parameter of `spawn_wasm_runner` all require `Future + Send + 'static`. `Send` is needed because the task may resume on another worker thread after any `.await`, so everything the future holds across an `.await` must be safe to move between threads. `'static` is needed because the task can outlive the function that spawned it, so the future may not borrow from that function's stack.
+`JoinSet::spawn`, `tokio::spawn`, and the `task` parameter of `spawn_node_task` all require `Future + Send + 'static`. `Send` is needed because the task may resume on another worker thread after any `.await`, so everything the future holds across an `.await` must be safe to move between threads. `'static` is needed because the task can outlive the function that spawned it, so the future may not borrow from that function's stack.
 
 WAFER meets both bounds by [moving](rust-in-context.md#move) owned values into `async move` blocks. In `spawn_bundles`, each bundle's receiver, senders, watch receiver, error policy, child token, and node move into the runner future. Values that the orchestrator and the API also read, such as `NodeStateTracker` and `NodeMetrics`, are shared through [`Arc`](rust-in-context.md#arc). The node's Wasmtime `Store` moves into its one task; the test `inference_state_keeps_store_send` in `crates/wafer-core/src/engine/state.rs` checks at compile time that `Store<WaferState>` is `Send`. Adapter methods such as `Source::poll` (`crates/wafer-core/src/node/source/mod.rs`) return `Pin<Box<dyn Future<...> + Send + '_>>`, which keeps the loop futures that await them `Send`.
 
@@ -94,8 +94,7 @@ The guest call is the one future WAFER treats as not cancel safe. Dropping a Was
 - the signal thread, on the first SIGINT or SIGTERM;
 - the API `shutdown` handler, through `PipelineHandle::cancel`;
 - `PipelineOrchestrator::shutdown` and `PipelineOrchestrator::cancel`;
-- `spawn_wasm_runner`, when a processing runner returns `Err`;
-- `fail_io_init`, when a source or sink `init()` fails.
+- `spawn_node_task`, when a node task returns `Err` (a source or sink `init()` failure among them) or panics.
 
 Cancellation only wakes the futures returned by `cancelled()`; it interrupts nothing. Tasks leave their loops at their next `select!`, and the 5 s `JoinSet::shutdown` fallback handles the rest. The runtime binary keeps two unrelated tokens: `bench_cancel` stops the bench samplers, and `run_done` tells the swap provenance task in `run_with_swap` to stop waiting.
 
@@ -150,7 +149,7 @@ Atomics replace locks where one value is enough. [Rust in context](rust-in-conte
 
 ## Checkpoint
 
-1. Why does `spawn_wasm_runner` require `Send + 'static` from its runner, and what does `spawn_bundles` move into the task or share through `Arc` to satisfy it?
+1. Why does `spawn_node_task` require `Send + 'static` from its task, and what does `spawn_bundles` move into the task or share through `Arc` to satisfy it?
 2. In `recv_next_or_retry`, which branch futures are cancel safe, why is `mark_changed()` called after `changed()` wins, and why is the guest call not one of the branches?
 3. A source is blocked in `send_downstream` on a full `slow` edge when SIGTERM arrives. Which thread sees the signal, which token does it cancel, and why can the source not leave its loop until that send returns?
 4. Why do the epoch ticker and the signal listener run on `std::thread` instead of as Tokio tasks, and why does hot-swap compilation use `spawn_blocking`?

@@ -990,15 +990,7 @@ impl WasmRouterNode {
                 config: config_json.to_string(),
                 plugin_version: self.plugin_version.clone(),
             };
-        // AC F5.AC2: skip metering setters when unlimited; see transform path.
-        if let Some(n) = self.fuel_limit {
-            self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
-                message: format!("router '{}' lifecycle fuel reset failed: {e}", self.node_id()),
-            })?;
-        }
-        if let Some(n) = self.epoch_deadline {
-            self.store.set_epoch_deadline(lifecycle_epoch_deadline(n));
-        }
+        self.arm_lifecycle_limits()?;
         if let Some(message) = self
             .bindings
             .wafer_pipeline_lifecycle()
@@ -1026,6 +1018,32 @@ impl WasmRouterNode {
                 message: format!("router '{}' init() failed: {e:?}", self.node_id()),
             })?;
         flush_logs(&mut self.store);
+        Ok(())
+    }
+
+    /// Ask the initialized guest for every output port it can route to.
+    pub async fn output_ports(&mut self) -> Result<Vec<String>, WaferError> {
+        self.arm_lifecycle_limits()?;
+        let ports =
+            self.bindings.wafer_pipeline_router().call_output_ports(&mut self.store).await.map_err(
+                |e| WaferError::PluginInit {
+                    message: format!("router '{}' output-ports() trapped: {e}", self.node_id()),
+                },
+            );
+        flush_logs(&mut self.store);
+        ports
+    }
+
+    // AC F5.AC2: skip metering setters when unlimited; see transform path.
+    fn arm_lifecycle_limits(&mut self) -> Result<(), WaferError> {
+        if let Some(n) = self.fuel_limit {
+            self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
+                message: format!("router '{}' lifecycle fuel reset failed: {e}", self.node_id()),
+            })?;
+        }
+        if let Some(n) = self.epoch_deadline {
+            self.store.set_epoch_deadline(lifecycle_epoch_deadline(n));
+        }
         Ok(())
     }
 

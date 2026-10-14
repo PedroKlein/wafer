@@ -136,6 +136,8 @@ output-ports: func() -> list<port-id>;
 route:        func(input: message) -> result<list<port-id>, process-error>;
 ```
 
+At launch, after `init()`, the host calls `output-ports` and rejects the
+configuration if an edge from the router names a port missing from the list.
 An empty list drops the message, one port selects one edge, and multiple ports
 fan out through matching labeled edges. The host shares the envelope payload
 across branches; this does not imply that every Component Model lift/lower is
