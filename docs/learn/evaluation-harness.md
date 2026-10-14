@@ -26,8 +26,8 @@ flowchart TD
     E --> F[selected physical leaves and aliases]
     F --> H[analysis notebooks: figures and tables]
     H --> I{evidence classification}
-    I -->|current rehearsal| J[diagnostic and non-poolable]
-    I -->|future admitted campaign| K[final campaign: matrix repetitions]
+    I -->|diagnostic batches| J[diagnostic and non-poolable]
+    I -->|approved final batches| K[final campaign: matrix repetitions]
 ```
 
 1. `eval/canonical-matrix.json` defines experiment IDs, condition grids, repetitions, sample units, required outputs, ordering, metering, evidence class, and admission flags. Each experiment in the `enhanced_candidate` block is N=5 candidate or diagnostic work and sets `thesis_evidence=false` and `n30_admitted=false`.
@@ -54,7 +54,7 @@ Counts need type-like discipline even though Python tables are dynamic. A comple
 
 Evidence classification is part of the data contract, not a caption added later. The completed expanded N=5 rehearsal is diagnostic, descriptive, and non-poolable with final or earlier campaigns. Its records remain `thesis_evidence=false` and outside N=30 admission.
 
-Final N=30 remains PENDING because the frozen final campaign has not been admitted as completed evidence. E-Perf-5 remains PENDING until its matching x86 Linux block exists. PMIC readings remain an internal-rail proxy, not total input power.
+The final N=30 batches of the three hosts are approved in `eval/final-batches.json`. PMIC readings remain an internal-rail proxy, not total input power.
 
 Capacity classification is support-aware. When the MQTT loopback support cell is delivery-bad, affected SUT cells at that rate and above are support-confounded. These cells set neither bound of a delivery ceiling, even if a SUT leaf contains measurements. A nested interval, bucket, message, or event cannot remove that censoring.
 
@@ -62,11 +62,11 @@ Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final 
 
 ## Status boundaries
 
-**Current implementation:** The matrix, runners, result verifier, storage layout, analysis notebooks, and tests encode distinct raw, alias, derived, and evidence-class boundaries. Diagnostic batches, including the N=5 rehearsal and later per-host diagnostic batches, support descriptive patterns only.
+**Current implementation:** The matrix, runners, result verifier, storage layout, analysis notebooks, and tests encode distinct raw, alias, derived, and evidence-class boundaries. The approved final batches in `eval/final-batches.json` use the repetitions set per experiment in `eval/canonical-matrix.json` (30 for most experiments) on the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts. Diagnostic batches, including the N=5 rehearsal and later per-host diagnostic batches, support descriptive patterns only.
 
-**Intended design:** The final campaign, approved in `eval/final-batches.json`, uses the repetitions set per experiment in `eval/canonical-matrix.json` (30 for most experiments) on the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts, and preserves the same artifact and provenance discipline.
+**Intended design:** Final and diagnostic batches share one artifact and provenance discipline, so only admission separates final evidence from diagnostic data.
 
-**Known drift:** Some matrix entries describe the frozen final design with `thesis_evidence=true`; that declaration does not prove execution or admission. Read it together with campaign status, terminal receipts, and the external-gap rules.
+**Known drift:** Some matrix entries describe the frozen final design with `thesis_evidence=true`; that declaration does not prove execution or admission. Read it together with `eval/final-batches.json`, terminal receipts, and the external-gap rules. E-Perf-5 still declares `claim_status: pending-until-x86` although the matched x86 batch is approved; the field stays because changing the matrix would change the hash the approved batches are bound to.
 
 ## Checkpoint
 

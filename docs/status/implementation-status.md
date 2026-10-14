@@ -210,7 +210,7 @@ text. See [`../interfaces/http-api.md`](../interfaces/http-api.md).
   every cell from its counters. A ratio interval that straddles 0.70 is
   `CENSORED`; no interpolation is used.
 - Aliases add zero independent N and may reference only one direct admitted final source.
-- The final N=30 campaign and matched x86 E-Perf-5 evidence remain pending.
+- The final N=30 batches of the Raspberry Pi 5, Jetson and x86 hosts are approved in `eval/final-batches.json`.
 
 ## Current exclusions
 
