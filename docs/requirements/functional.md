@@ -92,13 +92,16 @@ hot-swap) live in `non-functional.md`.
   `crates/wafer-config/src/validation.rs` and orchestrator tests.
 
 - **FR-MSG-3 · Fan-out via Router output ports.**
-  *Statement:* Router plugins export `output-ports()`, but the host
-  does not call it. `route(input)` returns port names; the host
+  *Statement:* Router plugins export `output-ports()`. At launch, after
+  `init()`, the host calls it and rejects any edge from the router whose
+  `port` is not in the list. `route(input)` returns port names; the host
   forwards the message to every outgoing edge whose `port` matches and
   drops names that match no edge. An empty list drops the message;
   several names fan out by cloning the envelope (Arc header and `Bytes`
   payload refcount bumps), with the last match receiving the original.
-  *Verify:* `wit/pipeline-routing.wit` + router runner tests.
+  *Verify:* `wit/pipeline-routing.wit`, router runner tests, and
+  `router_edge_on_undeclared_port_fails_launch` in
+  `crates/wafer-core/src/orchestrator/launcher.rs`.
 
 - **FR-MSG-4 · Zero-copy filter forwarding.**
   *Statement:* When `filter.evaluate(input)` returns `ok(true)`, the

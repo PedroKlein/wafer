@@ -20,7 +20,8 @@ interface router {
 
     // Returns the names of all output ports this router can route to.
     //
-    // The host uses this at startup to create the corresponding queues.
+    // The host calls this at launch, after init(), and rejects any configured
+    // edge from this router whose port is not in the list.
     output-ports: func() -> list<port-id>;
 
     // Decide which output port(s) the message should be forwarded to.

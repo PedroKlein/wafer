@@ -51,19 +51,21 @@ const DLQ_SYNC_INTERVAL: Duration = Duration::from_secs(1);
 /// the whole run.
 type NodeTaskResult = Result<()>;
 
-/// A Wasm runner that fails has stopped processing mid-run, so the pipeline
-/// is cancelled at once instead of running on with a dead node until an
-/// open-ended source is stopped from outside.
-fn spawn_wasm_runner(
+/// A node task that fails or panics has stopped mid-run, so the pipeline is
+/// cancelled at once instead of running on with a dead node until an
+/// open-ended source is stopped from outside. The drop guard also fires when
+/// the task unwinds from a panic.
+fn spawn_node_task(
     tasks: &mut JoinSet<NodeTaskResult>,
     pipeline_cancel: CancellationToken,
-    runner: impl Future<Output = NodeTaskResult> + Send + 'static,
+    task: impl Future<Output = NodeTaskResult> + Send + 'static,
 ) -> TaskId {
     tasks
         .spawn(async move {
-            let exit = runner.await;
-            if exit.is_err() {
-                pipeline_cancel.cancel();
+            let cancel_on_failure = pipeline_cancel.drop_guard();
+            let exit = task.await;
+            if exit.is_ok() {
+                cancel_on_failure.disarm();
             }
             exit
         })
@@ -412,19 +414,16 @@ impl PipelineHandle {
     }
 }
 
-/// Mark an I/O node whose `init()` failed as `Error`, cancel the pipeline so the
-/// run ends instead of completing "cleanly" without that node, and build the
-/// task's failure.
+/// Mark an I/O node whose `init()` failed as `Error` and build the task's
+/// failure; returning it cancels the pipeline (see [`spawn_node_task`]).
 fn fail_io_init(
     role: &str,
     node_id: &str,
     error: &WaferError,
     state: &NodeStateTracker,
-    pipeline_cancel: &CancellationToken,
 ) -> WaferError {
     tracing::error!(node = %node_id, error = %error, "{role} init failed; cancelling pipeline");
     state.transition_to_error();
-    pipeline_cancel.cancel();
     WaferError::PluginInit { message: format!("{role} '{node_id}' init failed: {error}") }
 }
 
@@ -535,10 +534,6 @@ impl PipelineOrchestrator {
     /// recorder) keep their meaning. An init failure marks the node `Error`,
     /// cancels the pipeline, and makes `run_until_complete` return `Err`.
     /// Wasm nodes: spawned with real runner loops when node instance is present.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one match arm per node role; each arm only wires its runner loop"
-    )]
     fn spawn_bundles(&mut self, bundles: Vec<crate::orchestrator::builder::NodeBundle>) {
         let hot_swap_config = self.config.engine.hot_swap.clone();
         let pipeline_cancel = self.cancel_token.clone();
@@ -552,7 +547,7 @@ impl PipelineOrchestrator {
                 NodeBundleKind::Transform { receiver, senders, swap_rx, policy, node } => {
                     if let Some(transform) = node {
                         let hs_cfg = hot_swap_config.clone();
-                        spawn_wasm_runner(&mut self.tasks, pipeline_cancel.clone(), async move {
+                        spawn_node_task(&mut self.tasks, pipeline_cancel.clone(), async move {
                             run_transform_loop_with_config(
                                 transform, receiver, senders, swap_rx, policy, cancel, state,
                                 metrics, hs_cfg,
@@ -562,18 +557,15 @@ impl PipelineOrchestrator {
                     } else {
                         // No compiled Wasm node — run as identity passthrough.
                         // Native transforms forward messages unchanged.
-                        self.tasks
-                            .spawn(async move {
-                                run_passthrough_loop(receiver, senders, cancel, state, metrics)
-                                    .await;
-                                Ok(())
-                            })
-                            .id()
+                        spawn_node_task(&mut self.tasks, pipeline_cancel.clone(), async move {
+                            run_passthrough_loop(receiver, senders, cancel, state, metrics).await;
+                            Ok(())
+                        })
                     }
                 }
                 NodeBundleKind::Filter { receiver, senders, swap_rx, policy, node } => {
                     if let Some(filter) = node {
-                        spawn_wasm_runner(&mut self.tasks, pipeline_cancel.clone(), async move {
+                        spawn_node_task(&mut self.tasks, pipeline_cancel.clone(), async move {
                             run_filter_loop(
                                 filter, receiver, senders, swap_rx, policy, cancel, state, metrics,
                             )
@@ -581,18 +573,15 @@ impl PipelineOrchestrator {
                         })
                     } else {
                         // Native filter — forward all messages (no-op filter passes everything)
-                        self.tasks
-                            .spawn(async move {
-                                run_passthrough_loop(receiver, senders, cancel, state, metrics)
-                                    .await;
-                                Ok(())
-                            })
-                            .id()
+                        spawn_node_task(&mut self.tasks, pipeline_cancel.clone(), async move {
+                            run_passthrough_loop(receiver, senders, cancel, state, metrics).await;
+                            Ok(())
+                        })
                     }
                 }
                 NodeBundleKind::Router { receiver, senders, swap_rx, policy, node } => {
                     if let Some(router) = node {
-                        spawn_wasm_runner(&mut self.tasks, pipeline_cancel.clone(), async move {
+                        spawn_node_task(&mut self.tasks, pipeline_cancel.clone(), async move {
                             run_router_loop(
                                 router, receiver, senders, swap_rx, policy, cancel, state, metrics,
                             )
@@ -600,33 +589,21 @@ impl PipelineOrchestrator {
                         })
                     } else {
                         // Native router — broadcast to all downstreams
-                        self.tasks
-                            .spawn(async move {
-                                run_passthrough_loop(receiver, senders, cancel, state, metrics)
-                                    .await;
-                                Ok(())
-                            })
-                            .id()
+                        spawn_node_task(&mut self.tasks, pipeline_cancel.clone(), async move {
+                            run_passthrough_loop(receiver, senders, cancel, state, metrics).await;
+                            Ok(())
+                        })
                     }
                 }
                 NodeBundleKind::Source { source, senders } => {
                     if let Some(mut source) = source {
-                        let pipeline_cancel = self.cancel_token.clone();
                         let task_node_id = node_id.clone();
-                        self.tasks
-                            .spawn(async move {
-                                if let Err(e) = source.init().await {
-                                    return Err(fail_io_init(
-                                        "source",
-                                        &task_node_id,
-                                        &e,
-                                        &state,
-                                        &pipeline_cancel,
-                                    ));
-                                }
-                                run_source_loop(source, senders, cancel, state, metrics).await
-                            })
-                            .id()
+                        spawn_node_task(&mut self.tasks, pipeline_cancel.clone(), async move {
+                            if let Err(e) = source.init().await {
+                                return Err(fail_io_init("source", &task_node_id, &e, &state));
+                            }
+                            run_source_loop(source, senders, cancel, state, metrics).await
+                        })
                     } else {
                         // No source instance (unit test without I/O construction)
                         tracing::debug!(node = %node_id, "Source task: no instance, awaiting cancel");
@@ -640,22 +617,13 @@ impl PipelineOrchestrator {
                 }
                 NodeBundleKind::Sink { sink, receiver } => {
                     if let Some(mut sink) = sink {
-                        let pipeline_cancel = self.cancel_token.clone();
                         let task_node_id = node_id.clone();
-                        self.tasks
-                            .spawn(async move {
-                                if let Err(e) = sink.init().await {
-                                    return Err(fail_io_init(
-                                        "sink",
-                                        &task_node_id,
-                                        &e,
-                                        &state,
-                                        &pipeline_cancel,
-                                    ));
-                                }
-                                run_sink_loop(sink, receiver, cancel, state, metrics).await
-                            })
-                            .id()
+                        spawn_node_task(&mut self.tasks, pipeline_cancel.clone(), async move {
+                            if let Err(e) = sink.init().await {
+                                return Err(fail_io_init("sink", &task_node_id, &e, &state));
+                            }
+                            run_sink_loop(sink, receiver, cancel, state, metrics).await
+                        })
                     } else {
                         // No sink instance (unit test without I/O construction)
                         tracing::debug!(node = %node_id, "Sink task: no instance, awaiting cancel");
@@ -1294,6 +1262,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn node_panic_cancels_the_pipeline() {
+        // The source never reaches EOF, so only the panic can end the run.
+        let (source_tx, mut orch) =
+            faulty_sink_orchestrator(FaultySink { fail_init: false, hang_on_close: false });
+        source_tx.send(RuntimeEnvelope::from_string("test", "boom")).await.expect("send");
+
+        let err = tokio::time::timeout(Duration::from_secs(5), orch.run_until_complete())
+            .await
+            .expect("a panicked node must end the run instead of hanging")
+            .expect_err("a panicked node must fail the run");
+
+        assert!(err.to_string().contains("node 'sink' panicked"), "{err}");
+        assert!(orch.cancel_token().is_cancelled());
+    }
+
+    #[tokio::test]
     async fn sink_init_failure_cancels_and_fails_the_run() {
         // The source never reaches EOF, so only the init failure can end the run.
         let (_source_tx, mut orch) =
@@ -1551,10 +1535,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wasm_runner_uses_tokio_executor() {
+    async fn node_task_uses_tokio_executor() {
         let runtime_thread = std::thread::current().id();
         let mut tasks = JoinSet::new();
-        spawn_wasm_runner(&mut tasks, CancellationToken::new(), async move {
+        spawn_node_task(&mut tasks, CancellationToken::new(), async move {
             assert_eq!(std::thread::current().id(), runtime_thread);
             tokio::task::yield_now().await;
             assert_eq!(std::thread::current().id(), runtime_thread);
@@ -1565,10 +1549,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_wasm_runner_fails_and_cancels_the_pipeline() {
+    async fn failed_node_task_cancels_the_pipeline() {
         let mut tasks = JoinSet::new();
         let pipeline_cancel = CancellationToken::new();
-        spawn_wasm_runner(&mut tasks, pipeline_cancel.clone(), async move {
+        spawn_node_task(&mut tasks, pipeline_cancel.clone(), async move {
             Err(WaferError::Runtime("recovery failed".to_owned()))
         });
 

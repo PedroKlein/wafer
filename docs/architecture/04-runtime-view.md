@@ -176,7 +176,7 @@ Retryable errors (`dependency-failed`, `processing-failed`) enter a bounded `Vec
 
 ### `teardown` is a one-way stop
 
-The configurable `teardown` action (for `bad_input`, `timed_out`, or a retry config's `exhausted`) counts the message as `dropped_on_teardown` and ends that node's runner loop with an error. It does not enter `Recovering` and does not re-instantiate. The orchestrator spawns every processing runner through `spawn_wasm_runner`, which cancels the pipeline token when the runner returns an error, so every other node then shuts down cooperatively and the run fails (exit status 3). The torn-down node's reported state is not changed. Only two paths recover: an epoch or fuel timeout whose `timed_out` action is not `teardown` (`recover_after_timeout` in each runner), and the built-in `Unrecoverable` path below.
+The configurable `teardown` action (for `bad_input`, `timed_out`, or a retry config's `exhausted`) counts the message as `dropped_on_teardown` and ends that node's runner loop with an error. It does not enter `Recovering` and does not re-instantiate. The orchestrator spawns every node task through `spawn_node_task`, which cancels the pipeline token when the task returns an error or panics, so every other node then shuts down cooperatively and the run fails (exit status 3). The torn-down node's reported state is not changed. Only two paths recover: an epoch or fuel timeout whose `timed_out` action is not `teardown` (`recover_after_timeout` in each runner), and the built-in `Unrecoverable` path below.
 
 ### DLQ actions require a `[dead_letter]` sink
 
