@@ -10,26 +10,19 @@ decisions that these items would build on are captured in
 The TG2 pre-campaign runtime and evaluation-contract remediation is verified on
 a clean candidate. The restored MNIST inference path is also verified locally
 and on Jetson. The async P2 host path and bounded outbound HTTP capability are
-implemented and reviewed with no changes requested. The final campaign runs on
+implemented and reviewed with no changes requested. The final campaign ran on
 that verified P2 contract (`wafer:pipeline@0.1.0`); the P3 PoC and its adoption
 decision come after it. Cross-repository parity remains before any release or pilot.
 The Jetson receipt confirms CUDA provider execution but not stable CUDA teardown
 or inference performance.
 The canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md) is the current operational boundary.
 
-Remaining work for thesis-grade numbers:
+The final campaign of the frozen canonical experiment matrix is finished: the
+Raspberry Pi 5, Jetson Orin Nano and x86 batches are approved in
+[`eval/final-batches.json`](eval/final-batches.json).
 
-- Finish the final campaign of the frozen canonical experiment matrix (30 runs
-  for 22 of the 27 experiments, 30 s warmup, experiment-specific windows), which
-  is running on the Jetson Orin Nano and x86 replication hosts first and the
-  Raspberry Pi 5 last, via
-  [`docs/eval/pi5-experiment-runbook.md`](docs/eval/pi5-experiment-runbook.md)
-  ([`docs/eval/jetson-host-setup.md`](docs/eval/jetson-host-setup.md),
-  [`docs/eval/x86-host-setup.md`](docs/eval/x86-host-setup.md)).
-  Every host uses the CPU 0 affinity setup in
-  [`docs/eval/pi5-host-setup.md`](docs/eval/pi5-host-setup.md#4-keep-cpu-0-for-everything-except-the-system-under-test)
-  and native eKuiper 2.1.5. No batch has been approved yet; each finished batch
-  still needs `mise run approve-batch` and a committed `eval/final-batches.json`.
+Remaining near-term work:
+
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
   observability follow-up, ~1 h, not blocking thesis numbers.
 
