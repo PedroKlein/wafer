@@ -7,8 +7,8 @@ Current implementation and evaluation state: factual reports, no roadmap.
 - `implementation-gaps.md`: documented behaviour that the runtime does not
   yet implement (drift ledger). Every RFC / ADR / architecture chapter with
   an aspirational banner points here; closed entries are archived.
-- `canonical-readiness.md`: what the final campaign still needs, and the
-  current claim boundaries.
+- `canonical-readiness.md`: the final campaign's state and its claim
+  boundaries.
 - `rpi5-canonical-transition.md`: decision record for the Raspberry Pi 5
   4 GB host, native eKuiper 2.1.5 and the canonical CPU allocation.
 

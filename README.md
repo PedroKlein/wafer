@@ -25,9 +25,9 @@ public now; the thesis and supporting research materials will be released
 publicly soon.
 
 > [!NOTE]
-> WAFER is a research prototype. Final empirical conclusions remain pending the
-> admitted Raspberry Pi 5 campaign. Current diagnostic and rehearsal results are
-> not final thesis evidence.
+> WAFER is a research prototype. Final empirical results come only from the
+> batches approved in `eval/final-batches.json`; diagnostic and rehearsal
+> results are not final thesis evidence.
 
 ## What WAFER does
 

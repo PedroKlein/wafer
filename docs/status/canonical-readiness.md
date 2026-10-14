@@ -16,7 +16,7 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 - E-Perf-9: Linux filesystem page-cache method; disk compiled-component cache disabled.
 - E-Density-1: release component sizes beside a measured `FROM scratch` container floor. The floor files `eval/container-floor/linux-arm64.json` (Pi 5 and Jetson) and `linux-amd64.json` (x86) are measured and committed.
 - Analysis: canonical approval/provenance/completeness gates implemented; complete and missing fixture execution passes.
-- Final campaign: finished. The Raspberry Pi 5, Jetson and x86 batches are approved in `eval/final-batches.json`.
+- Final campaign: finished. The Raspberry Pi 5, Jetson and x86 batches are approved in `eval/final-batches.json`. They replaced an earlier set of final batches that ran before the last runtime and harness fixes and the matrix amendments that followed them.
 
 Scout, v11-v17, local shakedown, and diagnostic-batch results are diagnostic and are not pooled with the final N=30 batch. The laptop shakedown scripts (`run-e-*-shakedown.sh`, `run-e-iso-7-8.sh`) the Docker eKuiper stack and the shakedown-only configs under `eval/configs/e-perf-4/` and `eval/configs/e-perf-6/` named in the archived per-experiment log no longer exist; every experiment runs through `eval/scripts/run-rpi5-canonical.sh` with the configs listed in `eval/canonical-matrix.json`.
 
