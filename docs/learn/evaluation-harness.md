@@ -64,9 +64,9 @@ Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final 
 
 **Current implementation:** The matrix, runners, result verifier, storage layout, analysis notebooks, and tests encode distinct raw, alias, derived, and evidence-class boundaries. Diagnostic batches, including the N=5 rehearsal and later per-host diagnostic batches, support descriptive patterns only.
 
-**Intended design:** A future fully admitted final campaign uses the repetitions set per experiment in `eval/canonical-matrix.json` (30 for most experiments) on the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts, and preserves the same artifact and provenance discipline.
+**Intended design:** The final campaign, approved in `eval/final-batches.json`, uses the repetitions set per experiment in `eval/canonical-matrix.json` (30 for most experiments) on the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts, and preserves the same artifact and provenance discipline.
 
-**Known drift:** Some matrix entries describe the frozen final design with `thesis_evidence=true`; that declaration does not prove execution or admission. Read it together with campaign status, terminal receipts, and the external-gap rules. In particular, E-Perf-5's final definition remains incomplete until matched x86 execution exists.
+**Known drift:** Some matrix entries describe the frozen final design with `thesis_evidence=true`; that declaration does not prove execution or admission. Read it together with campaign status, terminal receipts, and the external-gap rules.
 
 ## Checkpoint
 
