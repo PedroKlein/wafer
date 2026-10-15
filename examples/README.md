@@ -27,10 +27,6 @@ operator-facing reference, see
   performance or CUDA stability.
 - `dag-remote.toml` — OCI/remote plugin reference example.
 - `dag-passthrough-with-api.toml` — passthrough pipeline with API settings.
-
-## Removed stale example
-
-`dag-diamond.toml` was removed during the documentation cleanup because it used
-the deleted Joiner node / `merge-joiner` plugin. Fan-in is now implicit host
-topology (multi-producer mpsc into one consumer); there is no first-class Joiner
-node type.
+- `prometheus.yml` — Prometheus scrape configuration for `localhost:9091`, for
+  a runtime started with `dag-passthrough-with-api.toml` and
+  `--metrics-bind 127.0.0.1:9091`.

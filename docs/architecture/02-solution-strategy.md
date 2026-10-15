@@ -17,7 +17,7 @@ WAFER embeds Wasmtime — the Bytecode Alliance reference implementation. The ch
 1. **Full Component Model support.** WAFER defines typed WIT interfaces for every plugin category. Wasmtime is the only runtime with production-grade Component Model support, including resource handles (`borrow<buffer>`), multiple worlds per component, and typed result returns.
 2. **Fuel and epoch metering.** Untrusted plugins run under configurable fuel budgets and epoch deadlines. Wasmtime exposes both mechanisms as first-class APIs integrated with async execution.
 3. **Asynchronous P2 host execution.** The guest WIT exports remain synchronous, but Wasmtime's generated asynchronous host bindings are awaited directly from ordinary Tokio node tasks. Instantiation, lifecycle, processing, recovery, reconfigure, and hot-swap use one async linker-to-call path without `spawn_blocking`, nested `block_on`, or `block_in_place`. Guest calls remain outside cancellation `select!` branches and run to completion.
-4. **ARM64 support.** WAFER's canonical target is Raspberry Pi 5 4 GB. Wasmtime's Cranelift backend produces native code for `aarch64` with no external LLVM dependency. The same restored inference candidate also completed diagnostic CPU and CUDA-provider execution on Jetson; that run does not establish comparative performance or CUDA operational stability.
+4. **ARM64 support.** WAFER's canonical target is Raspberry Pi 5 4 GB. Wasmtime's Cranelift backend produces native code for `aarch64` with no external LLVM dependency.
 
 Alternatives considered and rejected: Wasmer (incomplete Component Model), WasmEdge (no fuel metering), wasm3 (interpreter-only, no Component Model).
 
@@ -53,7 +53,7 @@ This creates a layered composition pattern:
 
 Pipeline authors compose these in sequence: filters gate expensive transforms, routers distribute to specialised sub-graphs, transforms produce derived data. The separation is enforced at the WIT level — a filter plugin physically cannot return bytes, and a transform plugin physically cannot skip.
 
-The tighter contract also enables a lower fuel budget for filters (500,000 vs 10,000,000 for transforms), making runaway detection faster.
+Filters also have their own fuel budget (`[engine.fuel] filter`), so a tighter limit can apply to them without coupling it to Transform work. Fuel is unmetered unless a budget is configured.
 
 ---
 

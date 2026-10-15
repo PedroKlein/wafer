@@ -60,7 +60,7 @@ continuous edge streaming."*
 Security-oriented Component-Model runtime targeting the MCP protocol
 for LLM tool use. Deny-by-default capability model closely parallels
 WAFER's, and Wassette's use of `InstancePre` for pre-instantiation
-mirrors ADR-0013. Wassette diverges on execution model (atomic
+mirrors WAFER's cached `InstancePre` per node. Wassette diverges on execution model (atomic
 replace, no drain, no streaming, no DAG). Reading its source was one
 of the industry-validation signals for WAFER's Component-Model
 adoption.
@@ -75,7 +75,7 @@ documentation site publishes an explicit edge-processing use case, so
 the domain overlap is real; the remaining WAFER additions are per-node
 hot-swap (Torvyn's task-per-flow reactor forecloses per-node live
 update), first-class IoT-protocol adapters (WAFER ships `mqtt` and
-`http` source/sink node types), and canonical evaluation on constrained hardware (Raspberry Pi 5 4 GB, replicated on a Jetson Orin Nano and an x86-64 Linux host). A separate Jetson receipt validates capability-gated MNIST inference on CPU and actual CUDA-provider execution without making a performance claim. Framing: *"WAFER adds per-node
+`http` source/sink node types), and canonical evaluation on constrained hardware (Raspberry Pi 5 4 GB, replicated on a Jetson Orin Nano and an x86-64 Linux host). Framing: *"WAFER adds per-node
 hot-swap, IoT-protocol integration, and constrained-hardware
 evaluation on top of a Torvyn-shaped streaming core."*
 
@@ -88,21 +88,6 @@ throughput?"* — yes, and the numbers are impressive. WAFER's cost
 against Tremor is the Wasm boundary itself; the isolation and
 hot-swap benefits are what a Tremor operator gets by adopting typed
 Wasm plugins.
-
-## Positioning framing (for the thesis narrative)
-
-- **vs eKuiper:** *"What does per-operator isolation cost?"* — not
-  *"faster than native"*.
-- **vs Azure IoT Operations:** *"Equivalent data processing as a
-  standalone runtime with explicit backpressure and hot-swap."*
-- **vs Spin:** *"Spin demonstrates CM viability for serverless;
-  WAFER extends CM to continuous edge streaming."*
-- **vs Wassette:** *"Wassette shows deny-by-default at rest; WAFER
-  shows it in flight."*
-- **vs Torvyn:** *"WAFER adds per-node hot-swap, IoT-protocol
-  integration, and constrained-hardware evaluation."*
-- **vs Tremor:** *"The isolation and live-update budget you buy for
-  the Wasm boundary cost."*
 
 ## Uniqueness claim
 

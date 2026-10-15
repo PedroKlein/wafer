@@ -91,8 +91,9 @@ Features of `wafer-runtime` (forwarded to `wafer-core`):
 - `cuda` — enables `wasmtime-wasi-nn/onnx-cuda` for host builds with a
   compatible CUDA-enabled ONNX Runtime. The feature enables the provider but
   does not prove selection; provider registration, graph placement, and device
-  telemetry are required runtime evidence. The current Jetson diagnostic
-  confirms execution but found intermittent native teardown corruption.
+  telemetry are required runtime evidence. CUDA execution works on the Jetson,
+  but an intermittent native teardown defect remains unresolved. Evaluation
+  builds do not enable this feature.
 
 ## ONNX Runtime
 
@@ -176,7 +177,7 @@ whose `wafer_plugin_hashes` differ.
 
 ## Upgrading
 
-- **Wasmtime bump** — update the three Wasmtime crates together from their exact shared revision, rerun Component Model and attack evidence, and re-audit the coupled `ort` pin.
+- **Wasmtime bump**: update the four Wasmtime crates together from their exact shared revision, rerun Component Model and attack evidence, and re-audit the coupled `ort` pin.
 - **Rust edition bump** — pinned via `rust-toolchain.toml`. Do not
   bump without ensuring `wasm32-wasip2` remains supported on the
   target release.

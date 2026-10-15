@@ -1,9 +1,11 @@
 # HTTP API Reference
 
-`wafer-runtime` serves this axum control plane on `[api].bind`, default
-`127.0.0.1:9090`. The route table is defined in
-`crates/wafer-core/src/api/server.rs`. Metrics share this listener when enabled
-unless the runtime is started with a separate metrics bind.
+The runtime serves this axum control plane on `[api].bind`, default
+`127.0.0.1:9090` (`--api-bind` overrides it, `--no-api` or
+`[api].enabled = false` turns it off). The route table is defined in
+`crates/wafer-core/src/api/server.rs`. `/metrics` shares this listener unless
+the runtime is started with `--metrics-bind <ADDR>`. There is no
+authentication; keep the listener on loopback or a trusted network.
 
 ## Endpoint index
 
@@ -37,11 +39,10 @@ Otherwise it returns HTTP 503 with
 
 ## `GET /metrics`
 
-Returns Prometheus text when metrics are enabled. The active path is
-`/metrics`; `[metrics].path` is used only by a separately bound metrics server.
-A20 remains deferred: `/metrics` does not expose
-`wafer_hot_swap_rollbacks_total`, although runner-local rollback evidence is
-recorded internally.
+Returns Prometheus text (`text/plain; version=0.0.4`) when `[metrics].enabled`
+is true. On this listener the path is always `/metrics`; `[metrics].path`
+applies only to the separate `--metrics-bind` listener. The metric families are
+listed in [Observe a running pipeline](../operations/observability.md#prometheus-endpoint).
 
 ## `GET /api/v1/nodes`
 
@@ -73,6 +74,9 @@ Request:
 ```json
 {"wasm_path":"/path/to/replacement.wasm"}
 ```
+
+`wasm_path` is a file on the runtime host. A relative path is resolved
+against the runtime's working directory, not the config file's directory.
 
 The endpoint serializes mutation per node, prepares the replacement, publishes
 it through the node's watch channel, and waits up to five seconds for a
@@ -136,7 +140,8 @@ instance remains active.
 
 Other errors are plain-text bodies:
 
-- 400: replacement file cannot be read;
+- 400: replacement file cannot be read, or the node's capability grant
+  cannot be rebuilt;
 - 404: unknown node or node is not replacement-eligible;
 - 409: mutation already in progress or replacement initialization failed;
 - 500: preparation failed or the runner exited before reporting adoption;
@@ -185,6 +190,6 @@ sink. Observe process exit to confirm completion.
 
 There is no `GET /api/v1/pipeline`, `/pipeline/reload`, independent
 `/pipeline/drain`, structured metrics endpoint, WebSocket/SSE stream, or
-per-node metrics endpoint. `waferctl` calls only route paths listed above but
-has no reconfigure command. Its `metrics` command prints the Prometheus text
-from `/metrics`.
+per-node metrics endpoint. `waferctl` calls only the routes listed above and
+has no reconfigure command; its `reload` and `drain` subcommands exit with an
+error that says the runtime does not expose them.

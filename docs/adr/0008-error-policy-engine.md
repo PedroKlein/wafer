@@ -1,19 +1,18 @@
 # ADR-0008: Five-Category Error Policy Engine with Per-Node Cascade
 
 - **Date**: 2026-07-06
-- **Status**: Implemented — five-category classification, per-node cascade (A6 closed 2026-07-20), retry-exhaustion (A7 closed 2026-07-21 via P0.11 residuals), recovery state (A7), and DLQ lineage enrichment (A13 closed 2026-07-20) are all live. See [`docs/history/status/implementation-gaps-closed.md`](../history/status/implementation-gaps-closed.md).
+- **Status**: Implemented
 - **Parent RFC**: [RFC-002](../rfcs/RFC-002-host-runtime.md)
 
 > **Implementation status.** The five error categories, `try_retry` /
 > `RetryConfig`, and the DLQ writer are live. `resolve_error_policy`
-> honors pipeline-level `[error_policy]` defaults and per-node overrides
-> (A6). `RuntimeEnvelope::retry_count` is incremented on requeue and
+> honors pipeline-level `[error_policy]` defaults and per-node overrides.
+> `RuntimeEnvelope::retry_count` is incremented on requeue and
 > `DlqReason::RetriesExhausted { max_retries }` is emitted when the
-> configured budget is spent (A7). Unrecoverable errors transition
-> through `Recovering` and re-instantiate from the cached `InstancePre`
-> (A7). DLQ lineage carries the source-assigned `trace_id` and fan-out
-> `parent_id` (A13). Default retry-buffer capacity is 1000 as
-> documented.
+> configured budget is spent. Unrecoverable errors transition
+> through `Recovering` and re-instantiate from the cached `InstancePre`.
+> DLQ lineage carries the source-assigned `trace_id` and fan-out
+> `parent_id`. Default retry-buffer capacity is 1000.
 >
 > **Current amendment.** The first retry waits exactly `backoff_ms`; later
 > delays double to 30 seconds, and the buffer selects the earliest due entry.
@@ -25,8 +24,9 @@
 > `teardown` action (for `bad_input`, `timed_out`, or a retry's `exhausted`)
 > stops that node's runner permanently: the message is counted as
 > `dropped_on_teardown`, the loop exits, and there is no transition to
-> `Recovering` and no re-instantiation. The rest of the pipeline keeps
-> running without that node. Re-instantiation from the cached `InstancePre`
+> `Recovering` and no re-instantiation. The node task returns an error, so the
+> orchestrator cancels every other node and the run fails (exit status 3).
+> Re-instantiation from the cached `InstancePre`
 > is a separate, non-configurable path: it runs for host-detected traps
 > (`WasmProcessError::Trapped`, classified by Wasmtime trap code) and for a
 > guest that returns `unrecoverable`. Fuel exhaustion and epoch interrupts

@@ -34,7 +34,7 @@ plugins and the evaluation tree with
 `./eval/scripts/deploy-pi5.sh --host user@jetson --bin-dir target/release`
 from a checkout on the Jetson, or copy the same `.wasm` files the Pi uses.
 
-The GPU is not used: the campaign build has no `cuda` feature and every
+The GPU is not used: the evaluation build has no `cuda` feature and every
 inference node runs on the CPU execution target, the same as on the Pi.
 
 ## Telemetry
@@ -50,34 +50,19 @@ watts.
 
 ## Running a batch
 
-Set `WAFER_RESULTS_ROOT` to this host's own mounted or bind-mounted results root
-before any batch command, as the
-[runbook](pi5-experiment-runbook.md#set-the-hosts-results-root) describes.
-Approval and analysis read the batch from one root on the analysis machine that
-holds every host's copied results
-([runbook](pi5-experiment-runbook.md#bring-the-host-results-together)).
-
-Before each batch on this host, re-check the eKuiper comparator as the
-[runbook](pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch)
-describes, with `--host jetson`.
-
-The host profile lives in the `hosts` map of `eval/canonical-matrix.json`.
-Pass it to the runner and the validator; results land under
-`jetson-<batch-id>` directories and are checked against this profile only.
-E-Perf-10 adds this host's bracket rates, so run the host's
-[capacity scout](pi5-experiment-runbook.md#run-the-hosts-capacity-scout) first:
-repeat `mise run run-campaign -- --host jetson --capacity-scout --batch-id <scout-id>`
-until it prints `"action": "stop"`. Then:
+Follow the [runbook](pi5-experiment-runbook.md) with `--host jetson` on every
+runner and campaign command. Results land in `jetson-<batch-id>` directories
+and are checked against the `jetson` profile in the `hosts` map of
+`eval/canonical-matrix.json`. Before the host's first batch, check it against
+that profile:
 
 ```sh
 python3 eval/scripts/validate-canonical.py host --host jetson --require-ekuiper
-python3 eval/scripts/lib/canonical_runner.py --host jetson --batch-id <batch-id> \
-  --scout-batch-id <scout-id> --dry-run
 ```
 
-`mise run plan-campaign -- --host jetson --batch-id <batch-id> --scout-batch-id <scout-id>`
-prints the same schedule, and
-`mise run run-campaign -- --host jetson --batch-id <batch-id> --scout-batch-id <scout-id>`
-runs or resumes it. A final batch without `--scout-batch-id` refuses to start E-Perf-10.
-When it has finished, `mise run approve-batch -- --host jetson --batch-id <batch-id>`
-on the analysis machine records it as the Jetson entry of `eval/final-batches.json`.
+The Jetson host needs its own
+[capacity scout](pi5-experiment-runbook.md#run-the-hosts-capacity-scout) and
+its own [results root](pi5-experiment-runbook.md#set-the-hosts-results-root).
+Once its batch has finished and been copied to the analysis machine,
+`mise run approve-batch -- --host jetson --batch-id <batch-id>` records it as
+the Jetson entry of `eval/final-batches.json`.

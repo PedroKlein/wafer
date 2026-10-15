@@ -22,7 +22,7 @@ sudo reboot
 
 Mosquitto runs with the packaged `/etc/mosquitto/mosquitto.conf` unchanged; no WAFER file is deployed to `/etc/mosquitto/`. That file defines no listener, so Mosquitto 2.x starts in local-only mode: it listens on loopback port 1883 and accepts anonymous clients. The evaluation configs rely on exactly that (they connect to `localhost:1883` without credentials). The repository's root `mosquitto.conf` is for the Docker development setup and is not used on the Pi. `preflight-pi5.sh` checks that the service is active, not that an anonymous publish succeeds; if a later package adds a listener or disables anonymous access, the MQTT experiments fail at connect time.
 
-Freeze this package state for one complete canonical batch. If the OS, kernel, firmware, WAFER binary, plugin, or eKuiper package changes, begin a new batch rather than combining results.
+Freeze this package state for the whole of a batch. If the OS, kernel, firmware, WAFER binary, plugin, or eKuiper package changes, begin a new batch rather than combining results.
 
 ## 3. Configure SSH
 
@@ -98,7 +98,7 @@ cd ~/wafer
 ./eval/ekuiper/smoke-test.sh
 ```
 
-The installer checks the package against the SHA256 pinned for its architecture and the release's published checksum before installing eKuiper 2.1.5. On a host that still runs 2.1.0, run the same commands: the installer upgrades the package in place and restarts the service. Docker is not installed or used.
+The installer checks the package against the SHA256 pinned for its architecture and the release's published checksum before installing eKuiper 2.1.5, and upgrades an older package in place. Docker is not installed or used.
 
 ## 7. Deploy WAFER from the development machine
 
@@ -152,7 +152,7 @@ vcgencmd get_throttled
 
 ## 9. Mount the results root
 
-The Pi writes its campaign batches to its own results root, the exFAT volume labeled `WAF_RESULTS` (the label fits exFAT's 11 UTF-16 code-unit limit) mounted at `/mnt/wafer-results`. Set `WAFER_RESULTS_ROOT=/mnt/wafer-results` in the shell that runs the batches. The runner writes `raw/` and `manifests/` there, with every stored path relative to the root, and refuses a root that is not a mounted filesystem or a Linux bind mount. The Jetson and x86 hosts keep their own roots; [Set the host's results root](pi5-experiment-runbook.md#set-the-hosts-results-root) and [Bring the host results together](pi5-experiment-runbook.md#bring-the-host-results-together) in the runbook describe the arrangement.
+The Pi writes its evaluation batches to its own results root, the exFAT volume labeled `WAF_RESULTS` (the label fits exFAT's 11 UTF-16 code-unit limit) mounted at `/mnt/wafer-results`. Set `WAFER_RESULTS_ROOT=/mnt/wafer-results` in the shell that runs the batches. The runner writes `raw/` and `manifests/` there, with every stored path relative to the root, and refuses a root that is not a mounted filesystem or a Linux bind mount. The Jetson and x86 hosts keep their own roots; [Set the host's results root](pi5-experiment-runbook.md#set-the-hosts-results-root) and [Bring the host results together](pi5-experiment-runbook.md#bring-the-host-results-together) in the runbook describe the arrangement.
 
 Do not format or relabel a device from this guide. If the volume ever needs formatting, confirm the exact device identity first. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
 
@@ -167,7 +167,7 @@ cd ~/wafer
 ./eval/scripts/run-rpi5-validation.sh
 ```
 
-Preflight must report zero failures. The smoke command writes its result under the repository-local `eval/results/e-smoke/` and runs the result-contract verifier against it; the validation command writes under `eval/results/e-val-1/`. Campaign batches write to the results root instead.
+Preflight must report zero failures. The smoke command writes its result under the repository-local `eval/results/e-smoke/` and runs the result-contract verifier against it; the validation command writes under `eval/results/e-val-1/`. Evaluation batches write to the results root instead. Continue with the [runbook](pi5-experiment-runbook.md).
 
 ## Final checklist
 

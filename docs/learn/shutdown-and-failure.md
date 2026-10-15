@@ -1,14 +1,10 @@
 # Shutdown and failure behavior
 
-> **Documentation type:** Explanation
->
-> **Prerequisites:** [Tokio in WAFER's context](tokio-in-context.md), [Configuration to running pipeline](config-to-running-pipeline.md), [Follow one message through Wasm](message-through-wasm.md), and familiarity with [Result](rust-in-context.md#result), [RAII](rust-in-context.md#raii), and an [async function](rust-in-context.md#async-function).
+> **Read first:** [Follow one message through Wasm](message-through-wasm.md) and [Tokio in WAFER's context](tokio-in-context.md).
 
-## Purpose
+This page explains what the runners do when input ends, cancellation arrives, a guest returns an error, a Wasm call traps, or tasks outlive the shutdown deadline. By the end you will be able to tell apart three ways a run ends (natural channel closure, cooperative cancellation, and a deadline abort), say what each kind of node cleans up, and follow a typed guest error to a retry, a dead-letter entry, a Store recovery, or a pipeline-wide stop. These paths share one cancellation token, but they do not form a single ordered shutdown algorithm.
 
-This page explains what current runners do when input ends, cancellation arrives, a guest returns an error, a Wasm call traps, or tasks exceed the shutdown deadline. These paths share a cancellation token, but they do not form a single reverse-ordered shutdown algorithm.
-
-## Flow
+## The states a node can pass through
 
 ```mermaid
 stateDiagram-v2
@@ -45,7 +41,7 @@ A finite source exits when `poll()` returns `Ok(None)`. `run_source_loop` (`crat
 
 The runtime's signal thread (`spawn_shutdown_signal_thread` in `crates/wafer-runtime/src/main.rs`) and the control-plane `shutdown` handler (`crates/wafer-core/src/api/handlers.rs`) both cancel the orchestrator's shared `CancellationToken`. Every node bundle owns a child token, created in `build_pipeline_inner` (`crates/wafer-core/src/orchestrator/builder.rs`). Source, transform, and sink loops use biased `tokio::select!` branches while awaiting their native poll or queue receive operation.
 
-A transform already executing guest code does not observe cancellation during that call. The guest call runs outside `select!` and completes before the runner reaches its next cancellation check. This protects the Wasmtime `Store` from being abandoned midway through an asynchronous cancellation race.
+A processing node that is already inside a guest call finishes that call first, because the call is not a `select!` branch ([Tokio in context](tokio-in-context.md#select-and-cancel-safety) explains why). It sees cancellation at its next receive.
 
 The orchestrator joins whichever task completes next until the deadline; it does not shut nodes down in reverse topological order. Both `shutdown` and the cancellation branch of `run_until_complete` use this bounded join pattern. If the deadline expires, `abort_stuck_tasks` calls `self.tasks.shutdown().await`, which aborts the tasks still held by the `JoinSet`.
 
@@ -74,25 +70,34 @@ WIT defines five process-error categories. `ErrorPolicyExecutor::handle` (`crate
 
 The runners give ready retries priority over fresh messages and wake at the earliest due deadline even when upstream is idle. Retry count survives requeue. Once exhausted, `skip`, `dlq`, or `teardown` is honored; DLQ-full and DLQ-closed remain distinct outcomes and the envelope is not requeued. Transform preserves a safety clone before calling Wasm. Pending retries are flushed to the DLQ with a reason that says why: `HotSwapDrain` after a replacement is adopted (a failed swap keeps them), `RecoveryFailed` when recovery fails, and `Shutdown` whenever the loop exits.
 
-Wasmtime traps and host failures during the call become `Trapped`, which keeps the wasmtime trap code when there is one. An epoch interruption or fuel exhaustion is a timeout: the `timed_out` action applies, then the store is recreated when policy permits (`recover_after_timeout` in `crates/wafer-core/src/runner/transform.rs`). Inside a transform's hot-swap canary window it counts as a trap instead. For any other trap, and a plugin-returned `unrecoverable`, a transform first uses the bounded canary rollback path when one is active, which replays the message on the restored version. Otherwise, or if the rollback fails, `record_condemned` sends the message to the DLQ as `Trapped { kind }` or `Unrecoverable`, or counts it as `dropped_on_recovery` when no DLQ is configured, and the runner re-instantiates from the cached pre-instantiated component (`recover_from_cached_pre`). If recovery fails, the runner returns an error, which ends the whole run (see the next section). A plugin-returned `timed-out` only applies the `timed_out` action; its instance is kept.
+Wasmtime traps and host failures during the call become `Trapped`, which keeps the wasmtime trap code when there is one. An epoch interruption or fuel exhaustion is a timeout: the `timed_out` action applies, then the store is recreated when policy permits (`recover_after_timeout`, one each in `transform.rs`, `filter.rs`, and `router.rs` under `crates/wafer-core/src/runner/`). Inside a transform's hot-swap canary window it counts as a trap instead. For any other trap, and a plugin-returned `unrecoverable`, a transform first uses the bounded canary rollback path when one is active, which replays the message on the restored version. Otherwise, or if the rollback fails, `record_condemned` sends the message to the DLQ as `Trapped { kind }` or `Unrecoverable`, or counts it as `dropped_on_recovery` when no DLQ is configured, and the runner re-instantiates from the cached pre-instantiated component (`recover_from_cached_pre`). If recovery fails, the runner returns an error, which ends the whole run (see the next section). A plugin-returned `timed-out` only applies the `timed_out` action; its instance is kept.
 
 ### Task and process results
 
 `run_until_complete` records each node task that panicked, returned an error (for example a source or sink `init()` failure), or had to be aborted at the deadline, plus a failed or stuck DLQ task. After joining node tasks and waiting up to 5 s for the DLQ task, it returns one error naming every failure. The runtime logs that error, finishes its benchmark/control-plane cleanup so artifacts are written, and then exits with status 3 (`EXIT_PIPELINE_FAILED` in `crates/wafer-runtime/src/main.rs`).
 
-One failing node stops the whole pipeline. A runner torn down by its error policy or unable to recover returns `Err` (`policy_teardown` or `recovery_failed` in `crates/wafer-core/src/runner/mod.rs`). The orchestrator spawns every node task through `spawn_node_task` (`crates/wafer-core/src/orchestrator/pipeline.rs`), which cancels the pipeline token when the task returns `Err` or panics. The other nodes then shut down cooperatively as described above. A source or sink `init()` failure (`fail_io_init`), a sink whose final flush or close fails, and a source that stops after 20 consecutive poll errors all return `Err`, so they cancel the token the same way.
+One failing node stops the whole pipeline. A runner torn down by its error policy or unable to recover returns `Err` (`policy_teardown` or `recovery_failed` in `crates/wafer-core/src/runner/mod.rs`). The orchestrator spawns every node task through `spawn_node_task` (`crates/wafer-core/src/orchestrator/pipeline.rs`), which cancels the pipeline token when the task returns `Err` or panics:
+
+```rust
+.spawn(async move {
+    let cancel_on_failure = pipeline_cancel.drop_guard();
+    let exit = task.await;
+    if exit.is_ok() {
+        cancel_on_failure.disarm();
+    }
+    exit
+})
+```
+
+The drop guard cancels the token when it is dropped, which happens on an `Err` return and also while a panic unwinds the task. Only an `Ok` exit disarms it. The other nodes then shut down cooperatively as described above. A source or sink `init()` failure (`fail_io_init`), a sink whose final flush or close fails, and a source that stops after 20 consecutive poll errors all return `Err`, so they cancel the token the same way.
 
 The `shutdown` method cancels the token and then calls `run_until_complete`, so both entry points report failures the same way.
 
-## Rust
-
-[Tokio in context](tokio-in-context.md) explains the `CancellationToken`, `select!`, and `JoinSet` behavior these paths rely on: cancellation only wakes the `cancelled()` branch of each loop's `select!`, guest calls stay outside that macro, and only `JoinSet::shutdown` at the deadline aborts a task.
-
-### `Result` carries a node failure to the orchestrator
+## How a policy decision ends a run
 
 `ErrorPolicyExecutor::handle` returns a typed `ErrorPolicyAction`. The shared runner helper `continue_after_policy_action` (`crates/wafer-core/src/runner/mod.rs`) turns each outcome into one counter increment (`retries`, `dlq_sent`, `skipped`, `retry_exhausted_skips`, `dlq_lost`, or `dropped_on_teardown`) and returns false only for `Teardown`. Every caller then leaves its loop with `Err(policy_teardown())`, and `spawn_node_task` turns that `Err` into a pipeline-wide cancellation. The configurable `teardown` action therefore ends the run; it is not recovery. Within a processing runner, only the built-in trap and `unrecoverable` path calls `transition_to_error`, `transition_to_recovering` (`NodeStateTracker` in `crates/wafer-core/src/node/state.rs`), and `recover_from_cached_pre`.
 
-## Design
+## Why shutdown is bounded
 
 Shutdown has two layers:
 
@@ -105,14 +110,17 @@ The window is 5 s (`SHUTDOWN_TIMEOUT`). `JoinSet::shutdown` cannot stop a guest 
 
 Failure handling is similarly layered. WIT errors are typed data processed by `ErrorPolicyExecutor`; Wasmtime traps can require store recovery; task panics are observed at the orchestrator boundary. Keeping those categories separate avoids treating every guest failure as either a process crash or a retryable record.
 
-## Status boundaries
+## Limits to keep in mind
 
-**Current implementation:** Cancellation is broadcast to node tasks; cancellable waits leave their loops; active Wasm calls complete before observing cancellation; sinks drain their current receiver buffers and then flush and close; the DLQ task drains until its last sender is gone; a teardown or failed recovery cancels the whole pipeline; the orchestrator aborts remaining `JoinSet` tasks after its deadline.
+- Shutdown does not guarantee that every in-flight message completes; only sinks drain their own queue.
+- The guest `close()` export is never called, on shutdown or anywhere else.
+- A dead-letter send that fails because the DLQ is full or closed is counted as `dlq_lost`; the message is gone. The validator rejects a `dlq` action when no `[dead_letter]` sink is configured.
+- A `teardown` exit does not move the node's reported state to `Error`.
 
-**Intended design:** The combination of bounded retries, DLQ routing, store recovery, and cooperative cleanup aims to keep one bad message or guest instance from leaving the process indefinitely stuck.
-
-**Known drift:** Shutdown is cancel-all, not reverse-topological, and does not prove completion of every in-flight message; only sinks drain their own buffered queue. The guest `close()` export is never called. A failed DLQ enqueue (full or closed sink) is counted as `dlq_lost` but cannot recover the message; the validator rejects a `dlq` action with no `[dead_letter]` sink. A `teardown` exit does not move the node's reported state to `Error`.
-
-## Checkpoint
+## Check yourself
 
 Explain three separate endings: natural channel closure, cooperative cancellation, and deadline-driven task abort. Then identify what each node type cleans up, why a running guest call is not cancelled, and where a typed guest error becomes a retry, DLQ entry, recovery attempt, or pipeline-wide shutdown.
+
+## Next
+
+[Trace a stateless hot-swap](stateless-hot-swap.md) builds on the recovery path described here.

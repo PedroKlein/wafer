@@ -4,7 +4,7 @@
 
 **Role.** eKuiper is the reference stream-processing engine for E-Perf-1 target-load delivery/latency, E-Perf-10 gateway capacity, and E-Swap-3 rule-change disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
 
-## Raspberry Pi 5 setup
+## Setup
 
 Install the pinned package. The script picks the `arm64` or `amd64` package
 from `uname -m`, so the same pin serves aarch64 and x86_64 hosts. It refuses a
@@ -46,10 +46,6 @@ The rule update with its start and the rule list, which the harness calls now, w
 Three things did change. 2.1.0 opened an idle MQTT control-channel client to the local broker at startup, and 2.1.5 does not. The packaged `connections/connection.yaml` no longer defines sample connections, which Pipeline A never referenced. 2.1.5 also presizes some per-message maps in the projection path, so its numbers are not interchangeable with earlier 2.1.0 diagnostics.
 
 Results describe eKuiper 2.1.5 with this configuration, not a later release line or a tuned deployment. Before each host's final batch, the [runbook](../eval/pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch) re-runs the smoke test and a short series of each E-Swap-3 arm under load on that host.
-
-## Historical macOS setup
-
-Historical shakedowns ran eKuiper under Docker Compose because it needed a Linux guest on macOS. That Compose file has been removed. Those measurements remain informational and are not mixed with Pi 5 results.
 
 ## Pipeline A
 
@@ -138,5 +134,4 @@ E-Perf-10 compares both systems with these defaults. To test the hypothesis, the
 - `eval/ekuiper/gctrace-drop-in.conf`
 - `eval/ekuiper/seed-pipeline-a.sh`
 - `eval/ekuiper/smoke-test.sh`
-- `docs/status/rpi5-canonical-transition.md`
 - `docs/rfcs/RFC-008-evaluation-harness.md`

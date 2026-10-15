@@ -37,7 +37,9 @@ let out = output_with_type!(input, new_bytes, "application/json");
 ```
 
 Both macros expand into a struct literal for the wit-bindgen-generated
-`OutputMessage`. They exist as macros (not functions) because each
+`OutputMessage`, so that type must be in scope where they are used. The error
+macros likewise expand to `ProcessError::...`, and `payload_as_str!` uses
+`bad_input!`, so import both when using it. They exist as macros (not functions) because each
 plugin's `OutputMessage` type is generated locally by wit-bindgen and
 is not the same nominal type across plugins.
 
@@ -117,7 +119,7 @@ log_warn!("dropped duplicate");
 log_error!("upstream unreachable");
 ```
 
-Each macro calls the generated `wafer:pipeline/logging.log` import with the corresponding `LogLevel`. The host re-emits each entry as a `tracing` event with target
+Each macro calls the generated `wafer::pipeline::logging::log` import with the corresponding `LogLevel`, so the plugin needs `use wafer::pipeline::types::LogLevel;` in scope. The host re-emits each entry as a `tracing` event with target
 `wafer_core::node::wasm` and a `node` field naming the emitting node;
 enable them with `RUST_LOG=wafer_core::node::wasm=debug`.
 

@@ -7,10 +7,10 @@ This reference lists the current quantitative requirements. The narrative explan
 | ID | Statement | Criterion | Experiment |
 |---|---|---|---|
 | NFR-PERF-1 | Typed Wasm boundary cost is bounded. | Report the median paired WAFER-minus-native service time of an empty pass-through hop on the in-process path against a 50 µs reference; this is not a pass criterion. | E-Perf-4 |
-| NFR-PERF-2 | Matched target-load latency and delivery are bounded against eKuiper. | At 1,000 msg/s: pooled loss <= 1 percent, mean achieved/offered >= 0.99, median WAFER p95 / median eKuiper p95 <= 2.0. | E-Perf-1 |
+| NFR-PERF-2 | Matched target-load latency and delivery are bounded against eKuiper. | At 1,000 msg/s: pooled loss <= 1 percent, mean achieved/offered >= 0.99, zero duplicates, median WAFER p95 / median eKuiper p95 <= 2.0. | E-Perf-1 |
 | NFR-PERF-3 | Gateway capacity is measured on one common grid plus per-host bracket rates. | Report each system's delivery ceiling, bracketed by tested rates, and the normalized p99 knee on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s plus the bracket rates each host's capacity scout sets around the WAFER and eKuiper ceilings. WAFER's tested-grid delivery ceiling is at least 0.70 of eKuiper's across the whole bracketed ratio interval. | E-Perf-10 |
 | NFR-PERF-4 | Memory growth with pipeline depth is reported. | Report steady RSS at depths 1, 3, 5 and 10 and the per-stage slope; no pass limit. | E-Perf-6 |
-| NFR-PERF-5 | Isolation-cost ratios are portable across architectures. | `PENDING` until matched Raspberry Pi 5 and x86 Linux blocks exist. | E-Perf-5 |
+| NFR-PERF-5 | Isolation cost is reported across architectures. | Report the paired WAFER-minus-native service-time p50 per host (Raspberry Pi 5 and x86) side by side; no cross-architecture verdict. | E-Perf-5 |
 | NFR-PERF-6 | Linux filesystem page-cache startup effect is reported honestly. | Cold/warm phase estimates with disk compiled-component cache disabled. No AOT-cache claim. | E-Perf-9 |
 
 E-Perf-1 is a matched operating point, not capacity. Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-10 brackets each delivery ceiling between tested rates without interpolation; a ratio interval that straddles 0.70 is `CENSORED`, and an incomplete population is `PENDING`.
@@ -22,7 +22,7 @@ E-Backpressure evaluates `slow`, `drop`, and `dead-letter` separately. Each poli
 | ID | Statement | Criterion | Experiment |
 |---|---|---|---|
 | NFR-ISO-1 | Adversarial components are contained. | All six attacks are stopped by their expected mechanism (a trap, the memory limit, or the file-system denial for E-Iso-3) without a process-wide failure. | E-Iso-1 through E-Iso-6 |
-| NFR-ISO-2 | A fault does not materially affect an independently sourced healthy branch. | Branch-A throughput drop < 1 percent. | E-Iso-7 |
+| NFR-ISO-2 | A fault does not materially affect an independently sourced healthy branch. | Branch-A throughput drop < 1 percent, and no attack run stopped before both branch sinks exported. | E-Iso-7 |
 | NFR-ISO-3 | Guest memory is bounded per store. | 64 MiB Transform and 16 MiB Filter/Router defaults unless overridden. | E-Iso-5 |
 | NFR-ISO-4 | Infinite execution is interrupted by the declared mechanism. | Trap and recovery evidence matches the matrix-declared epoch stimulus. | E-Iso-4, E-Iso-8 |
 
@@ -38,7 +38,7 @@ E-Backpressure evaluates `slow`, `drop`, and `dead-letter` separately. Each poli
 
 ## Measurement rules
 
-- Amended N=30 experiments use complete runs as independent units.
+- Complete runs are the independent units; repetitions per experiment come from `eval/canonical-matrix.json`.
 - Fuel and epoch limits default to `None`; final WAFER configs enable both explicitly except for declared ablations and attack stimuli.
-- PMIC values are Raspberry Pi 5 internal-rail proxy measurements, not total board power.
+- Power values are proxies, not total board power: the Raspberry Pi 5 PMIC internal rails, the Jetson INA3221 rails and x86 RAPL package energy.
 - Diagnostic and final evidence are never pooled.

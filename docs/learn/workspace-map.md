@@ -1,14 +1,10 @@
 # Workspace and ownership map
 
-> **Documentation type:** Explanation
->
-> **Prerequisites:** [Learning guide orientation](README.md).
+> **Read first:** [Learning guide orientation](README.md).
 
-## Purpose
+By the end of this page you will know which crate owns a given piece of behavior, which `wafer-core` module to open first for a runtime question, what lives outside `crates/`, and which commands build and test the workspace.
 
-The workspace has seven crates. Their boundaries answer a practical maintenance question: where should a change begin? Shared data belongs in `wafer-types`; parsing and topology validation belong in `wafer-config`; execution belongs in `wafer-core`; binaries compose those libraries at process boundaries.
-
-## Flow
+## The crates at a glance
 
 ```mermaid
 flowchart LR
@@ -49,24 +45,9 @@ The arrows show compile-time or operational use, not a complete Cargo dependency
 
 The root [`Cargo.toml`](../../Cargo.toml) is the authority for the seven workspace members. Each crate's own `Cargo.toml` identifies its target and direct dependencies.
 
-## Rust
+## Where a change starts
 
-A [workspace](rust-in-context.md#workspace) groups packages under one dependency and lint configuration. Each package here provides one or more compilation units called a [crate](rust-in-context.md#crate): a library, a binary, or both. This is why `wafer-loadgen` can expose reusable measurement code from `src/lib.rs` while retaining a CLI in `src/main.rs`.
-
-`wafer-config/src/lib.rs` demonstrates a [public re-export](rust-in-context.md#public-re-export). Its implementation stays split into private modules, while callers import `wafer_config::load_config`, `wafer_config::validate`, and `wafer_config::DagGraph` from one narrow surface.
-
-## Design
-
-The deepest seam is between data, interpretation, and execution:
-
-1. `wafer-types` describes a `Config` without reading files or starting tasks.
-2. `wafer-config` turns TOML into that type and rejects semantic mistakes.
-3. `wafer-core` consumes the typed model to build queues, nodes, and supervision state.
-4. `wafer-runtime` selects command-line inputs and starts the core pipeline.
-
-The remaining crates have one clear consumer boundary: guest authors use `wafer-plugin`, evaluation tooling uses `wafer-loadgen`, and operators use `waferctl`.
-
-### Change-placement checks
+The main seam runs between data, interpretation, and execution. `wafer-types` describes a `Config` without reading files or starting tasks, `wafer-config` turns TOML into that type and rejects semantic mistakes, `wafer-core` builds queues, nodes, and supervision state from it, and `wafer-runtime` reads the command line and starts the pipeline. The other three crates each serve one consumer: guest authors use `wafer-plugin`, evaluation tooling uses `wafer-loadgen`, and operators use `waferctl`.
 
 - A new configuration field begins in `wafer-types`, gains semantic checks in `wafer-config` when needed, and is consumed in `wafer-core` or the runtime binary.
 - A new runner behavior belongs in `wafer-core`.
@@ -142,14 +123,10 @@ mise run clippy                               # cargo clippy --locked --workspac
 
 Many tests that need a built plugin check for it with `artifact_available` in `crates/wafer-core/src/testing/mod.rs`. Under a plain `cargo test`, a missing plugin prints a `SKIP` line and the test returns early, so it reports `ok` without checking anything. `mise run test` builds every plugin first and runs the tests with `WAFER_REQUIRE_PLUGINS=1`, which turns a missing plugin into a failure. A few tests, such as `crates/wafer-core/tests/attack_containment.rs`, fail on a missing plugin in either mode.
 
-## Status boundaries
-
-**Current implementation:** The root workspace lists exactly seven members and excludes `plugins/*`. `wafer-config` owns `load_config`, `validate`, and `DagGraph`; the runtime imports `load_config` and `validate` before launching the pipeline.
-
-**Intended design:** Placing shared types below parsing and execution is the organizing rationale visible in crate descriptions and dependencies. That rationale does not guarantee every module or binary is small.
-
-**Known drift:** The core contains its own `dag` module, so `wafer-config::DagGraph` is not the only graph representation in the repository. `build_pipeline` uses the core `DagGraph` only to reject a bad topology: it stores the result in `BuildOutput` and nothing reads it again. Node bundles are built by iterating the `config.nodes` `HashMap`, so tasks start in hash-map order, not topological order.
-
-## Checkpoint
+## Check yourself
 
 Without opening implementation details, name the owner for a new config field, a queue-runner change, a plugin helper, a benchmark traffic change, a runtime flag, and an operator command. If any answer is unclear, follow that crate's `src/lib.rs` or `src/main.rs` before moving on. Then use the module table to name the file that handles a full destination queue and the file that decides whether a failed message is retried.
+
+## Next
+
+[Rust in WAFER's context](rust-in-context.md) explains the language features you will meet in these crates.

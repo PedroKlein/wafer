@@ -12,7 +12,7 @@ cache.
 ## Plugin field syntax
 
 ```toml
-# Local path (relative to the runtime CWD or absolute)
+# Local path (absolute, or relative to this config file's directory)
 [nodes.upper-local]
 type   = "transform"
 plugin = "./plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm"
@@ -66,9 +66,8 @@ mise run //plugins:publish-all 1.0.0
 ```
 
 Package naming convention: `<registry>/wafer-<plugin_name>:<version>`.
-Hyphens in plugin names become underscores in the pushed name
-(`json-parse` → `wafer-json_parse`) because underscores are the OCI
-tag-friendly form.
+The tasks replace hyphens in the plugin name with underscores
+(`json-parse` becomes `wafer-json_parse`).
 
 The default registry is `ghcr.io/pedroklein`; override via the
 `WAFER_REGISTRY` environment variable:
@@ -103,7 +102,7 @@ type   = "transform"
 plugin = "ghcr.io/pedroklein/wafer-json_parse@sha256:abc123..."
 ```
 
-Local and remote plugins mix freely in the same pipeline — every node
+Local and remote plugins mix freely in the same pipeline; every node
 resolves independently. The runtime pulls the first layer of the
 referenced image and records the SHA-256 of the bytes it loads in
 `metadata.json` (`wafer_plugin_hashes`).
@@ -147,7 +146,7 @@ entry or point `[registry].cache_dir` at an empty directory.
 | `mise run //plugins:pull-plugin <name> <version>` | Download one plugin to `downloads/` (not the runtime cache). |
 | `mise run //plugins:pull-plugin-auth <user> <token> <name> <version>` | Pull with inline credentials. |
 | `mise run run-local` | Run the sample pipeline with only local plugins. |
-| `mise run run-remote` | Run the sample pipeline with OCI-hosted plugins. |
+| `mise run run-remote` | Run `examples/dag-remote.toml`, whose plugin reference points at a placeholder registry; edit it to name a component you published. |
 | `mise run run-remote-nocache` | Same with `--no-cache`, which has no effect yet (see [Cache management](#cache-management)). |
 
 ## Environment variables

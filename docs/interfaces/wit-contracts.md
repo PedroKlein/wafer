@@ -181,4 +181,7 @@ The host forwards guest messages to the emitting node's `tracing` context.
 - No Joiner world. Fan-in is host topology over one destination receiver.
 - No inference access for ungranted or non-Transform nodes.
 - No windowing, watermarks, event-time, or exactly-once primitives.
-- No default guest filesystem, socket, or HTTP interface.
+- No preopened directories and no socket access for guests. Outbound
+  `wasi:http` is linked for processing nodes but denies every request unless
+  the node has an `outbound_http` grant (see
+  [`config-schema.md`](config-schema.md#outbound-wasihttp-capability)).

@@ -4,17 +4,6 @@ Five concerns cut across every node type and every pipeline. This file
 describes each concept at the level of "what it is and why it matters";
 the long-form reasoning lives in the linked RFC / ADR.
 
-> **Implementation status.** The Envelope, Fuel & Metering, Capabilities,
-> and Error Policy subsections describe the current production contract.
-> Envelope lineage is assigned at source ingress and preserved through
-> fan-out (A13 closed 2026-07-20). Per-type fuel + `StoreLimits`
-> overrides are wired in the launcher (A8 closed 2026-07-20).
-> Capabilities are translated from `[nodes.X.capabilities]` at
-> instantiation and preserved across hot-swap (A9 closed 2026-07-20).
-> The error-policy cascade and retry exhaustion are honored (A6 closed
-> 2026-07-20; A7 closed 2026-07-21). See
-> [`../status/implementation-gaps.md`](../status/implementation-gaps.md).
-
 ## Envelope shape
 
 Every message that flows between nodes is a `RuntimeEnvelope` with shared immutable header and payload storage plus host-owned lineage and retry state:
@@ -105,8 +94,9 @@ Every host-observable guest failure is classified into one of five
   exceeded. Default: skip. After a fuel or epoch trap the Store is also
   replaced; a guest-returned `timed-out` keeps its instance.
 - `unrecoverable`: returned by the guest, or any other trap (panic,
-  out-of-bounds access, `StoreLimits` breach). Hard-wired: drop the
-  message and re-instantiate from the cached `InstancePre`.
+  out-of-bounds access, `StoreLimits` breach). Not configurable: send the
+  message to the DLQ (or count it as dropped when there is none) and
+  re-instantiate from the cached `InstancePre`.
 
 Traps are classified by their wasmtime trap code and counted per kind in
 `per_node_metrics.csv` (`traps_total` counts real traps only; guest-returned
@@ -114,21 +104,9 @@ errors are counted separately as `guest_*`). Guest state does not survive
 re-instantiation.
 
 The policy engine (`ErrorPolicyExecutor` in
-`crates/wafer-core/src/runner/error_policy.rs`) is a per-node struct. A present
-node policy replaces the pipeline table. Its bounded retry buffer defaults to
-1000 entries, selects the earliest due retry, waits `backoff_ms` before the
-first attempt, doubles later delays to a 30-second cap, and preserves retry
-count through requeue and DLQ serialization. Exhaustion honors `skip`, `dlq`,
-or `teardown`; DLQ-full and DLQ-closed remain distinct outcomes. The
-configurable `teardown` action is a one-way stop: it ends the node's runner
-loop without recovery. The validator requires `[dead_letter]` whenever an
-effective error-policy action is `dlq`, as it does for `overflow =
-"dead-letter"` edges. Trapped and `unrecoverable` messages are recorded in the
-DLQ before the node is re-instantiated. Buffered retries are flushed with
-`HotSwapDrain` once a replacement is adopted (a failed swap keeps them),
-`RecoveryFailed` when re-instantiation fails, and `Shutdown` on exit; after
-upstream EOF they are still served when their backoff expires. `retry_count`
-is reset on a node's output.
-See
-[ADR-0008](../adr/0008-error-policy-engine.md) and [RFC-002
-§D4](../rfcs/RFC-002-host-runtime.md).
+`crates/wafer-core/src/runner/error_policy.rs`) is a per-node struct; a
+present node policy replaces the pipeline table. The configurable `teardown`
+action is a one-way stop that fails the run. The retry buffer, DLQ
+requirements, recovery and teardown paths are described in
+[04. Runtime view §3](04-runtime-view.md#3-error-dispatch-path); the decision
+record is [ADR-0008](../adr/0008-error-policy-engine.md).

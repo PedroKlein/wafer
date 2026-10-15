@@ -10,13 +10,15 @@ Set `RUST_LOG` before starting the runtime:
 
 ```bash
 RUST_LOG=info cargo run -p wafer-runtime -- --config pipeline.toml
-RUST_LOG=wafer=debug,wasmtime=warn,hyper=warn cargo run -p wafer-runtime -- --config pipeline.toml
+RUST_LOG=info,wafer=debug cargo run -p wafer-runtime -- --config pipeline.toml
 ```
 
 The runtime logs at `info` when `RUST_LOG` is unset or empty. A level-only
 value such as `debug` or `off` applies to every target. A value that names
 only targets logs nothing else, so add a base level to raise some targets and
-keep the rest, for example `info,wafer=debug`.
+keep the rest, as in the second example. A target matches by prefix, so
+`wafer` covers the runtime binary and every `wafer_*` crate. Pass
+`--log-format json` for JSON lines instead of the default pretty format.
 
 The host re-emits guest calls to `wafer:pipeline/logging.log` as `tracing`
 events with target `wafer_core::node::wasm` and a `node` field naming the
@@ -30,7 +32,7 @@ Passing the runtime's `--metrics-bind <ADDR>` option moves it to a separate
 listener; `[metrics].path` is used by that dedicated server. The main API route
 remains `/metrics`.
 
-The handler in `crates/wafer-core/src/api/handlers.rs` currently emits:
+The handler in `crates/wafer-core/src/api/handlers.rs` emits:
 
 | Metric | Labels | Meaning |
 |---|---|---|
@@ -53,15 +55,13 @@ The hot-swap phases are runner-local. They do not prove sink convergence,
 sequence continuity, loss, or throughput; evaluation artifacts own those
 claims.
 
-A20 remains deferred. `NodeMetrics` records Transform process-time rollback
-internally, but `/metrics` does not expose
-`wafer_hot_swap_rollbacks_total`. Dashboards must not infer a rollback count
-from the phase histogram.
+There is no rollback counter. A rollback answered by the hot-swap endpoint
+adds a `phase="rollback"` observation, but the histogram is not a complete
+rollback count.
 
-Queue disposition counters (`dropped`, `dead_lettered`,
-`downstream_closed`, `dlq_full`, and `dlq_closed`) are captured by the
-runtime's evaluation `QueueDepthRecorder`; they are not currently part of the
-Prometheus handler above.
+Queue disposition counters (`dropped`, `dead_lettered`, `downstream_closed`,
+`dlq_full`, and `dlq_closed`) are recorded only in the evaluation files below,
+not on `/metrics`.
 
 ## Evaluation files
 

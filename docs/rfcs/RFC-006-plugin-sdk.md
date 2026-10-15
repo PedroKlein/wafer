@@ -3,7 +3,7 @@
 - **Status:** Implemented
 - **Original session date:** 2026-07-12
 - **Amends:** —
-- **Amended by:** TG2 release-surface reconciliation
+- **Amended by:** current release amendment (banner below)
 
 > **Current release amendment.** Rust components target the four current WIT
 > worlds. The six attack components are mandatory executable test stimuli, not

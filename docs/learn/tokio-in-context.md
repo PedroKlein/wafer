@@ -1,10 +1,8 @@
 # Tokio in WAFER's context
 
-> **Documentation type:** Explanation
->
-> **Prerequisites:** [Rust in WAFER's context](rust-in-context.md).
+> **Read first:** [Rust in WAFER's context](rust-in-context.md).
 
-This page collects the Tokio techniques that the runners and the orchestrator depend on and ties each one to the WAFER code that uses it. [Shutdown and failure behavior](shutdown-and-failure.md) and [Trace a stateless hot-swap](stateless-hot-swap.md) describe what those code paths do; this page explains the primitives underneath. `CancellationToken` comes from the `tokio-util` crate; everything else is in `tokio` itself.
+This page explains the Tokio primitives under the runners and the orchestrator and ties each one to the WAFER code that uses it. By the end you will know which work runs as a Tokio task and which on its own thread, how bounded channels carry backpressure, how a node waits for input, a swap, a retry, or cancellation in one `select!`, and why the guest call is the one wait that cancellation never interrupts. [Shutdown and failure behavior](shutdown-and-failure.md) and [Trace a stateless hot-swap](stateless-hot-swap.md) later describe what those code paths do. `CancellationToken` comes from the `tokio-util` crate; everything else is in `tokio` itself.
 
 ## The runtime and its tasks
 
@@ -79,6 +77,19 @@ The timed swap in `run` uses a second oneshot to pass the prepared payload from 
 
 `tokio::select!` polls several futures on the current task and runs the handler of the first one that completes with a value matching its pattern. It then drops the other branch futures. Without `biased;` it picks a random branch to poll first on each call; with `biased;` it polls the branches top to bottom. The source, processing, and passthrough loops and `run_until_complete` put cancellation first. `run_sink_loop` puts `receiver.recv()` first, since it drains its buffer after cancellation anyway.
 
+The idle wait in `recv_next_or_retry` (`crates/wafer-core/src/runner/mod.rs`) is the select every processing node spends most of its time in:
+
+```rust
+tokio::select! {
+    biased;
+    () = &mut cancelled => return NextInput::Closed,
+    message = receiver.recv() => Some(message),
+    Ok(()) = swap_rx.changed() => None,
+}
+```
+
+A second form of the same select adds `() = tokio::time::sleep_until(deadline) => continue` when a retry is waiting in backoff.
+
 Because the losing futures are dropped, every branch future must be cancel safe: dropping it before it completes must lose nothing. `mpsc::Receiver::recv` guarantees that no message was taken if it loses, `watch::Receiver::changed` that no version was marked seen, and `JoinSet::join_next_with_id` that no task result was removed. `cancelled()`, `sleep`, and `sleep_until` hold no data. `Source::poll` depends on the adapter: the module comment in `crates/wafer-core/src/runner/source.rs` warns that a cancelled poll may drop a partly read item. `MqttSource::poll` only awaits `recv()` on a channel fed by a spawned event-loop task, so it loses nothing.
 
 Two rules follow from how the macro works. First, a handler body is not a cancellation point. Once a branch wins, its handler runs to completion before the loop polls `cancelled` again. In `run_source_loop`, `send_downstream(&senders, envelope).await` runs inside the `source.poll()` handler, so a source waiting on a full `slow` edge does not see cancellation. It continues when a slot frees or when the downstream task exits and drops its receiver. Second, a branch whose pattern does not match is disabled for the rest of that `select!` call. The branch `Ok(()) = swap_rx.changed()` therefore switches itself off when the watch sender is gone instead of ending the wait (test `closed_swap_channel_does_not_end_the_wait`).
@@ -139,17 +150,18 @@ Atomics replace locks where one value is enough. [Rust in context](rust-in-conte
 - **CancellationToken**: A `tokio-util` handle whose `cancel()` wakes every `cancelled()` future on that token and on its child tokens.
 - **spawn_blocking**: A Tokio function that runs a synchronous closure on a separate thread pool and returns an awaitable `JoinHandle`.
 
-## Status boundaries
+## Limits to keep in mind
 
-**Current implementation:** All node tasks run on one hand-built multi-thread runtime with Tokio's default worker count. Node queues are bounded `mpsc` channels, hot-swap delivery uses `watch`, completion reporting uses `oneshot` and `Notify`, and shutdown uses one pipeline `CancellationToken` with a child per node. Guest calls run outside `select!`. Hot-swap compile and link run on the blocking pool; signals and epoch ticks run on dedicated OS threads.
+- `StdinSource::poll` (`crates/wafer-core/src/node/source/stdin.rs`) calls the blocking `read_line` from `std::io` inside its future. While it waits for a line it holds a worker thread, and its loop cannot see cancellation until a line or end of input arrives.
+- The release-profile comment in the root `Cargo.toml` says node failures are contained with `catch_unwind`. No production code calls it; panics are caught by Tokio's task harness and reported through the `JoinSet`.
 
-**Intended design:** Every wait in a runner loop is either a cancel-safe `select!` branch or a guest call that must finish, so cancellation stops a node only between messages, and the bounded `JoinSet` deadline covers a task that does not reach that point.
-
-**Known drift:** `StdinSource::poll` (`crates/wafer-core/src/node/source/stdin.rs`) calls the blocking `read_line` from `std::io` inside its future, so while it waits for a line it holds a worker thread and its loop cannot observe cancellation until a line or end of input arrives. A send blocked on a full `slow` edge is not a cancellation point either. Startup compiles components on the async path, although the `compile_cached` doc comment asks async callers to use the blocking pool. The release-profile comment in the root `Cargo.toml` says node failures are contained with `catch_unwind`; no production code calls it, and panics are caught by Tokio's task harness and reported through the `JoinSet`.
-
-## Checkpoint
+## Check yourself
 
 1. Why does `spawn_node_task` require `Send + 'static` from its task, and what does `spawn_bundles` move into the task or share through `Arc` to satisfy it?
 2. In `recv_next_or_retry`, which branch futures are cancel safe, why is `mark_changed()` called after `changed()` wins, and why is the guest call not one of the branches?
 3. A source is blocked in `send_downstream` on a full `slow` edge when SIGTERM arrives. Which thread sees the signal, which token does it cancel, and why can the source not leave its loop until that send returns?
 4. Why do the epoch ticker and the signal listener run on `std::thread` instead of as Tokio tasks, and why does hot-swap compilation use `spawn_blocking`?
+
+## Next
+
+[Configuration to running pipeline](config-to-running-pipeline.md) follows a TOML file to the tasks described here.

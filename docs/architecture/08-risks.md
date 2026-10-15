@@ -1,6 +1,6 @@
 # 08. Risks and technical debt
 
-These risks can invalidate an evaluation claim or block a final batch. The canonical validator treats provenance, throttling, malformed evidence, and incomplete conditions as hard failures.
+These risks can invalidate an evaluation claim. The canonical validator treats provenance, throttling, malformed evidence, and incomplete conditions as hard failures.
 
 ## R1: the shared MQTT path censors SUT capacity
 
@@ -20,7 +20,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Mitigation:** Runtime fuel and epoch limits default to `None`; final configs set the protected values explicitly. Parsed-config tests enumerate final WAFER leaves, and metadata records the effective fuel budgets, epoch deadline/tick, and metering mode.
 
-**Residual:** A source or config change after the diagnostic batch is a new commit. It needs a new diagnostic batch, and the runner refuses to resume a batch from another commit.
+**Residual:** A source or config change is a new commit, and the runner refuses to resume a batch from another commit.
 
 ## R3: attack containment fails outside the measured boundary
 
@@ -82,27 +82,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Residual:** Total USB-C input energy requires an external logging meter and is not available from the PMIC proxy.
 
-## R9: E-Perf-5 lacks its x86 half
-
-**Likelihood:** High until the matched host is available.
-
-**Impact:** The cross-architecture claim remains incomplete.
-
-**Mitigation:** Analysis returns `PENDING` unless both Raspberry Pi 5 and x86 Linux batches have matched source, config semantics, workload, and repetitions.
-
-**Residual:** ARM-only data cannot support a portability conclusion.
-
-## R10: hardware or long-run interruption
-
-**Likelihood:** Medium for a multi-day campaign.
-
-**Impact:** Schedule delay and partial attempts.
-
-**Mitigation:** The runner is sequential and resumable, writes incremental progress and thermal logs, never overwrites an attempt, and retries an infrastructure failure once in place. A failure of the system under test is admitted as data, not retried. Retrieval is additive and verified path-for-path with SHA-256 manifests.
-
-**Residual:** Repeated systemic failure blocks admission. Thresholds and system settings are not tuned from failed or diagnostic-batch outcomes.
-
-## R11: tested-grid bounds are reported as exact capacity
+## R9: tested-grid bounds are reported as exact capacity
 
 **Likelihood:** Medium when the best observed rate is at a grid boundary or MQTT support is censored.
 
@@ -112,7 +92,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Residual:** A ratio interval that straddles 0.70 is `CENSORED`; resolving it needs tested rates between the bracketing ones, and evidence beyond the tested grid requires a new experiment.
 
-## R12: local replacement telemetry is mistaken for delivery evidence
+## R10: local replacement telemetry is mistaken for delivery evidence
 
 **Likelihood:** Medium because API timing is available before sink analysis.
 
@@ -121,13 +101,3 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 **Mitigation:** `replacement_adopted` and the first runner-local outcome are reported separately from sink transition, gap, throughput, and sequence artifacts. E-Swap-5 requires `post-rollback-continuity.json` and rejects a fabricated successful-v2 timeline.
 
 **Residual:** A locally enqueued output can still be delayed or lost downstream; only sink-owned evidence supports convergence.
-
-## R13: prerequisite evidence is promoted prematurely
-
-**Likelihood:** Low after fail-closed admission checks.
-
-**Impact:** High for isolation and observability claims.
-
-**Mitigation:** `mise run mandatory-attack-evidence` must execute the healthy reference and exact S1–S6 set, including explicit filesystem denial, before a campaign. Its receipt remains provisional until release and admission binding.
-
-**Residual:** A20 is intentionally deferred: internal Transform rollback evidence exists, but `/metrics` lacks `wafer_hot_swap_rollbacks_total`.

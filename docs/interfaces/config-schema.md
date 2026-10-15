@@ -1,6 +1,6 @@
 # Config Schema Reference
 
-Reference for the TOML pipeline configuration consumed by `wafer-runtime --config <path>`. The domain types live in `crates/wafer-types/src/config/`; the loader / validator / DAG builder live in `crates/wafer-config/`, and the runtime binary imports them directly (gap **A1**: Closed 2026-07-19).
+Reference for the TOML pipeline configuration consumed by `wafer --config <path>` (the `wafer-runtime` binary). The domain types live in `crates/wafer-types/src/config/`; the loader, validator and DAG builder live in `crates/wafer-config/`.
 
 Every top-level section is optional. Defaults describe runtime behavior, not the final evaluation policy. Final WAFER configs set metering explicitly and are checked against `eval/canonical-matrix.json`.
 
@@ -50,14 +50,7 @@ Fuel metering is engine-wide. It is off only when no `fuel.*` value and no node 
 
 If a replaced Transform traps (including a fuel or epoch budget trap) or returns `unrecoverable` while its rollback window is open, the runtime restores the previous component once and closes the window; a later trap is handled like any other failure of the restored component.
 
-Ordinary final WAFER evaluation configs set Transform fuel to `10_000_000`, Filter and Router fuel to `500_000`, `epoch_deadline` to `100`, and `epoch_tick_ms` to `10`. These are evaluation values, not runtime defaults. E-Perf-7 disables a mechanism by omitting its field (its pipelines set no other fuel value):
-
-| Mode | `fuel.transform` | `epoch_deadline` |
-|---|---|---|
-| `neither` | omitted (`None`) | omitted (`None`) |
-| `fuel-only` | `10_000_000` | omitted (`None`) |
-| `epoch-only` | omitted (`None`) | `100` |
-| `both` | `10_000_000` | `100` |
+The evaluation configs under `eval/configs/` set Transform fuel to `10_000_000`, Filter and Router fuel to `500_000`, `epoch_deadline` to `100`, and `epoch_tick_ms` to `10`. These are evaluation values, not runtime defaults; E-Perf-7 turns a mechanism off by omitting its field.
 
 ## `[error_policy]`
 
@@ -144,7 +137,7 @@ The configuration struct remains `WasmNodeDef`, but `plugin` can select a Wasm c
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `plugin` | `string` or tagged inline table (required) | A string selects a local/OCI Wasm component. `{ kind = "wasm", path = "..." }` is the explicit equivalent. `{ kind = "native", function = "..." }` selects a built-in baseline. Only loaded Wasm implementations are replacement-eligible. |
+| `plugin` | `string` or tagged inline table (required) | A string selects a local or OCI Wasm component; a relative local path is resolved against the config file's directory. `{ kind = "wasm", path = "..." }` is the explicit equivalent. `{ kind = "native", function = "..." }` selects a built-in baseline: `passthrough`, `uppercase` or `json-parse` for a Transform, `threshold` for a Filter (reading `field`, `min` and `max` from `config`). Routers have no native form. Only loaded Wasm implementations are replacement-eligible. |
 | `fuel` | `Option<u64>` | Overrides the pipeline default for this node. Setting it turns fuel metering on for the engine. Zero is rejected. |
 | `memory_limit` | `Option<usize>` | Linear-memory limit in bytes for this node, used at launch, recovery, reconfigure and hot-swap. Omission uses `[engine.memory]` for the node's category. |
 | `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference, outbound_http}`. Booleans default to `false`; `outbound_http` defaults to an empty deny-all list. `allow_inference=true` selects the inference linker and store only for a Wasm Transform. |
@@ -217,7 +210,7 @@ Sinks (`SinkDef`): `mqtt | file | stdout | http | bench-sink`.
 | `bench-source` | `rate`, `total_messages`, `warmup_messages` (default `0`), `payload_size` (default `128`), optional `burst`. |
 | `bench-sink` | `warmup_secs` (default `30`), `track_sequences` (default `true`), `track_hotswap` (default `false`), optional `output_dir`. |
 
-A `bench-source.burst` table contains `rate`, `start_secs`, and `end_secs`. Final E-Swap-4 uses base rate 1,000 msg/s, burst rate 2,000 msg/s, start 55 seconds, and end 65 seconds after measurement begins.
+A `bench-source.burst` table contains `rate`, `start_secs`, and `end_secs`, measured from the first measured message.
 
 `TlsConfig`: optional `ca`, `cert`, `key` file paths.
 `AuthConfig`: `username`, `password`.
@@ -303,6 +296,4 @@ from = "in"
 to   = "out"
 ```
 
-Every other field has a sensible default; the runtime uses this snippet as its smoke test.
-
-For fan-in, `capacity` remains edge-shaped configuration but the physical queue is receiver-keyed. If any incoming edge declares a capacity, the destination uses the maximum explicit incoming capacity; the default is used only when none declares one. Tokio does not promise fair ordering across producers.
+Every other field has a default. This pipeline needs no `[dead_letter]` because it has no processing node.

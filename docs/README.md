@@ -88,10 +88,8 @@ docs/
 ├── status/               Current state of the world (Reference)
 │   ├── README.md
 │   ├── implementation-status.md
-│   ├── implementation-gaps.md
-│   ├── canonical-readiness.md
-│   └── rpi5-canonical-transition.md
-├── benchmarks/           Measurement notes; no final results yet
+│   └── implementation-gaps.md
+├── benchmarks/           Measurement method and comparator setup (Reference)
 │   ├── README.md
 │   ├── hot-swap.md
 │   ├── ekuiper-comparator.md

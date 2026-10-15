@@ -1,14 +1,10 @@
 # Follow one message through Wasm
 
-> **Documentation type:** Tutorial
->
-> **Prerequisites:** [Configuration to running pipeline](config-to-running-pipeline.md) and familiarity with [ownership](rust-in-context.md#ownership), [move](rust-in-context.md#move), [Arc](rust-in-context.md#arc), [borrow](rust-in-context.md#borrow), and [RAII](rust-in-context.md#raii).
+> **Read first:** [Configuration to running pipeline](config-to-running-pipeline.md). The terms [ownership](rust-in-context.md#ownership), [move](rust-in-context.md#move), [Arc](rust-in-context.md#arc), and [RAII](rust-in-context.md#raii) are used throughout.
 
-## Purpose
+This walkthrough follows one `RuntimeEnvelope` from a native source, through a transform component, to the next bounded queue. By the end you will be able to point to each ownership move, each deliberate clone, the exact places where payload bytes are copied, and the reason cancellation can stop a node only between messages. It also shows where "zero-copy" stops being true.
 
-This walkthrough follows one `RuntimeEnvelope` from a native source, through a transform component, to the next bounded queue. It focuses on ownership and the real allocation boundaries so that "zero-copy" is not applied more broadly than the source supports.
-
-## Flow
+## The path
 
 ```mermaid
 sequenceDiagram
@@ -31,91 +27,74 @@ sequenceDiagram
     Runner->>QueueOut: reserve permit and move output
 ```
 
-### 1. Create and identify the envelope
+### 1. The source creates the envelope
 
-A native source adapter returns a `RuntimeEnvelope` (`crates/wafer-core/src/queue/envelope.rs`). Its immutable `EnvelopeHeader` is held by `Arc`, its payload by `Bytes`, and its lineage and retry count are host-owned. New ingress timestamps are checked, saturating Unix-epoch nanoseconds. `run_source_loop` (`crates/wafer-core/src/runner/source.rs`) calls `envelope.ensure_trace_id()` before forwarding the message.
+A native source adapter returns a `RuntimeEnvelope` (`crates/wafer-core/src/queue/envelope.rs`):
 
-`send_downstream` (`crates/wafer-core/src/runner/mod.rs`) moves the envelope when there is one destination. With multiple destinations, `send_matching` serves `drop` and `dead-letter` edges before `slow` ones and clones for all but the last sender. Those clones increment `Arc` and `Bytes` reference counts instead of copying the header and payload bytes; only the two small lineage strings are copied. The envelope clone tests verify both shared backing stores.
+```rust
+#[derive(Debug, Clone)]
+pub struct RuntimeEnvelope {
+    pub header: Arc<EnvelopeHeader>,
+    pub payload: Bytes,
+    pub(crate) lineage: Lineage,
+    /// ...
+    pub retry_count: u32,
+}
+```
 
-### 2. Apply the configured edge policy
+The header (id, timestamp, source, content type, metadata, and host-only benchmark stamps) is immutable and shared through `Arc`; the payload is a reference-counted `Bytes`. `lineage` holds the parent and trace ids. `run_source_loop` (`crates/wafer-core/src/runner/source.rs`) calls `envelope.ensure_trace_id()` and then `send_downstream`.
 
-Every downstream send reaches `send_one` in the same file, which reads the edge's overflow policy from `DownstreamSender` and records a closed destination, a full DLQ, and a closed DLQ as distinct outcomes. [Tokio in context](tokio-in-context.md#bounded-mpsc-between-nodes) explains the `reserve().await` and `try_send` calls it chooses between and the destination-keyed queue that fan-in edges share.
+With one destination the envelope is moved. With several, `send_matching` (`crates/wafer-core/src/runner/mod.rs`) clones it for all but the last sender. A clone bumps the `Arc` and `Bytes` reference counts instead of copying the header or payload; only the two short lineage strings are copied. The envelope's clone tests check that both backing stores are shared.
 
-### 3. Receive outside the guest
+### 2. The edge policy decides how to send
 
-At the top of each iteration, `run_transform_loop_with_config` (`crates/wafer-core/src/runner/transform.rs`) applies a pending swap or replays a rolled-back message. Otherwise it calls `next_input` (`crates/wafer-core/src/runner/mod.rs`), which returns a held envelope first and then delegates to `recv_next_or_retry`. That function returns a ready retry if there is one. When there is none, a biased `tokio::select!` waits for cancellation, `receiver.recv()`, a published swap (`swap_rx.changed()`), or the next retry deadline. `receiver` is a `TrackedReceiver`, which wraps the `mpsc` receiver to count dequeues and remember EOF. A swap therefore wakes an idle node; a message that arrives while a swap is pending is held and processed by the replacement. After a message arrives, the runner clones it into `safety` for retry or DLQ handling. [Tokio in context](tokio-in-context.md) explains `biased` and the pinned cancellation future.
+Every send goes through `send_one`, which reads the edge's overflow policy from `DownstreamSender`. A `slow` edge waits for space; `drop` and `dead-letter` edges never wait. [Tokio in context](tokio-in-context.md#bounded-mpsc-between-nodes) shows the calls behind each policy.
 
-The runner awaits `transform.process(envelope).await` after the cancellation `select!`, not as one of its branches. Here `transform` is the runner's `TransformNode` enum (`crates/wafer-core/src/node/mod.rs`), not the bindgen-generated type of the same name; its `Wasm` variant forwards to `WasmTransformNode::process` (`crates/wafer-core/src/node/wasm.rs`). Wasmtime's asynchronous P2 binding may yield while servicing host calls, but cancellation can stop only the next receive; it does not drop an active Wasm future and leave its `Store` inconsistent.
+### 3. The runner receives outside the guest
 
-### 4. Build the WIT input
+At the top of each iteration, `run_transform_loop_with_config` (`crates/wafer-core/src/runner/transform.rs`) first applies a pending swap if there is one. Otherwise `next_input` returns a held envelope or calls `recv_next_or_retry`, which returns a ready retry or waits in a `select!` for cancellation, a message, a swap, or the next retry deadline.
 
-The launcher built this node, with its own `Store`, in `load_transform_node` (`crates/wafer-core/src/orchestrator/launcher.rs`). `WasmTransformNode::process` performs the per-call setup in this order:
+Once a message arrives, the runner keeps a cheap `safety` clone for retry or dead-lettering, then calls the guest as a plain statement, outside any `select!`:
 
-1. clear the host log buffer;
-2. reset configured fuel;
-3. reset the relative epoch deadline;
-4. call `build_wit_message`;
-5. invoke the typed guest `process` export;
-6. flush guest logs;
-7. delete the host-owned buffer resource, including after a trap;
-8. map the result.
+```rust
+let result = transform.process(envelope).await;
+```
 
-`build_wit_message` clones the `Bytes` handle into the store's resource table (`push_buffer` in `crates/wafer-core/src/engine/state.rs`), copies header strings and metadata into the generated WIT record, and passes a borrowed resource handle. The WIT `message` in `wit/pipeline-types.wit` declares `payload: borrow<buffer>`, so the guest can avoid reading payload bytes when its logic does not need them.
+Here `transform` is the runner's `TransformNode` enum (`crates/wafer-core/src/node/mod.rs`); its `Wasm` variant forwards to `WasmTransformNode::process` (`crates/wafer-core/src/node/wasm.rs`). Because the call is not a `select!` branch, cancellation can never drop it halfway and leave the `Store` mid-call. Cancellation is seen at the next receive.
 
-The input payload is copied only when the guest reads it. A guest call to `read` or `read-all` on the buffer lands in the `HostBuffer` impl on `WaferState` (`crates/wafer-core/src/engine/bindings.rs`), which calls `WaferBuffer::read` or `read_all` (`crates/wafer-core/src/engine/buffer.rs`). Those copy the bytes into a new host `Vec<u8>` with `to_vec`, and Wasmtime then copies that `list<u8>` into guest linear memory. [Wasmtime in context](wasmtime-in-context.md) explains resource handles and the generated bindings.
+### 4. The host builds the WIT input and calls the guest
 
-### 5. Map the guest result
+The node and its own `Store` were built by `load_transform_node` (`crates/wafer-core/src/orchestrator/launcher.rs`). `WasmTransformNode::process` clears the log buffer, resets fuel and the epoch deadline, and then:
 
-The transform interface returns either an `output-message` or one of five `process-error` variants. A successful output carries `payload: list<u8>`. `RuntimeEnvelope::from_guest_output` (`crates/wafer-core/src/queue/envelope.rs`) builds the new envelope from the guest-provided id, timestamp, source, content type, metadata, and payload. Lineage and benchmark stamps come from the input. `retry_count` starts at zero, because retries are budgeted per node.
+```rust
+let wit_msg = build_wit_message(&mut self.store, &envelope)?;
+```
 
-Input payload access uses `borrow<buffer>`, but Transform output is a WIT `list<u8>`: Wasmtime copies it out of guest memory into a host `Vec<u8>`, which becomes the new envelope's `Bytes`. The whole boundary is not zero-copy. Guest-provided timestamps remain message data and never replace host-owned benchmark clocks.
+`build_wit_message` puts a `Bytes` clone into the Store's resource table (`push_buffer` in `crates/wafer-core/src/engine/state.rs`), copies the header strings and metadata into the generated WIT `Message`, and passes the payload as a borrowed handle. In `wit/pipeline-types.wit` the field is declared `payload: borrow<buffer>`, so a guest that never reads the payload never causes it to be copied.
 
-The borrowed input resource remains host-owned. `process` captures its resource representation before the guest call and calls `delete_buffer` (`crates/wafer-core/src/engine/state.rs`) afterward even if Wasmtime returned a trap. Cleanup failure after a completed call becomes `WasmProcessError::Trapped` without a trap code; after a trap, the trap's own code is kept.
+When the guest does call `read` or `read-all`, the call lands in the `HostBuffer` impl on `WaferState` (`crates/wafer-core/src/engine/bindings.rs`), which calls `WaferBuffer::read` or `read_all` (`crates/wafer-core/src/engine/buffer.rs`). Those copy the bytes into a new `Vec<u8>`, and Wasmtime copies that list into guest memory.
 
-### 6. Return to bounded queues
+After `call_process` returns, `process` flushes the guest's logs and deletes the buffer resource, even when the call trapped. If that cleanup fails after a successful call, the result becomes `WasmProcessError::Trapped` without a trap code; after a trap, the trap's own code is kept. [Wasmtime in context](wasmtime-in-context.md#resource-handles) explains why the delete is needed.
 
-On success, the runner increments the node's processed counter (`NodeMetrics::record_processed` in `crates/wafer-core/src/node/metrics.rs`) and passes the output to `send_downstream`. If a hot-swap is waiting for its first outcome, or a canary window is open, the runner then records that as well. On a WIT error or trap, the safety clone is available for retry, DLQ, timeout recovery, or rollback logic. [Shutdown and failure behavior](shutdown-and-failure.md) explains those branches.
+### 5. The guest result becomes a new envelope
 
-## Rust
+The transform interface returns either an `output-message` or one of five `process-error` variants. On success, `RuntimeEnvelope::from_guest_output` (`crates/wafer-core/src/queue/envelope.rs`) builds a new envelope from the guest's id, timestamp, source, content type, metadata, and payload. Lineage and benchmark stamps come from the input, and `retry_count` starts again at zero because retries are budgeted per node. Guest timestamps stay message data; they never replace the host's benchmark clocks.
 
-### Move the ordinary case, clone only for alternatives
+The output payload is a WIT `list<u8>`, not a resource, so Wasmtime copies it out of guest memory into a host `Vec<u8>`, which becomes the new envelope's `Bytes`. So the boundary is zero-copy only for input the guest does not read: header strings, metadata, read payload bytes, and Transform output are all copied.
 
-The source loop and channel send consume an owned `RuntimeEnvelope`. The transform call also consumes the input. Clones exist only when fan-out needs multiple messages or failure handling needs a safety copy.
+### 6. The output goes to the next queue
 
-### `Arc` and `Bytes` make host clones cheap
+On success the runner counts the message (`NodeMetrics::record_processed` in `crates/wafer-core/src/node/metrics.rs`) and calls `send_downstream`. If a hot-swap is waiting for its first outcome, or a canary window is open, the runner records that too. On a guest error or trap, the `safety` clone feeds retry, dead-lettering, timeout recovery, or rollback, which [Shutdown and failure behavior](shutdown-and-failure.md) covers.
 
-`Arc<EnvelopeHeader>` and `Bytes` share allocations across host-side clones. This does not mean every boundary is allocation-free: WIT strings and metadata are materialized, and a transform's `list<u8>` output becomes new host-owned bytes.
+## What the code does not promise
 
-### Borrowed resources still require cleanup
+- Fan-in has no fairness or ordering guarantee: several producers share one queue.
+- The node owns one Store and permits one guest call at a time. The async bindings let a guest's host call, such as an outbound HTTP request, yield to Tokio without blocking a worker; they do not make the guest concurrently callable.
 
-The buffer lives in the Store's resource table, and dropping a `Resource` handle in Rust does not remove the entry; [Wasmtime in context](wasmtime-in-context.md#resource-handles) shows how `build_wit_message` and `process` use `rep()`, `Resource::new_borrow`, and `Resource::new_own` to delete the entry after every call.
+## Check yourself
 
-### Async host bindings do not make the guest concurrently callable
+Trace one message in your own words. Name each ownership move, each deliberate clone, the exact point at which payload bytes may be copied, and why cancellation waits around the receive but not around the guest call.
 
-The project's WIT exports remain synchronous from the guest's perspective. The host awaits the async export call generated in `crates/wafer-core/src/engine/bindings.rs`, and `build_linker` (`crates/wafer-core/src/engine/loader.rs`) adds the WASI and `wasi:http` host functions in their async form, so a guest host call such as an outbound HTTP request can yield to Tokio without a nested runtime or blocking bridge. The node still owns one Store and permits one guest call at a time.
+## Next
 
-## Design
-
-The hot path uses three distinct seams:
-
-- native adapters create and consume host envelopes;
-- bounded channels transfer ownership between node tasks;
-- typed Component Model bindings translate between host envelopes and guest records.
-
-That division keeps `Store` ownership local to one processing task. It also makes cancellation correctness more important than immediate cancellation latency: a running guest call completes before its store is reused or replaced.
-
-### What the tests establish
-
-The envelope unit tests establish shared host-side clone storage. The source-loop test establishes trace assignment and movement through a bounded channel. The component harness tests cover output metadata and repeated epoch-deadline resets only when the required prebuilt component exists; their explicit skip path means a missing artifact is not execution proof.
-
-## Status boundaries
-
-**Current implementation:** Source ingress assigns a trace ID, configured edge overflow reaches the shared send seam, the transform runner awaits Wasm outside its cancellation `select!`, and the transform wrapper resets limits, cleans up the borrowed resource, preserves every guest output field, inherits lineage and benchmark stamps, and resets the retry count.
-
-**Intended design:** Borrowed input resources allow guests such as filters and routers to avoid payload reads. That is a targeted optimization, not a claim that all host and guest marshalling is zero-copy.
-
-**Known drift:** None for the path described above. Host-side `Arc`/`Bytes` clones do not make Transform output or WIT strings zero-copy; fan-in also has no fairness or ordering guarantee.
-
-## Checkpoint
-
-Trace one message in your own words. Identify each ownership move, each intentional clone, the exact point at which payload bytes may be copied, and why cancellation waits around receive but not around the guest call.
+[Wasmtime in WAFER's context](wasmtime-in-context.md) explains the Engine, Store, bindings, and limits behind step 4.

@@ -103,7 +103,7 @@ node.
 
 ### Neutral
 
-- The recovery-sample deque is bounded (65,536 samples per node).
+- The recovery-sample deque is bounded (262,144 samples per node).
 
 ## Alternatives Considered
 

@@ -17,4 +17,4 @@ The macOS shakedown and pilot pages (RQ summary, RQ2 attacks, E-Val-1
 methodology validation, binary sizes and the v11 eKuiper tail diagnosis) are
 archived in [`docs/history/benchmarks/`](../history/benchmarks/).
 
-Only an approved, complete canonical batch may supply final numerical conclusions. Diagnostic files remain separate from final evidence.
+Final numbers come only from the batches approved in [`eval/final-batches.json`](../../eval/final-batches.json) and are reported in the thesis. Diagnostic results stay separate from them.

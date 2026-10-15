@@ -1,116 +1,34 @@
 # WAFER Control Plane API
 
-This directory contains API documentation for the WAFER runtime HTTP control plane.
+Machine-readable files for the runtime's HTTP control plane. The reference
+for every endpoint, request, response and status code is
+[`docs/interfaces/http-api.md`](../interfaces/http-api.md).
 
-## Files
+- **`openapi.yaml`**: OpenAPI 3.1 description of every route.
+- **`bruno-collection/`**: [Bruno](https://www.usebruno.com/) requests for
+  local testing.
 
-- **`openapi.yaml`** - OpenAPI 3.1 specification for all endpoints
-- **`bruno-collection/`** - Bruno collection for local API testing
+## Use the Bruno collection
 
-## API Overview
+1. Start a pipeline with the control plane enabled:
 
-The control plane provides:
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Liveness probe (always 200 if server up) |
-| `/ready` | GET | Readiness probe (200 when pipeline running) |
-| `/api/v1/pipeline/shutdown` | POST | Graceful shutdown |
-| `/api/v1/nodes` | GET | List all nodes |
-| `/api/v1/nodes/{id}` | GET | Get node details |
-| `/api/v1/nodes/{id}/hot-swap` | POST | Replace an eligible loaded Wasm node between messages |
-| `/api/v1/nodes/{id}/reconfigure` | POST | Re-instantiate an eligible loaded Wasm node with new config |
-| `/metrics` | GET | Prometheus metrics |
-
-See [`docs/interfaces/http-api.md`](../interfaces/http-api.md) for the authoritative reference (request/response schemas, error codes).
-
-## Default Ports
-
-- **API Server**: `localhost:9090`
-- **Metrics Server**: none by default; `/metrics` shares the API listener unless
-  the runtime is started with `--metrics-bind <ADDR>`
-
-## Using the Bruno Collection
-
-[Bruno](https://www.usebruno.com/) is a fast, git-friendly API client.
-
-### Setup
-
-1. Install Bruno: `brew install bruno` (macOS) or download from [usebruno.com](https://www.usebruno.com/)
-2. Open Bruno and select "Open Collection"
-3. Navigate to `docs/api/bruno-collection/`
-
-### Environment
-
-The collection includes a `local` environment with:
-- `baseUrl`: `http://localhost:9090` (API server)
-- `metricsUrl`: `http://localhost:9091` (only used when the runtime runs with
-  `--metrics-bind 127.0.0.1:9091`)
-
-### Running Requests
-
-1. Start a WAFER pipeline with the API config enabled:
    ```bash
    cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
    ```
 
-2. Select a Bruno request, such as "Health Check".
-3. Click "Send".
+2. In Bruno, choose "Open Collection", select `docs/api/bruno-collection/`,
+   and pick the `local` environment. Its `baseUrl` is
+   `http://localhost:9090`. `metricsUrl` (`http://localhost:9091`) is used
+   only when the runtime runs with `--metrics-bind 127.0.0.1:9091`.
+3. Select a request, such as **Health/Health Check**, and send it.
 
-### Requests Included
+The node requests default to the `passthrough` node of that example.
 
-**Health/**
-- `health.bru` - Liveness check
-- `ready.bru` - Readiness check
-
-**Pipeline/**
-- `shutdown.bru` — Graceful shutdown via `POST /api/v1/pipeline/shutdown`
-
-**Nodes/**
-- `list-nodes.bru` - List all nodes
-- `get-node.bru` - Get specific node details
-- `hot-swap.bru` - Trigger replacement
-- `reconfigure.bru` - Apply new node configuration through the cached component
-
-**Metrics/**
-- `get-metrics.bru` - Prometheus metrics
-
-## OpenAPI Specification
-
-The `openapi.yaml` file can be used with:
-- **Swagger UI**: Visualize and interact with the API
-- **Code generators**: Generate client SDKs
-- **Validation**: Validate API responses
-
-### Viewing in Swagger UI
+## View the OpenAPI file in Swagger UI
 
 ```bash
-# Using Docker
 docker run -p 8080:8080 -e SWAGGER_JSON=/api/openapi.yaml \
-  -v $(pwd)/docs/api:/api swaggerapi/swagger-ui
-
-# Then open http://localhost:8080
+  -v "$(pwd)/docs/api:/api" swaggerapi/swagger-ui
 ```
 
-## Configuration
-
-Current runtime config syntax:
-
-```toml
-# See examples/dag-passthrough-with-api.toml.
-[api]
-enabled = true
-bind = "127.0.0.1:9090"
-
-[metrics]
-enabled = true
-path = "/metrics"
-```
-
-Equivalent CLI override for the API bind address:
-```bash
-cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml --api-bind 127.0.0.1:9090
-```
-
-For the current operator-facing schema, see
-[`../interfaces/config-schema.md`](../interfaces/config-schema.md).
+Then open <http://localhost:8080>.

@@ -3,12 +3,12 @@
 Reference documentation for the surfaces WAFER exposes to plugins, operators,
 and configuration authors.
 
-- `wit-contracts.md` — the one `wafer:pipeline@0.1.0` WIT package and its
+- `wit-contracts.md`: the one `wafer:pipeline@0.1.0` WIT package and its
   `transform-node`, `filter-node`, `router-node`, and capability-gated
   `inference-node` worlds.
-- `http-api.md` — the axum HTTP control plane endpoints and response shapes.
-- `config-schema.md` — the TOML pipeline configuration schema.
-- `plugin-sdk.md` — the guest-side `wafer-plugin` SDK for Rust components.
+- `http-api.md`: the axum HTTP control plane endpoints and response shapes.
+- `config-schema.md`: the TOML pipeline configuration schema.
+- `plugin-sdk.md`: the guest-side `wafer-plugin` SDK for Rust components.
 
 Inference is a default-deny Wasm Transform specialization.
 `allow_inference = true` selects the wasi-nn-enabled linker and store for that

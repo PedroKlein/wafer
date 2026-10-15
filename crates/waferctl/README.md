@@ -27,8 +27,6 @@ waferctl nodes
 waferctl node passthrough
 ```
 
-`waferctl status`, `waferctl nodes` and `waferctl node` currently fail with a parse error against the runtime API, and a successful `waferctl hot-swap` is reported as an error even though the runtime applied it. The client expects field names (`swappable`, `status`) that the runtime responses do not send (#193).
-
 ## Configuration
 
 waferctl reads endpoints from `<config dir>/wafer/config.toml` (`~/.config/wafer/config.toml` on Linux) or uses `http://127.0.0.1:9090` by default.
@@ -95,10 +93,11 @@ waferctl hot-swap <node-id> --wasm-path <path-to-component.wasm>
 ```bash
 # Graceful shutdown
 waferctl shutdown
-
-`reload` and standalone `drain` are not exposed by the runtime HTTP API.
-Use per-node `hot-swap` or restart the runtime for config changes.
 ```
+
+`reload` and `drain` exist as commands but only print an error, because the
+runtime HTTP API has no such routes. Hot-swap a node or restart the runtime to
+change its configuration.
 
 ### Metrics
 
@@ -109,7 +108,8 @@ waferctl metrics
 
 ## Output Formats
 
-The samples below show the intended output. Until #193 is fixed, `status`, `nodes`, `node` and a successful `hot-swap` behave as described under Quick Start.
+`status` is derived from `GET /ready` and `GET /api/v1/nodes`; the pipeline
+name is always `wafer-pipeline`.
 
 ### Human-Readable (Default)
 
@@ -135,7 +135,10 @@ $ waferctl nodes
 +-------------+--------+---------+-----------+--------+
 ```
 
-`--wide` adds `SWAP`, `FAILED` and `QUEUE` columns.
+`TYPE` is `wasm` for a node that reports `replacement_eligible: true` and
+`native` otherwise. `--wide` adds `SWAP`, `FAILED` and `QUEUE` columns. The
+API reports no latency or queue depth per node, so `AVG_MS` and `QUEUE` always
+show `-`.
 
 ### JSON (for scripting)
 

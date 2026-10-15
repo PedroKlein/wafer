@@ -1,6 +1,6 @@
 # Hot-swap benchmark reference
 
-This document defines the current hot-swap measurements. Final conclusions require the approved Raspberry Pi 5 batch.
+This document defines the hot-swap measurements. Final results come only from the batches approved in `eval/final-batches.json`.
 
 ## Runtime phases
 

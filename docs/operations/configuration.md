@@ -36,7 +36,7 @@ filter    =    500_000
 router    =    500_000
 ```
 
-With both fields present, `epoch_deadline * epoch_tick_ms` is the nominal wall-clock cap per Wasm call. A positive `[nodes.NAME].fuel` value overrides the category value for one node. Zero is invalid. The values above are the protected final-evaluation policy, not runtime defaults.
+With both fields present, `epoch_deadline * epoch_tick_ms` is the nominal wall-clock cap per Wasm call. A positive `[nodes.NAME].fuel` value overrides the category value for one node. Zero is invalid. The values above are the ones the evaluation configs use, not runtime defaults.
 
 Linear-memory limits default to 64 MiB for Transforms and 16 MiB for Filters and Routers. Change them per category, or for one node with `memory_limit` (bytes):
 
@@ -87,7 +87,7 @@ A present `[nodes.NAME.error_policy]` table replaces the pipeline table for that
 
 The first retry waits exactly `backoff_ms`; subsequent delays double to the 30-second cap. The runtime selects the earliest due buffered retry. Exhaustion performs its configured `skip`, `dlq`, or `teardown` action, and DLQ-full/DLQ-closed outcomes remain distinct.
 
-`unrecoverable` is intentionally not configurable — those errors always trigger node teardown and re-instantiation.
+`unrecoverable` errors and traps are not configurable: the message goes to the dead-letter queue and the node is re-instantiated from its cached component. Fuel exhaustion and epoch interrupts are the exception; they follow `timed_out`.
 
 ## Route the dead-letter queue (`[dead_letter]`)
 
@@ -258,11 +258,11 @@ See [`registry.md`](registry.md) for publishing, pulling, and caching.
 
 ## Validate before you run
 
-Parsing rejects unknown keys in every section, node and edge (only a node's `config` table is free-form), so a misspelled key fails startup instead of falling back to a default. Every config is then validated by `wafer_config::validate` before plugin loading or pipeline construction. Failures include a missing referenced node id, graph cycle, router edge without `port`, `port` on an edge that does not leave a router, a duplicated edge, a transform, filter or router without both an inbound and an outbound edge, zero capacity or `epoch_tick_ms`, an inference grant on an ineligible role, or an invalid outbound HTTP destination. `allow_inference = true` is accepted only for a Wasm Transform; native Transforms, Filters, and Routers fail with `allow_inference=true is supported only for Wasm Transform nodes`. Non-empty `outbound_http` lists are accepted only for Wasm processing nodes.
+Parsing rejects unknown keys in every section, node and edge (only a node's `config` table is free-form), so a misspelled key fails startup instead of falling back to a default. The runtime then runs every semantic check before loading plugins, prints all failures together, and exits with status 2. The checks are listed under [Validation](../interfaces/config-schema.md#validation).
 
-The runtime has no standalone `--check` flag. Repository examples and evaluation configs are validated by the `wafer-config` test suites; starting `wafer-runtime --config <path>` also validates before launch.
+The runtime has no standalone `--check` flag; starting it is the check.
 
-## Full example — telemetry gateway
+## More examples
 
 For runnable filter and router configs see `examples/dag-filter.toml` and
 `examples/dag-fanout.toml`; `examples/dag-mqtt.toml` shows the MQTT source and

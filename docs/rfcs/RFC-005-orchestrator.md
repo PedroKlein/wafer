@@ -1,6 +1,6 @@
 # RFC-005: Orchestrator & Runtime Simplification
 
-- **Status:** Implemented — orchestrator, hot-swap telemetry, init-on-flip, warm swap, config cascade, lineage assignment, Wasm lifecycle calls, and process-time hot-swap rollback (A17) are all live in production. See closed gaps A3, A4, A5, A6, A10, A13, A14, A15 (all landed 2026-07-19 through 2026-07-21), and A17 (landed 2026-08-02 via thesis-hardening T1 + B1/B2/M1/M2 polish) in the ledger. No residual runtime gaps in this RFC's scope; observability follow-up **A20** (Prometheus rollback counter) is tracked in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented. The Prometheus rollback counter is not exported ([A20](../status/implementation-gaps.md)).
 - **Original session date:** 2026-07-12
 - **Amends:** ADR-0003 (drain-and-flip → watch-channel between-messages)
 
@@ -9,14 +9,14 @@
 > `crates/wafer-core/tests/hotswap_success.rs`, which swaps an idle node and a
 > node under 1,000 msg/s).
 > Five-phase `SwapTimeline` (`compile` / `instantiate` / `signal` / `ack`
-> / `convergence`) is reported through the API (A3 + A3b). ACK-phase
-> `init()` is called on the new instance (A4). Production Wasm nodes
-> run guest `validate()` and `init()` before the first message (A14).
+> / `convergence`) is reported through the API. ACK-phase
+> `init()` is called on the new instance. Production Wasm nodes
+> run guest `validate()` and `init()` before the first message.
 > Config-only warm swap via `cached_pre()` is served by
-> `POST /api/v1/nodes/{id}/reconfigure` (A5). The API dispatches per
-> node type: transform/filter/router (A10). The builder resolves the
-> per-pipeline + per-node `[error_policy]` cascade (A6). DLQ lineage is
-> assigned at source ingress and preserved through fan-out (A13).
+> `POST /api/v1/nodes/{id}/reconfigure`. The API dispatches per
+> node type: transform/filter/router. The builder resolves the
+> per-pipeline + per-node `[error_policy]` cascade. DLQ lineage is
+> assigned at source ingress and preserved through fan-out.
 >
 > **Current release amendment.** `PipelineHandle` exposes loaded-Wasm
 > replacement eligibility and one mutation guard shared by hot-swap and
@@ -24,8 +24,8 @@
 > `first_post_replacement_local_outcome`; these are local runner facts, not sink
 > convergence. Sink transition, gap, throughput, and sequence remain separate
 > evidence. Initialization rollback applies to eligible Wasm roles, while
-> process-time canary rollback remains Transform-only. A20 Prometheus rollback
-> count export is deferred. Queue dispatch preserves each edge's overflow
+> process-time canary rollback remains Transform-only. The Prometheus rollback
+> count is not exported. Queue dispatch preserves each edge's overflow
 > policy, and retries choose the earliest due deadline and honor typed
 > exhaustion actions.
 >

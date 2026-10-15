@@ -11,7 +11,7 @@ alwaysLoaded: true
 
 # WAFER — Project Context
 
-> **Ground truth rule.** The `docs/` tree has been refactored into arc42-lite
+> **Ground truth rule.** The `docs/` tree follows arc42-lite
 > (`docs/architecture/`, `docs/rfcs/`, `docs/adr/`, `docs/interfaces/`,
 > `docs/operations/`, `docs/status/`). When docs and implementation disagree,
 > trust source code, WIT files, and `docs/status/implementation-gaps.md`.
@@ -31,8 +31,8 @@ alwaysLoaded: true
 - **NEVER use domain terms without scope qualifiers** — "pipeline", "isolation", "hot-swap",
   "edge gateway" all have precise meanings (see Scope Qualifiers table); unqualified usage
   confuses readers unfamiliar with the streaming/edge domain
-- **NEVER mention Joiner as a node type** — Joiner was removed in Session 3 of the refactor;
-  fan-in is now an implicit host topology (multi-producer mpsc into one consumer). The five
+- **NEVER mention Joiner as a node type**: there is no Joiner node;
+  fan-in is an implicit host topology (multi-producer mpsc into one consumer). The five
   node categories are exactly: Source, Sink, Transform, Filter, Router.
 
 ## Applying This Context
@@ -81,6 +81,9 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 
 **Hardware**: Raspberry Pi 5 4 GB (canonical); Jetson Orin Nano (25 W, CPU only) and x86 as replication hosts that run the full matrix as separate strata, never pooled.
 **Canonical allocation**: CPU 0 runs OS, native Mosquitto, `wafer-loadgen` and telemetry (systemd `CPUAffinity=0`, `irqaffinity=0`, no `isolcpus`); CPUs 1–3 run one active SUT. eKuiper 2.1.5 runs natively. ESP32 is excluded from measured experiments.
+**Status**: the evaluation is finished. The final batches of all three hosts are approved in
+`eval/final-batches.json` and reported in the thesis; every criterion passes on every host except
+Jetson capacity (E-Perf-10), which is `CENSORED`.
 **Method**: repetitions per experiment from `eval/canonical-matrix.json` (30 for most; 10 for E-Swap-1, -2, -5 and -6; 1 for E-Density-1), open-loop load gen, HdrHistogram, Bootstrap CI95; verdicts compare one-sided bootstrap bounds with the thresholds in `verdict_rules` of `eval/canonical-matrix.json`.
 
 ---
