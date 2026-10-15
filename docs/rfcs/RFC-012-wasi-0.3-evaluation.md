@@ -1,6 +1,6 @@
 # RFC-012: WASI 0.3 and Component Model Evolution
 
-- **Status:** Async P2 and bounded outbound HTTP implemented; any P3 PoC follows the canonical campaign
+- **Status:** Async P2 and bounded outbound HTTP implemented; P3 PoC not started
 - **Assessment dates:** 2026-09-25 to 2026-09-26
 - **Amends:** —
 - **Amended by:** [ADR-0016](../adr/0016-outbound-wasi-http-capability.md)

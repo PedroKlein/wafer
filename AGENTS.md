@@ -7,10 +7,10 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 | What you need | Where to find it |
 |---------------|------------------|
 | **What to build next** | GitHub issues. `ROADMAP.md` gives the longer-horizon narrative. |
-| **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) + `docs/status/canonical-readiness.md` (what the final campaign still needs) |
+| **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) |
 | **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
 | **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology), `eval/canonical-matrix.json` (the executable schedule and host profiles), `docs/eval/pi5-experiment-runbook.md` (operator steps), `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
-| **Evaluation numbers** | None are final yet. Every number under `docs/benchmarks/` or `docs/history/` is a pre-final diagnostic; never quote one as a result. |
+| **Evaluation numbers** | The evaluation is finished. Final results come only from the batches approved in `eval/final-batches.json` and are reported in the thesis (`tcc-doc`, TG2 Chapter 8). Every number under `docs/benchmarks/` or `docs/history/` is a pre-final diagnostic; never quote one as a result. |
 | **RQs and pass/fail criteria** | `tcc-doc/research/analysis/thesis-statement-v3.md` |
 | **Pipeline topologies to implement** | `tcc-doc/context/use-cases.md` |
 | **Old RQ4/5/6 references** | `tcc-doc/RQ-VERSION-MAP.md` (they map to current RQ1–3) |
@@ -90,15 +90,16 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 | Document | Summary |
 |----------|---------|
-| `docs/status/implementation-status.md` | Current implementation state — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP doc. |
+| `docs/status/implementation-status.md` | Current implementation state — what's built, what's tested, per-plugin coverage. |
 | `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID. Only A20 is open; closed entries are archived. Every RFC/ADR/architecture chapter with an aspirational banner points here. **Consult before assuming code matches docs.** |
-| `docs/status/canonical-readiness.md` | What the final campaign still needs and the current claim boundaries. |
 | `docs/benchmarks/README.md` | Current benchmark reference pages. The shakedown pages are archived under `docs/history/benchmarks/`. |
-| `docs/benchmarks/hot-swap.md` | Hot-swap phase timing reference. |
-| `docs/eval/pi5-experiment-runbook.md` | **Operator runbook** for the campaign: gates, diagnostic batch, launch, resume, approval, analysis. |
+| `docs/benchmarks/hot-swap.md` | Hot-swap phases and the E-Swap experiment definitions. |
+| `docs/benchmarks/ekuiper-comparator.md` | Native eKuiper 2.1.5 comparator: install, Pipeline A, run procedure and the E-Swap-3 rule changes. |
+| `docs/eval/pi5-experiment-runbook.md` | **Operator runbook** for running a batch: gates, diagnostic batch, launch, resume, approval, analysis. |
 | `docs/eval/pi5-host-setup.md`, `jetson-host-setup.md`, `x86-host-setup.md` | Host preparation for the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts. |
 | `docs/eval/cross-compile.md` | aarch64-linux cross-compile recipe via docker (`mise run cross-build-pi`) and the glibc each binary needs. |
-| `eval/canonical-matrix.json` | **Executable source** of the campaign: experiments, repetitions, rates, host profiles. |
+| `eval/canonical-matrix.json` | **Executable source** of the evaluation: experiments, repetitions, rates, host profiles, verdict thresholds. |
+| `eval/final-batches.json` | The approved final batch of each host. |
 | `eval/RESULT-CONTRACT.md` | **Authoritative shape** of every result directory under `eval/results/`. Every notebook and the result verifier assume this contract. |
 
 ### Archive
@@ -111,7 +112,6 @@ When you need deeper context on any aspect of the project, consult these files. 
 |----------|---------|
 | `docs/architecture/` | arc42-lite architecture views: vision, goals & constraints, solution strategy, building blocks, runtime view, deployment, cross-cutting concepts, quality requirements, risks, comparators. |
 | `docs/learn/` | Source-guided learning path for reading the code. `docs/learn/README.md` gives a numbered first-read order. `workspace-map.md` maps the crates, the `wafer-core` modules and the top-level directories, and lists the build, run and test commands. `rust-in-context.md`, `tokio-in-context.md` and `wasmtime-in-context.md` explain the techniques the code uses. `reading-paths.md` gives shorter routes by role, and the remaining pages trace configuration loading, one message through Wasm, the plugin boundary, shutdown and failure, hot-swap, and the evaluation harness. |
-| `docs/status/implementation-status.md` | Current implementation status — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP status doc. |
 | `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Eleven RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, I/O integration, and WASI 0.3 / Component Model evolution. |
 | `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). Eighteen ADRs at present. See `docs/adr/README.md` for the index and conventions. |
 | `ROADMAP.md` | Aspirational / longer-horizon items flagged in RFCs and the evaluation plan. |
@@ -124,8 +124,9 @@ When you need deeper context on any aspect of the project, consult these files. 
 | `docs/interfaces/wit-contracts.md` | Reference for the single `wafer:pipeline@0.1.0` WIT package, its interfaces, and its four worlds. |
 | `docs/interfaces/config-schema.md` | TOML config reference. Nodes use a `[nodes.NAME]` map, each `WasmNodeDef` has a single `plugin` field (local path or OCI reference), and each `EdgeDef` has a single optional `port` field (only used for router outputs). |
 | `docs/interfaces/plugin-sdk.md` | Reference for the `wafer-plugin` guest SDK (macros, `thread_local!` + `RefCell` state pattern, error helpers). |
-| `docs/api/openapi.yaml` | OpenAPI 3.0 spec for the control plane (kept in sync with the axum handlers). |
+| `docs/api/openapi.yaml` | OpenAPI 3.1 spec for the control plane (kept in sync with the axum handlers). |
 | `docs/api/bruno-collection/` | Bruno HTTP client collection for interactive API testing. |
+| `docs/operations/getting-started.md`, `configuration.md`, `observability.md`, `dependencies.md` | Operator guides: first pipeline, configuring pipelines, logs and metrics, and the toolchain and dependency reference. |
 | `docs/operations/registry.md` | OCI registry integration guide — publishing Wasm components to ghcr.io/Docker Hub, pulling via the `plugin` field, configuring caching, and using `wkg` tooling. |
 | `docs/operations/mqtt-setup.md` | Local MQTT broker setup (Docker Mosquitto) for developing and testing MQTT sources and sinks. |
 
@@ -133,7 +134,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 | File | Summary |
 |------|---------|
-| `README.md` | Project README — quick start, prerequisites, project structure, development setup, running pipelines, building plugins. Post-migration, this is a one-page quickstart that points into `docs/`. |
+| `README.md` | One-page project README: what WAFER does, a quick start, the repository map, and links into `docs/`. |
 | `mise.toml` | Primary non-Rust developer toolchain and command-runner config. Run `mise run setup` for helper tools and `mise tasks ls --all` for tasks. |
 | `rust-toolchain.toml` | Pinned Rust toolchain (1.98.1, `wasm32-wasip2` target). |
 | `rustfmt.toml` | Formatter configuration. |
@@ -177,7 +178,7 @@ mise run cross-build-pi        # Build wafer, wafer-loadgen, waferctl for aarch6
 mise run cross-build-pi-check  # Verify the three binaries are aarch64 ELF via `file(1)`. CI-friendly.
 ```
 
-See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. `.github/workflows/cross-arch.yml` builds the release binaries for aarch64 (on a native arm64 runner) and x86_64 when Rust sources, Cargo files, `rust-toolchain.toml`, `mise.toml` or the glibc script change; `.github/workflows/ci.yml` runs the docs check, fmt, clippy, the workspace tests and the evaluation tests, and on pull requests skips the suites the diff cannot affect.
+See `docs/eval/cross-compile.md` for what the container build does and the glibc each binary needs. `.github/workflows/cross-arch.yml` builds the release binaries for aarch64 (on a native arm64 runner) and x86_64 when Rust sources, Cargo files, `rust-toolchain.toml`, `mise.toml` or the glibc script change; `.github/workflows/ci.yml` runs the docs check, fmt, clippy, the workspace tests and the evaluation tests, and on pull requests skips the suites the diff cannot affect.
 
 ### Analysis Notebooks
 
@@ -188,11 +189,11 @@ mise run //eval:notebooks-execute                  # Re-execute all notebooks ag
 mise run //eval:figures                            # Re-execute notebooks + list regenerated PDFs under eval/analysis/figures/
 ```
 
-Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) declares numpy, matplotlib, seaborn, pandas and Jupyter. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. See `eval/analysis/notebooks/README.md` for the notebook-to-experiment mapping.
+Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) declares numpy, matplotlib, seaborn, pandas and Jupyter. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. Notebooks are committed without cell outputs: `mise run setup` registers the pinned `nbstripout` Git filter, `mise run //eval:notebooks-format` normalizes them, and `mise run //eval:notebooks-check` (also run by CI and `mise run test-eval`) fails on un-normalized notebooks. See `eval/analysis/notebooks/README.md` for the notebook-to-experiment mapping.
 
 ### Evaluation Campaign
 
-Run these on the evaluation host itself (from its `~/wafer` checkout), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`), and `approve-batch`, which runs on the analysis machine against the results root that holds the host's copied batch. The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
+Run these on the evaluation host itself, from a `~/wafer` checkout with mise (the deployed Pi bundle has no `mise.toml`; call the scripts the runbook names there), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`), and `approve-batch`, which runs on the analysis machine against the results root that holds the host's copied batch. The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
 
 ```bash
 mise run preflight-pi5                               # or preflight-jetson / preflight-x86 on those hosts

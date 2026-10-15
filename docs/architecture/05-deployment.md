@@ -21,10 +21,9 @@ SSD. Network: Gigabit Ethernet. Canonical runs use Raspberry Pi OS Lite
 - **RQ1 primary hardware.** Per-hop latency, matched 1,000 msg/s delivery and latency, and the gateway-capacity envelope over the common grid and this host's bracket rates are measured here. The MQTT loopback condition bounds support-path claims; SUT-only ceilings are not inferred beyond that boundary.
 - **RQ2 measurement.** All six attack scenarios (`buffer-overflow`,
   `cross-read`, `fs-access`, `infinite-loop`, `memory-exhaust`, `panic`)
-  are exercised here. Before any campaign, `mise run mandatory-attack-evidence`
-  must build and validate the healthy reference plus S1–S6, execute every
-  scenario, and prove the filesystem read was denied. This local receipt is a
-  prerequisite, not admitted campaign evidence.
+  are exercised here. `mise run mandatory-attack-evidence` builds the
+  healthy reference and the six attack components, runs every scenario, and
+  checks that the filesystem read was denied.
 - **RQ3 measurement.** Internal compile, instantiate, signal, replacement-adoption,
   and first-local-outcome timings are recorded separately from sink transition,
   gap, throughput, and sequence evidence.
@@ -34,24 +33,14 @@ SSD. Network: Gigabit Ethernet. Canonical runs use Raspberry Pi OS Lite
 ### Jetson Orin Nano: replication host
 
 The Jetson runs every experiment on its CPU in the 25 W power mode as a
-replication stratum; `docs/eval/jetson-host-setup.md` prepares it. The CUDA
-inference run below is a separate diagnostic.
+replication stratum; [`jetson-host-setup.md`](../eval/jetson-host-setup.md)
+prepares it.
 
-Candidate `92d86b0a511047988de5fbf6551b18b8a09ec455` ran the same MNIST model,
-input, and Wasm components on a Jetson Orin Nano under Ubuntu 22.04/L4T R36.5.
-The CPU build registered `CPUExecutionProvider`, placed all six optimized model
-nodes on CPU, predicted digit 7, and exited cleanly. The CUDA-feature build
-registered `CUDAExecutionProvider`, placed all eight optimized model nodes on
-CUDA, initialized cuDNN, showed nonzero device activity, and produced the same
-prediction.
-
-The CUDA path did not pass a deterministic clean-exit gate: `2/3` fixed runs at
-25W and `4/5` fixed runs in MAXN_SUPER exited cleanly. Failed runs completed the
-pipeline before aborting during native teardown with allocator corruption. The
-receipt therefore confirms actual CUDA-provider execution but not stable
-shutdown, production readiness, speedup, latency, throughput, or energy. It is
-diagnostic architecture validation with `thesis_evidence=false`, separate from
-the canonical Raspberry Pi 5 campaign.
+The MNIST inference pipeline also runs on the Jetson with the ONNX CUDA
+execution provider. That path is a diagnostic only: it executes on the GPU
+and produces the same prediction as the CPU build, but it does not always
+exit cleanly (some runs abort during native teardown), and it supports no
+performance or energy claim.
 
 ### x86_64: replication host
 
@@ -59,9 +48,8 @@ the canonical Raspberry Pi 5 campaign.
 
 **Role in the evaluation:**
 
-- Runs every experiment as a replication stratum, and supplies the x86 half of E-Perf-5. Until the x86 Linux block exists, E-Perf-5 remains `PENDING`.
-- Rapid iteration surface for plugin development and pre-flight
-  benchmarks before spending scarce RPi/Jetson time.
+- Runs every experiment as a replication stratum, and supplies the x86 half of E-Perf-5.
+- Rapid iteration surface for plugin development.
 - Functional cache tests may run on x86, but they are separate from E-Perf-9 filesystem page-cache evidence.
 
 **Operational notes.** The tasks `mise run build`, `mise run //plugins:build-plugins`, and `mise run run` target the host by default; cross-compilation

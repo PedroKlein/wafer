@@ -10,7 +10,7 @@ These non-functional requirements define the current evaluation boundaries. `eva
 | NFR-PERF-2 | Compare matched Pipeline A at the target load. | E-Perf-1 uses 30 runs per SUT at 1,000 msg/s. Pooled loss must be at most 1 percent, mean achieved/offered at least 0.99, and median WAFER p95 divided by median eKuiper p95 at most 2.0. |
 | NFR-PERF-3 | Measure the co-located gateway-capacity envelope. | E-Perf-10 uses 30 runs for every system-rate pair on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s, plus up to six bracket rates per host derived from that host's capacity scout. Report each delivery ceiling, bracketed by tested rates, and the normalized p99 knee with MQTT support-path censoring. WAFER's tested-grid delivery ceiling must be at least 0.70 of eKuiper's across the whole bracketed ratio interval. |
 | NFR-PERF-4 | Report memory growth with pipeline depth. | E-Perf-6 reports steady RSS at depths 1, 3, 5 and 10 and the run-level slope, with no pass limit. |
-| NFR-PERF-5 | Compare architecture-specific isolation cost. | E-Perf-5 requires matched Raspberry Pi 5 and x86 Linux runs at the same source and method. It remains `PENDING` without both. |
+| NFR-PERF-5 | Compare architecture-specific isolation cost. | E-Perf-5 compares matched Raspberry Pi 5 and x86 Linux runs at the same source and method. |
 | NFR-PERF-6 | Measure startup cache-state effects. | E-Perf-9 compares Linux filesystem page-cache cold/warm conditions. The runtime disk compiled-component cache is disabled, so no AOT-cache criterion is derived from this experiment. |
 
 Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-1 is not a capacity experiment. E-Perf-10 uses tested-grid bounds without interpolation and cannot assign an exact SUT ceiling beyond a delivery-bad MQTT loopback point; a ratio interval that straddles 0.70 is `CENSORED`.
@@ -42,11 +42,11 @@ A sink-observed gap, HTTP duration, and internal swap phases are separate measur
 
 ## Evidence rules
 
-- Complete process runs are the independent unit for amended N=30 experiments.
+- Complete process runs are the independent unit for N=30 experiments.
 - Bootstrap confidence intervals and non-parametric effects use run-level values.
 - Canonical analysis rejects incomplete, dirty, mixed-SHA, throttled, malformed, or unapproved batches.
 - Raspberry Pi 5 PMIC telemetry is an internal-rail proxy, not total board or USB-C input power.
-- Scout, v11-v17, diagnostic-batch, laptop, and synthetic fixture data remain diagnostic and are not pooled with final evidence.
+- Scout, diagnostic-batch, laptop, and synthetic fixture data remain diagnostic and are not pooled with final evidence.
 
 ## Supporting documents
 

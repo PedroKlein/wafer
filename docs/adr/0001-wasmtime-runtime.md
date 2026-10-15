@@ -9,7 +9,9 @@
 > `e9f1ea232fd245aea338ab3eb7d73487ae75cab1`; `ort` is pinned at
 > `d1ebde95d386513fea836593815e8f86f7b96a85`. The current WIT exposes a
 > capability-gated `inference-node`; the host registers wasi-nn and constructs
-> an ONNX backend only for a Wasm Transform with `allow_inference=true`.
+> an ONNX backend only for a Wasm Transform with `allow_inference=true`. The
+> engine uses Wasmtime's default on-demand instance allocator, not the pooling
+> allocator listed under "Key Features Used".
 >
 > The remainder is the historical selection record and does not define current
 > versions or release capabilities.

@@ -1,43 +1,41 @@
 # pass-through-v2-panics — fault-injection plugin
 
-**Do NOT run this in production.** It exists only for RFC-008 E-Swap-5, the
-failed-swap-recovery experiment.
+**Do not run this in production.** It is the failing replacement component for
+E-Swap-5, the failed-replacement experiment, and for the process-time rollback
+tests.
 
 ## What it does
 
 Compiled to a `wasm32-wasip2` component that:
 
-- exports the standard `wafer:pipeline/lifecycle` and
-  `wafer:pipeline/transform` interfaces (surface-compatible with
-  `pass-through-v1` and `pass-through-v2`), so a hot-swap request pointing
-  at this binary is accepted by the runtime up to the moment the first
-  message is processed;
+- implements the `transform-node` world, like `pass-through-v1` and
+  `pass-through-v2`, so the runtime accepts a hot-swap to it;
 - succeeds in `validate()` and `init()`;
 - panics on the first call to `process()` with the message
   `pass-through-v2-panics 2.0.0-panic: intentional trap for E-Swap-5
   rollback test`.
 
-The panic surfaces to the host as a Wasm trap, which drives the runtime's
-A4 rollback logic: on trap, discard the failing instance, re-materialise
-the previous version from its cached `InstancePre`, and continue serving
-messages from where v1 left off.
+The panic reaches the host as a Wasm trap inside the Transform canary window.
+The runner discards the failing instance, restores the previous version from
+its retained `InstancePre`, and keeps serving messages.
 
-## Metadata sentinel
+## Sentinel
 
-The `Cargo.toml` version is `"2.0.0-panic"` and the panic message contains
-the literal string `2.0.0-panic`. Both are intentional grep markers — a
-reviewer skimming `eval/configs/*.toml` should be able to spot the fault
-injection at a glance.
+The `Cargo.toml` version is `2.0.0-panic` and the panic message contains the
+same string, so a reviewer can grep for the fault injection.
 
-## Where it may appear
+## Where it is used
 
-Only under `eval/configs/*` fixtures consumed by the E-Swap-5 harness. Any
-other reference is a bug — CI should reject a `wafer-runtime` config that
-loads this binary outside those fixtures.
+- `eval/scripts/lib/canonical_runner.py` uses it as the replacement in every
+  E-Swap-5 event.
+- `crates/wafer-core/tests/hotswap_process_time_rollback.rs` and
+  `crates/wafer-core/src/testing/harness.rs` test the rollback and the trap.
+
+Nothing in CI prevents another config from loading it.
 
 ## Related
 
-- `docs/adr/0003-hot-swap-mechanism.md` — the A4 rollback contract.
-- `docs/rfcs/RFC-008-evaluation-harness.md` — E-Swap-5 pass criterion.
-- `plugins/pass-through-v2/` — the well-behaved counterpart used by every
-  other E-Swap experiment.
+- `docs/adr/0003-hot-swap-mechanism.md`: hot-swap and rollback.
+- `docs/benchmarks/hot-swap.md`: the E-Swap-5 measurement.
+- `plugins/pass-through-v2/`: the well-behaved counterpart used by the other
+  E-Swap experiments.

@@ -1,10 +1,8 @@
 # Rust in WAFER's context
 
-> **Documentation type:** Explanation
->
-> **Prerequisites:** [Learning guide orientation](README.md) and [workspace and ownership map](workspace-map.md). Basic familiarity with variables, functions, structs, and pattern matching helps.
+> **Read first:** [Workspace and ownership map](workspace-map.md). Basic familiarity with variables, functions, structs, and pattern matching helps.
 
-This page explains only the Rust constructs that appear in the cited WAFER paths. It is a reading aid, not a general Rust course. The async runtime is covered in [Tokio in WAFER's context](tokio-in-context.md), and the Wasm engine in [Wasmtime in WAFER's context](wasmtime-in-context.md).
+This page explains only the Rust constructs that appear in WAFER's code. It is a reading aid, not a general Rust course. By the end you will be able to follow how an error travels from `toml::from_str` to the process exit code, read the serde attributes that give the TOML its shape, tell why sources and sinks are trait objects while processing nodes are enums, read a boxed-future signature, and see how an RAII guard keeps a flag from getting stuck. Tokio is covered in [Tokio in WAFER's context](tokio-in-context.md) and Wasmtime in [Wasmtime in WAFER's context](wasmtime-in-context.md).
 
 ## Crates, modules, and re-exports
 
@@ -135,14 +133,10 @@ The workspace uses edition 2024 with the toolchain pinned in `rust-toolchain.tom
 - **Untagged enum**: A serde enum marked `#[serde(untagged)]`, which tries each variant in order until one matches the input, such as `PluginSpec`.
 - **Workspace**: A group of Cargo packages that share resolution, dependency declarations, and configuration.
 
-## Status boundaries
-
-**Current implementation:** The cited files use all concepts above. Tests verify configuration loading, accumulated validation failures, rejection of unknown TOML keys, shared envelope storage, runner message flow, the single-winner swap claim and its RAII release, and the runtime's exit codes.
-
-**Intended design:** These Rust mechanisms reinforce ownership boundaries: data types do not perform I/O, messages move through bounded queues, adapters are owned by their tasks, and guards pair state changes with cleanup.
-
-**Known drift:** The `Transform`, `Filter`, and `Router` traits and the `AnyNode` enum in `crates/wafer-core/src/node/mod.rs` are still public, but the runtime path does not use them; the doc comment on `AnyNode` still calls it node storage for DAG orchestration. The phrase "zero-copy envelope" remains deliberately bounded to shared host storage and borrow-only inspection; Component Model lifting/lowering still materializes strings, metadata, and Transform output bytes. Fan-in remains unordered.
-
-## Checkpoint
+## Check yourself
 
 Open `crates/wafer-core/src/node/source/stdin.rs` and explain why `poll` returns a boxed future instead of being an `async fn`. Then name the exit code `wafer` returns when a node table contains a misspelled key, and trace each conversion that carries the error from `toml::from_str` to `startup_exit_code`.
+
+## Next
+
+[Tokio in WAFER's context](tokio-in-context.md) covers the async runtime that runs these types.

@@ -85,3 +85,5 @@ New/modified files span `runner/source.rs`, `runner/sink.rs`, `testing.rs`, `tes
 - The MQTT zero-copy fix eliminates the `to_vec()` allocation in the MQTT source.
 - E2E integration tests use `ChannelSource` / `ChannelSink` from `wafer_core::testing`, which is compiled only for tests and benches (or with the `test-support` feature).
 - Source poll errors back off from 1 ms to 1 s and stop the source after 20 consecutive failures, which fails the run.
+- Shutdown no longer follows the source-first ordering of RFC-005 D11: one cancellation token stops every node at once, and each sink drains only its own queue (see [04. Runtime view](../architecture/04-runtime-view.md#shutdown-cancel-all)).
+- The channel-based end-to-end tests live as unit tests in `crates/wafer-core/src/orchestrator/pipeline.rs`; the `tests/pipeline_e2e.rs` and `tests/plugin_harness.rs` files named in Decision 11 do not exist.

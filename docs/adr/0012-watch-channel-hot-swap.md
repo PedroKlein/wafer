@@ -3,7 +3,7 @@
 - **Date**: 2026-07-12
 - **Status**: Accepted
 - **Parent RFC**: [RFC-005](../rfcs/RFC-005-orchestrator.md)
-- **Supersedes**: ADR-0003 drain phase (§2 DRAIN)
+- **Supersedes**: the drain phase of the original 2026-02-14 ADR-0003 (drain-and-flip). ADR-0003 has since been rewritten in place to record the watch-channel mechanism; this ADR is its implementation-level companion.
 
 > **Current amendment.** Hot-swap and reconfigure share one per-node mutation
 > guard, so concurrent requests do not overwrite pending watch values. Loaded
@@ -85,7 +85,7 @@ The builder (`crates/wafer-core/src/orchestrator/builder.rs`) creates one `watch
 ## See Also
 
 - [RFC-005 — Orchestrator & Runtime Simplification](../rfcs/RFC-005-orchestrator.md) — the long-form decision (§D6) that this ADR summarises.
-- [ADR-0003 — Hot-Swap Mechanism](0003-hot-swap-mechanism.md) — the original drain-and-flip mechanism that this ADR's watch-channel model supersedes (specifically the DRAIN phase and `RoutingController`).
+- [ADR-0003 — Hot-Swap Mechanism](0003-hot-swap-mechanism.md) — the mechanism choice. Its original 2026-02-14 version described the drain-and-flip algorithm (DRAIN phase and `RoutingController`) that this ADR supersedes; the file now records the watch-channel mechanism.
 - [RFC-002 — Host-Side Runtime Architecture](../rfcs/RFC-002-host-runtime.md) — defines the Store-poisoning concern that motivates never cancelling a Wasm call mid-flight.
 - `crates/wafer-core/src/orchestrator/hotswap.rs` — `prepare_*_swap_timed` functions and `SwapTimeline`.
 - `crates/wafer-core/src/orchestrator/builder.rs` — watch channel creation and wiring.

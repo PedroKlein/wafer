@@ -1,6 +1,6 @@
 # RFC-008: Evaluation harness design
 
-- **Status:** Implemented for final-campaign readiness
+- **Status:** Implemented
 - **Original session date:** 2026-07-12
 - **Final-method amendment:** 2026-09-04
 - **Depends on:** RFC-001 through RFC-007
@@ -87,7 +87,7 @@ A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and
 
 E-Perf-9 compares Linux filesystem page-cache preparation. The runtime disk compiled-component cache is disabled for these runs, so E-Perf-9 is not evidence for AOT or serialized-component caching.
 
-E-Perf-5 remains `PENDING` until matching Raspberry Pi 5 and x86 Linux batches exist at the same source and method. The x86 host runs the full matrix as a replication host, and the cross-architecture conclusion waits for both batches.
+E-Perf-5 compares matching Raspberry Pi 5 and x86 Linux batches at the same source and method; the analysis refuses a cross-architecture conclusion unless both exist. The x86 host runs the full matrix as a replication host.
 
 ## Final RQ3 experiments
 
@@ -157,7 +157,6 @@ Canonical notebook resolution also requires the batch's entry in `eval/final-bat
 - [Pi 5 experiment runbook](../eval/pi5-experiment-runbook.md)
 - [Config schema](../interfaces/config-schema.md)
 - [ADR-0013](../adr/0013-aot-cache-and-metering.md)
-- [Canonical readiness](../status/canonical-readiness.md)
 
 ## Preserved original record
 
@@ -297,7 +296,7 @@ One unified `PipelineBuilder` with pluggable source/sink types. `TestPipeline` a
 
 ## Canonical hardware amendment
 
-Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1.5 replaces the Docker comparator on that host. CPU 0 runs operating-system work, native Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one active SUT. The rationale, comparability limitation, and migration scope are frozen in [`docs/status/rpi5-canonical-transition.md`](../status/rpi5-canonical-transition.md) before Pi 5 measurements begin.
+Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1.5 replaces the Docker comparator on that host. CPU 0 runs operating-system work, native Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one active SUT. Host preparation, including this CPU allocation, is in [`docs/eval/pi5-host-setup.md`](../eval/pi5-host-setup.md).
 
 ## Related RFCs
 

@@ -158,7 +158,7 @@ components:
           schema:
             $ref: "#/components/schemas/UnconfirmedResult"
     TextError:
-      description: Plain-text error returned by the current handler.
+      description: Plain-text error message.
       content:
         text/plain:
           schema:
@@ -187,6 +187,7 @@ components:
           type: string
         state:
           type: string
+          enum: [starting, running, error, recovering]
         processed:
           type: integer
           format: uint64

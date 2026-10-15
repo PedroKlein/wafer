@@ -1,18 +1,10 @@
 # From experiment definition to evidence
 
-> **Documentation type:** Tutorial
->
-> **Prerequisites:** [Learning guide orientation](README.md), basic JSON and Python reading, and the evaluation terminology in `eval/RESULT-CONTRACT.md`.
+> **Read first:** [Workspace and ownership map](workspace-map.md). Basic JSON and Python reading helps; `eval/RESULT-CONTRACT.md` defines the terms.
 
-## Purpose
+This walkthrough follows an evaluation claim from its machine-readable definition, through the scripts that run it and the checks that accept its output, to the analysis notebooks and the evidence class that decides whether it may appear in the thesis. By the end you will know which file defines an experiment, which code runs it, which Rust code writes each result file, how a result directory is verified, and why counting messages or events never increases the number of independent runs. You can follow it with paths, schemas, and tests alone; no result values are needed.
 
-Trace an evaluation claim from its machine-readable experiment definition through execution, result validation, selected physical evidence, derived datasets, and final evidence classification. The goal is to keep execution count, observation count, and evidence status separate.
-
-## Prerequisites
-
-Read this against a current checkout of `main`. Do not open or quote raw result values to complete the walkthrough. Paths, schemas, validators, and tests are enough to understand the evidence boundary.
-
-## Flow
+## The path
 
 ```mermaid
 flowchart TD
@@ -37,7 +29,7 @@ flowchart TD
 5. Shared experiment IDs are aliases to one selected physical leaf. An alias receipt preserves identity; it does not copy evidence or create another replicate.
 6. The notebooks under `eval/analysis/notebooks/` resolve their input through `wafer_analysis.paths.resolve_analysis_batch`: an explicit diagnostic path, or the approved batch named by `WAFER_EVAL_BATCH_ID`. The cross-architecture notebook, `04-cross-arch.ipynb`, uses `resolve_host_batches` instead and resolves one batch per host. The notebooks render figures and tables that carry run counts, units, estimator, and evidence class.
 
-## Rust
+## Which code writes which file
 
 When a run starts the runtime, the harness sets `WAFER_BENCH_OUTPUT_DIR` to the result directory, and the runtime writes its artifacts there. The "Ownership summary" in `eval/RESULT-CONTRACT.md` maps every file to its producer. The Rust producers are:
 
@@ -50,24 +42,25 @@ The controller and analysis are Python. `RunItem` is a frozen dataclass carrying
 
 Counts need type-like discipline even though Python tables are dynamic. A complete host run is an independent sample. Messages, aliases, events, buckets, and one-second intervals are nested observations or alternate views. More rows improve within-run detail; they do not increase independent N.
 
-## Design
+## Evidence classes
 
 Evidence classification is part of the data contract, not a caption added later. The completed expanded N=5 rehearsal is diagnostic, descriptive, and non-poolable with final or earlier campaigns. Its records remain `thesis_evidence=false` and outside N=30 admission.
 
-The final N=30 batches of the three hosts are approved in `eval/final-batches.json`. PMIC readings remain an internal-rail proxy, not total input power.
+The final batches for the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts are approved in `eval/final-batches.json`. Each experiment uses the repetitions set in `eval/canonical-matrix.json`, 30 for most. Diagnostic batches support descriptive patterns only. PMIC readings remain an internal-rail proxy, not total input power.
 
 Capacity classification is support-aware. When the MQTT loopback support cell is delivery-bad, affected SUT cells at that rate and above are support-confounded. These cells set neither bound of a delivery ceiling, even if a SUT leaf contains measurements. A nested interval, bucket, message, or event cannot remove that censoring.
 
 Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final evidence. Historical layouts remain readable for provenance, not promotion.
 
-## Status boundaries
+## Limits to keep in mind
 
-**Current implementation:** The matrix, runners, result verifier, storage layout, analysis notebooks, and tests encode distinct raw, alias, derived, and evidence-class boundaries. The approved final batches in `eval/final-batches.json` use the repetitions set per experiment in `eval/canonical-matrix.json` (30 for most experiments) on the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts. Diagnostic batches, including the N=5 rehearsal and later per-host diagnostic batches, support descriptive patterns only.
+- A matrix entry with `thesis_evidence=true` describes the frozen final design; it does not by itself prove that a run happened or was admitted. Read it together with `eval/final-batches.json`.
+- E-Perf-5 still declares `claim_status: pending-until-x86` although the matched x86 batch is approved. The field stays because changing the matrix would change the hash the approved batches are bound to.
 
-**Intended design:** Final and diagnostic batches share one artifact and provenance discipline, so only admission separates final evidence from diagnostic data.
-
-**Known drift:** Some matrix entries describe the frozen final design with `thesis_evidence=true`; that declaration does not prove execution or admission. Read it together with `eval/final-batches.json`, terminal receipts, and the external-gap rules. E-Perf-5 still declares `claim_status: pending-until-x86` although the matched x86 batch is approved; the field stays because changing the matrix would change the hash the approved batches are bound to.
-
-## Checkpoint
+## Check yourself
 
 Choose one figure from an analysis notebook and trace it back to its batch, the physical result leaves it reads, their independent run indexes, nested observations, and evidence class. Then explain why fifty swap events in each of five runs still means N=5 rather than N=250.
+
+## Next
+
+For operator steps, see the [evaluation runbook](../eval/pi5-experiment-runbook.md). To revisit any runtime behavior a result depends on, return to the [first-read order](README.md#first-read-order).

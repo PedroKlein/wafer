@@ -1,8 +1,8 @@
 # Implementation Status
 
-Current implementation state after the TG2 pre-campaign remediation. Source,
-WIT, routes, and executable tests outrank earlier design prose. Historical gaps
-remain in [`implementation-gaps.md`](implementation-gaps.md).
+Current implementation state. Source, WIT, routes, and executable tests
+outrank design prose. Open drift between docs and code is listed in
+[`implementation-gaps.md`](implementation-gaps.md).
 
 ## Runtime crates
 
@@ -42,7 +42,7 @@ Production keeps the `wafer:pipeline@0.1.0` WASI 0.2 ABI and uses Wasmtime's asy
 
 Wasm Transform, Filter, and Router nodes may opt into outbound `wasi:http` for exact `(scheme, canonical-host, effective-port)` destinations. Omission is deny-all. Each request is checked at the send boundary, DNS is resolved once and filtered before direct connection, redirects are not followed, and `CONNECT` is denied. Grants are immutable until pipeline restart and are retained across recovery, reconfigure, hot-swap, and process-time rollback. Native Sources and Sinks remain the preferred transport and credential boundary.
 
-The async P2 path was selected by a 30-pair diagnostic macOS A/B experiment after correctness and strict-simplicity gates passed. The outbound HTTP H01–H20 matrix uses a test-only P2 Transform fixture and controlled loopback endpoints; it does not expand the production plugin inventory. These are implementation decisions, not canonical thesis, P3, zero-copy, release, or production-readiness evidence. A P3 streaming prototype remains separately planned and is absent from production code.
+The outbound HTTP tests (`crates/wafer-core/tests/wasi_http_capability.rs`) use a test-only Transform fixture and controlled loopback endpoints; they do not add to the production plugin inventory. No P3 (WASI 0.3) code is in the production path; see [RFC-012](../rfcs/RFC-012-wasi-0.3-evaluation.md).
 
 ## Plugin inventory and language boundary
 
@@ -51,8 +51,8 @@ components and six attack components. The six attack components are executable
 containment stimuli, not production operators; `mise run mandatory-attack-evidence`
 runs S1–S6 plus a healthy reference and rejects skipped, duplicate, malformed,
 or provenance-inconsistent evidence. S5 must prove the filesystem read was
-denied rather than merely observing a later trap. This receipt is a release
-prerequisite, not admitted campaign evidence.
+denied rather than merely observing a later trap. This check is a release
+prerequisite and is separate from the E-Iso experiments.
 
 The bounded Go interoperability claim covers only
 `plugins/go/uppercase`: the manual `mise run //plugins:test-plugin-go` task
@@ -62,34 +62,17 @@ threshold-filter remains a stub and is not support evidence.
 
 ## Inference validation
 
-The restored `mnist-inference` component embeds the checked-in MNIST-8 ONNX
-model and executes through the current Transform lifecycle and wasi-nn host
-path. The local clean candidate
-`92d86b0a511047988de5fbf6551b18b8a09ec455` registered
-`CPUExecutionProvider`, produced ten finite scores, and predicted digit 7. Tests
-cover grant denial, initial launch, recovery, reconfigure, hot-swap, and
-process-time rollback without skipping.
+The `mnist-inference` component embeds the checked-in MNIST-8 ONNX model and
+executes through the Transform lifecycle and wasi-nn host path. On the CPU
+execution provider it produces ten finite scores and predicts digit 7 for the
+test input. Tests cover grant denial, initial launch, recovery, reconfigure,
+hot-swap, and process-time rollback.
 
-A machine-bound Jetson run of the same candidate separately proved
-`CUDAExecutionProvider` registration, placement of all eight optimized model
-nodes on CUDA, nonzero device activity, and the same prediction. CUDA teardown
-was intermittent after successful pipeline completion (`2/3` clean exits at
-25W and `4/5` in MAXN_SUPER), so CUDA operational stability and production
-readiness remain unverified. These are diagnostic architecture results, not
-latency, throughput, speedup, energy, or final thesis evidence.
-
-### Restoration history and supersession
-
-Inference was functional in the February 2026 implementation, then regressed in
-stages: the July WIT rewrite removed its pinned dependency and left the guest on
-an incompatible contract, the active runtime migration disconnected the
-wasi-nn linker, and the August single-package collapse removed the stale world
-and plugin. The pre-campaign R6 work correctly documented that then-current
-three-world source but incorrectly treated the missing path as a durable release
-boundary. Its inference-disabled R6, V1, V2, and Q1 receipts are historical and
-cannot validate the restored source. The current four-world implementation and
-the clean V1/H1 receipts supersede that conclusion without rewriting the old
-artifacts.
+On the Jetson, the same component ran on the CUDA execution provider with every
+optimized model node placed on CUDA and the same prediction. CUDA teardown was
+intermittent after the pipeline completed successfully, so CUDA operational
+stability is unverified. These are architecture checks, not latency,
+throughput, speedup, or energy results.
 
 ## Node and queue behavior
 

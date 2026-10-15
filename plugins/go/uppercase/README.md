@@ -13,12 +13,15 @@ Produces `wafer-uppercase-go.wasm`.
 ## Verifying the polyglot boundary
 
 ```
-cargo test -p wafer-core --test polyglot_go_uppercase
+mise run //plugins:test-plugin-go
 ```
 
-Loads the built `.wasm` through the real `WaferEngine` transform loop and
-asserts an end-to-end round-trip. This is the **gating test** for host ↔ Wasm
-compatibility — see `crates/wafer-core/tests/polyglot_go_uppercase.rs`.
+Builds the plugin, then runs the four ignored tests in
+`crates/wafer-core/tests/polyglot_go_uppercase.rs`
+(`cargo test -p wafer-core --test polyglot_go_uppercase -- --ignored`). They
+load the `.wasm` through the real `WaferEngine` transform loop and check an
+end-to-end round-trip. This is the gating test for host and Wasm
+compatibility. CI does not run it.
 
 ## Regenerating Go bindings (`gen/`) — read this before running the regen task
 

@@ -4,6 +4,10 @@
 - **Status**: Accepted
 - **Parent RFC**: [RFC-003](../rfcs/RFC-003-node-types.md) §A3
 
+> **Current amendment.** `RuntimeEnvelope` also carries a host-owned
+> `retry_count: u32` beside the three fields below (see
+> [ADR-0008](0008-error-policy-engine.md)).
+
 ## Context
 
 Pipeline messages flow through bounded queues between nodes. Before this decision, `RuntimeEnvelope` was a flat struct where every field (id, timestamp, source, content-type, payload) was an owned allocation. Cloning a message — required for Filter pass-through, Router fan-out, and DLQ safety copies — allocated roughly 200–400 bytes of heap memory per clone. In a five-node pipeline processing tens of thousands of messages per second on a Raspberry Pi 4, these allocations dominated per-hop latency and garbage-collector-like allocation pressure in the global allocator.

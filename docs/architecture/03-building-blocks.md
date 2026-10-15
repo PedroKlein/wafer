@@ -91,10 +91,11 @@ The leaf library. Contains every shared type that crosses crate boundaries:
 - **Control plane DTOs** — `PipelineState`, `NodeState`, `NodeInfo`,
   `HotSwapResult`, `ControlError`, `ErrorResponse`.
 - **Events** — `PipelineEvent` broadcast enum.
-- **Metrics DTOs** — snapshot structs consumed by the Prometheus scrape path.
+- **Metrics DTOs** — snapshot structs.
+- **Evaluation helpers**: `sequence` (per-message sequence accounting) and
+  `latency` (the histogram range shared by `BenchSink` and `wafer-loadgen`).
 
-No runtime logic, no IO, no async. Pure `#[derive(Serialize, Deserialize)]`
-structures with `Display` impls.
+No IO and no async.
 
 ### `wafer-config`
 
@@ -105,10 +106,13 @@ representation:
    Unknown keys are rejected everywhere except inside a plugin's opaque
    `config` table.
 2. `validate` — semantic checks: edge endpoints exist, source/sink
-   direction, router edges carry a `port` and non-router edges do not, no
-   duplicate edges, every processing node has an input and an output,
-   `[dead_letter]` present when an edge uses `overflow = "dead-letter"` or
-   a node's error policy sends to `dlq`, non-zero queue capacities and `epoch_tick_ms`, orphan and cycle
+   direction, a single inbound edge for Filter and Router, router edges
+   carry a `port` and non-router edges do not, no duplicate edges, every
+   processing node has an input and an output, at most one stdin source and
+   one stdout sink, `[dead_letter]` present when an edge uses
+   `overflow = "dead-letter"` or a node's error policy sends to `dlq`,
+   non-zero queue capacities and `epoch_tick_ms`, valid `outbound_http`
+   grants, `allow_inference` only where supported, orphan and cycle
    detection. Accumulates `ValidationError` values.
 3. `DagGraph` — a petgraph `DiGraph` built from the config. The runtime
    orchestrator does not use this type; `wafer-core` builds its own
@@ -120,12 +124,12 @@ The largest crate. Contains all runtime logic grouped into modules:
 
 | Module | Responsibility |
 |--------|---------------|
-| `engine` | Wasmtime lifecycle: component loading, AOT cache (blake3-keyed), `InstancePre` pooling, asynchronous P2 bindings, `WaferBuffer` resources, WASI capability scoping, exact-destination outbound HTTP enforcement, `StoreLimits`, and host logging. |
+| `engine` | Wasmtime lifecycle: component loading, compiled-component cache (blake3-keyed, memory-only in the runtime), asynchronous P2 bindings, `WaferBuffer` resources, WASI capability scoping, exact-destination outbound HTTP enforcement, `StoreLimits`, and host logging. |
 | `orchestrator` | Pipeline lifecycle: `Pipeline` handle, receiver-keyed mpsc wiring, loaded-Wasm replacement eligibility, per-node mutation guards, JoinSet startup, and replacement preparation. |
 | `runner` | Per-category async loops — one each for source, sink, transform, filter, router. Each loop owns its `Store`, receives from mpsc, sends to downstream mpsc, and integrates with the error policy executor. |
 | `dag` | Petgraph wrapper: `DagGraph`, topological sort, cycle rejection. |
 | `queue` | `bounded.rs` tracking wrappers and `envelope.rs` (`RuntimeEnvelope` with `Arc<EnvelopeHeader>`, `Bytes` payload, `Lineage`, and host retry count). |
-| `node` | Abstractions: `ProcessNode` trait, `NodeState` FSM, native vs Wasm implementations, per-node metrics. |
+| `node` | Abstractions: `ProcessNode` trait, `NodeState` FSM, native source/sink adapters, native Transform and Filter baselines, Wasm node wrappers (each owns its `Store`, bindings and cached `InstancePre`), per-node metrics. |
 | `dlq` | Dead-letter queue writer — routes `DlqEnvelope` to the configured MQTT topic or file. |
 | `metrics` | Hot-swap phase and recovery histograms (`HotSwapMetrics`). `GET /metrics` is rendered in `api` from per-node `NodeMetrics` counters and those histograms. `MetricsRegistry` and its snapshot builder are not wired into the runtime, so families such as `wafer_queue_depth` do not appear on the live endpoint. |
 | `bench` | Measurement helpers: `MemoryRecorder` (RSS from `/proc/self/statm`) and `QueueDepthRecorder`, which writes `queue-depth.csv` when `WAFER_QUEUE_DEPTH_OUTPUT` is set. |
@@ -172,7 +176,7 @@ parseable JSON via `--json`). Subcommands call the HTTP API:
 - `node <id>` → `GET /api/v1/nodes/{id}`.
 - `hot-swap <node-id> --wasm-path <path>` → `POST /api/v1/nodes/{id}/hot-swap`.
 - `shutdown` → `POST /api/v1/pipeline/shutdown`.
-- `metrics --raw` → `GET /metrics`. Without `--raw`, `metrics` calls no endpoint and prints an empty default snapshot.
+- `metrics` → `GET /metrics`, printed as Prometheus text (`--raw` is accepted and ignored).
 
 `reload` and `drain` exist but exit with an error, because the runtime exposes no such endpoints; `config` manages local endpoint settings.
 
@@ -215,7 +219,7 @@ flowchart LR
     subgraph Engine
         LOADER[component loader]
         CACHE[AOT cache]
-        INST[InstancePre pool]
+        INST[cached InstancePre]
         BUF[buffer resource]
     end
 

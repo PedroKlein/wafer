@@ -15,11 +15,11 @@
 > Decision 7 note). The `BoundedQueue` wrapper of Decision 3 still exists but
 > only the throughput benchmark uses it. The epoch OS-thread
 > ticker and code-quality optimizations are live. `[engine.fuel]` and
-> `[engine.memory]` per-node-kind budgets are honored by the launcher
-> (A8). `benches/throughput.rs` and `benches/hot_swap.rs` exercise the
+> `[engine.memory]` per-node-kind budgets are honored by the launcher.
+> `benches/throughput.rs` and `benches/hot_swap.rs` exercise the
 > production `PluginTestHarness` and `prepare_transform_swap_timed`
 > paths with an `assert_no_stub_backed_evidence` guard against the
-> retired stub `TransformInstance` (A15).
+> retired stub `TransformInstance`.
 
 ## Abstract
 

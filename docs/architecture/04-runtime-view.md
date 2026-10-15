@@ -6,19 +6,6 @@ This section shows how key runtime flows execute inside WAFER. Each scenario
 is presented as a sequence diagram. For the static structure these flows
 traverse, see [03-building-blocks.md](./03-building-blocks.md).
 
-> **Implementation status.** The scenarios below describe the current
-> production behavior. Historical drift banners (A3, A4, A7, A9, A10,
-> A13, A14, A15, A17) are closed — local replacement telemetry,
-> replacement-time `init()`, production Wasm lifecycle `validate()` / `init()`, source /
-> fan-out lineage assignment, per-node-type `/hot-swap` dispatch,
-> retry-exhaustion + `Recovering` state transitions,
-> capability-aware instantiation, and process-time hot-swap rollback
-> (canary window, one rollback per swap, A17 closed 2026-08-02) are all
-> wired. See [`../status/implementation-gaps.md`](../status/implementation-gaps.md)
-> for the full history; only observability follow-up **A20**
-> (Prometheus rollback counter) is still open, and it does not affect
-> runtime semantics.
-
 ---
 
 ## 1. Message Flow: Source → Transform → Router → Sink
@@ -143,7 +130,7 @@ sequenceDiagram
   swap keeps the old instance and its retries.
 - **Serialized mutation.** Hot-swap and reconfigure share one per-node guard. Concurrent requests cannot overwrite a pending watch value: one proceeds and the other receives a conflict.
 - **Runner-local reporting.** The response separates `replacement_adopted` from `first_post_replacement_local_outcome`. A local forward, filter drop, or no-route outcome is not sink convergence, sequence continuity, loss, or throughput evidence.
-- **Rollback boundary.** Initialization rollback exists for every eligible Wasm role. Process-time canary rollback is implemented only for Transform; Filter and Router do not make that claim. A20 remains deferred, so `/metrics` has no rollback-total series.
+- **Rollback boundary.** Initialization rollback exists for every eligible Wasm role. Process-time canary rollback is implemented only for Transform; Filter and Router do not make that claim. `/metrics` has no rollback-total series ([A20](../status/implementation-gaps.md)).
 
 For the full design rationale, see [ADR-0003](../adr/0003-hot-swap-mechanism.md)
 and [ADR-0012](../adr/0012-watch-channel-hot-swap.md).

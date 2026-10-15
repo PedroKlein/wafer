@@ -1,28 +1,25 @@
 # ADR-0003: Watch-Channel Between-Messages Hot-Swap
 
 - **Date**: 2026-07-12
-- **Status**: Implemented — the watch-channel between-messages mechanism and all peripheral wiring (A3, A4, A5, A10, A14, A17) are closed via runtime-migration plan 2026-07-19 through 2026-07-20 and thesis-hardening T1 (2026-08-02). See [`docs/history/status/implementation-gaps-closed.md`](../history/status/implementation-gaps-closed.md). Supersedes the earlier drain-and-flip mechanism from 2026-02-14.
+- **Status**: Implemented. Supersedes the earlier drain-and-flip mechanism from 2026-02-14.
 - **Parent RFC**: [RFC-005](../rfcs/RFC-005-orchestrator.md)
 
 > **Implementation status.** The `watch::channel(None)` primitive, the
-> between-messages check in each runner, and the E2E swap behavior are
-> live and tested. `SwapTimeline` phase decomposition (compile /
-> instantiate / signal / ack / convergence) is produced by production
-> (A3, A3b). The ACK step calls guest `init()` on the new instance (A4).
-> Production Wasm nodes call guest `validate()` and `init()` before the
-> first message (A14). Config-only warm swap via `cached_pre()` is
-> served by `POST /api/v1/nodes/{id}/reconfigure` (A5). The `/hot-swap`
-> endpoint dispatches per node type (A10). Process-time rollback (A17,
-> closed 2026-08-02): after swap ACK, the runner retains v1’s
-> `InstancePre` for a bounded canary window; if v2 traps during
-> `process()`, the runtime restores v1 automatically, at most once per
-> swap: the rollback closes the canary window.
+> between-messages check in each runner, and the end-to-end swap behavior are
+> live and tested. The runner calls guest `validate()` and `init()` on the new
+> instance before adopting it. Config-only warm swap via `cached_pre()` is
+> served by `POST /api/v1/nodes/{id}/reconfigure`, and `/hot-swap` dispatches
+> per node type. Process-time rollback: after adoption, a Transform runner
+> retains v1's `InstancePre` for a bounded canary window; if v2 traps during
+> `process()`, the runtime restores v1, at most once per swap. This replaces
+> the "No rollback is attempted" sentence in the Decision below.
 >
 > **Current response boundary.** Successful replacement reports
 > `replacement_adopted` and `first_post_replacement_local_outcome`; neither is
 > sink convergence. Sink transition, sequence, throughput, and gap artifacts
 > remain authoritative for external disruption. Process-time rollback is
-> Transform-only, and A20 rollback-count export remains deferred.
+> Transform-only, and `/metrics` has no rollback counter
+> ([A20](../status/implementation-gaps.md)).
 >
 > **Guest lifecycle on replacement.** The runtime does not call the old
 > instance's guest `close()` when it is replaced (nor at shutdown). The

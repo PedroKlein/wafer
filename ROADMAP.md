@@ -5,26 +5,16 @@ Current state lives in `docs/status/implementation-status.md`. Design
 decisions that these items would build on are captured in
 `docs/rfcs/` and `docs/adr/`.
 
-## Near-term — release and final evaluation
+## Near-term
 
-The TG2 pre-campaign runtime and evaluation-contract remediation is verified on
-a clean candidate. The restored MNIST inference path is also verified locally
-and on Jetson. The async P2 host path and bounded outbound HTTP capability are
-implemented and reviewed with no changes requested. The final campaign ran on
-that verified P2 contract (`wafer:pipeline@0.1.0`); the P3 PoC and its adoption
-decision come after it. Cross-repository parity remains before any release or pilot.
-The Jetson receipt confirms CUDA provider execution but not stable CUDA teardown
-or inference performance.
-The canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md) is the current operational boundary.
+The evaluation is finished: the final batches of the Raspberry Pi 5, Jetson
+Orin Nano and x86 hosts are approved in
+[`eval/final-batches.json`](eval/final-batches.json). It ran on the
+`wafer:pipeline@0.1.0` WIT package and the async P2 host path.
 
-The final campaign of the frozen canonical experiment matrix is finished: the
-Raspberry Pi 5, Jetson Orin Nano and x86 batches are approved in
-[`eval/final-batches.json`](eval/final-batches.json).
-
-Remaining near-term work:
-
-- A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
-  observability follow-up, ~1 h, not blocking thesis numbers.
+- A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter), an
+  observability follow-up that does not affect evaluation results. See
+  [`docs/status/implementation-gaps.md`](docs/status/implementation-gaps.md).
 
 ## Medium-term — runtime enhancements
 
@@ -50,12 +40,10 @@ adoption gates.
   current MNIST architecture check. CPU inference and actual CUDA-provider
   execution are implemented; performance, energy, and production-readiness
   claims remain out of scope.
-- **P3 PoC and production migration, after the campaign** — complete the
-  isolated P3 PoC, then adopt a new versioned WIT package only if Rust and Go
-  toolchains, payload ownership, cancellation, hot-swap, per-message semantics,
-  and matched performance all pass. Otherwise ship the verified P2 contract
-  first. Campaign evidence stays P2 evidence and is not relabeled as P3
-  evidence.
+- **P3 migration** — complete the isolated P3 PoC, then adopt a new
+  versioned WIT package only if Rust and Go toolchains, payload ownership,
+  cancellation, hot-swap, per-message semantics, and matched performance all
+  pass. The evaluation results stay P2 results.
 - **OTLP tracing exporter** — replace the stdout `tracing`
   subscriber with a Jaeger / OTLP exporter for distributed
   observability integration.

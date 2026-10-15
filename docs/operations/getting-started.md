@@ -11,26 +11,20 @@ first WAFER pipeline. If any step fails, jump to
   Cargo and require `cargo` to already exist. `rust-toolchain.toml` pins Rust
   `1.98.1` with `rustfmt`, `clippy`, and `wasm32-wasip2`; older compilers are
   not tested.
-- **`mise`** — primary development tool manager and command runner via
-  `mise.toml`. Install via <https://mise.jdx.dev/> or your package manager.
-  Rust itself remains controlled by `rust-toolchain.toml`. After cloning, run
-  `mise trust` once if mise asks you to trust the local config, then
-  `mise run setup` to verify Rust/rustup and install the pinned
-  Python/Go/Wasm/OCI helper tools.
-- **`wasm32-wasip2` target** — needed for building plugins. The
-  toolchain file adds it automatically; verify with `rustup target
-  list --installed`.
+- **`mise`**: the tool manager and task runner configured by `mise.toml`.
+  Install it from <https://mise.jdx.dev/> or your package manager. Rust itself
+  stays controlled by `rust-toolchain.toml`.
+- **`wasm32-wasip2` target**: needed for building plugins. The toolchain file
+  and `mise run setup` add it; verify with `rustup target list --installed`.
 - **A C toolchain** — required by wasmtime's build. Any recent
   `clang`/`gcc` works.
 - **Network access on the first build**, or a local ONNX Runtime. The build
   downloads a pinned, hash-checked ONNX Runtime from `cdn.pyke.io` once. For
   offline builds set `ORT_LIB_LOCATION`; see
   [ONNX Runtime](dependencies.md#onnx-runtime).
-- *(Optional)* **Docker** — if you plan to try the MQTT examples,
-  you'll need a Mosquitto broker. See
-  [`mqtt-setup.md`](mqtt-setup.md).
-- *(Optional)* **`wkg`** — CLI for OCI-hosted plugins. See
-  [`registry.md`](registry.md).
+- **`curl`** to talk to the control plane, and optionally `jq`.
+- *(Optional)* **Docker**, for the Mosquitto broker the MQTT examples need.
+  See [`mqtt-setup.md`](mqtt-setup.md).
 
 ## 1 — Clone and inventory the workspace
 
@@ -39,69 +33,76 @@ git clone https://github.com/PedroKlein/wafer.git
 cd wafer
 cargo --version     # if this fails, install Rust first from https://rustup.rs/
 mise trust          # one-time trust for this repo's mise.toml, if prompted
-mise run setup      # verify Rust/rustup, then install pinned helper tools
+mise run setup      # check Rust, add wasm32-wasip2, install the pinned helper tools
 mise tasks ls --all # list every available task
 ```
 
 The workspace holds seven crates (see
 [`../architecture/03-building-blocks.md`](../architecture/03-building-blocks.md)),
-a handful of first-party plugins under `plugins/`, and a set of
-example TOML configs under `examples/`.
+the first-party plugins under `plugins/`, and example pipeline configs under
+`examples/`.
 
 ## 2 — Build the runtime and the sample plugins
 
 ```bash
-mise run build             # entire workspace
-mise run //plugins:build-plugins  # every Rust plugin, including attacks
+mise run build                          # entire workspace
+plugins/build-plugins.sh --no-record    # every Rust plugin, including attacks
 ```
 
-The plugin build cross-compiles each crate to `wasm32-wasip2`; the
+The plugin build compiles each plugin crate to `wasm32-wasip2`; the
 resulting `.wasm` artifacts land under
 `plugins/<name>/target/wasm32-wasip2/release/wafer_<name>.wasm`.
+`--no-record` leaves the tracked `plugins/ARTIFACTS.sha256` alone;
+`mise run //plugins:build-plugins` builds the same set and rewrites it with
+this machine's hashes.
 
 ## 3 — Run your first pipeline (pass-through)
 
 ```bash
-mise run run                              # defaults to examples/dag-passthrough.toml
-mise run run examples/dag-uppercase.toml  # a slightly-more-useful example
+echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
+# HELLO, WORLD!
 ```
 
-Both examples use `stdin` as their source and `stdout` as their sink,
-so you can type a line of text, press Enter, and see it echoed
-(passthrough) or upper-cased on the other side.
+Both `examples/dag-passthrough.toml` and `examples/dag-uppercase.toml` read
+lines from `stdin` and write them to `stdout`, echoed or upper-cased. The
+pipeline exits with status `0` once its input ends. `mise run run [config]`
+runs the same command and defaults to `examples/dag-passthrough.toml`.
 
-Under the hood, `mise run run` shells out to:
+Pipe the input in rather than typing it: the stdin source reads with a
+blocking call, so lines typed into a running pipeline can stay queued until
+the input closes.
+
+Without `RUST_LOG` the runtime logs at `info`. To see WAFER's debug logs and
+keep everything else at `info`:
 
 ```bash
-cargo run -p wafer-runtime -- --config <path>
+echo "Hello" | RUST_LOG=info,wafer=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
 ```
-
-To turn up the logs, name the targets:
-
-```bash
-RUST_LOG=wafer=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
-```
-
-A level-only value such as `RUST_LOG=debug` raises every target. Without
-`RUST_LOG` the runtime logs at `info`.
 
 ## 4 — Explore the control plane
 
-By default the runtime launches the axum control plane at `127.0.0.1:9090`. In a
-second terminal:
+The runtime serves its HTTP control plane at `127.0.0.1:9090` unless the
+config turns it off. Start the uppercase pipeline with an input that stays
+open and sends nothing:
+
+```bash
+sleep 3600 | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
+```
+
+In a second terminal:
 
 ```bash
 curl -s http://127.0.0.1:9090/health
-# {"status": "ok"}
+# {"status":"ok"}
 
 curl -s http://127.0.0.1:9090/ready
-# {"ready": true}
+# {"ready":true}
 
 curl -s http://127.0.0.1:9090/api/v1/nodes | jq
-# [{"id":"source","state":"running","processed":0,"failed":0,"replacement_eligible":false}, ...]
+# [{"id":"sink","state":"running","processed":0,"failed":0,"replacement_eligible":false}, ...]
 
-curl -s http://127.0.0.1:9090/metrics | head
-# wafer_node_processed_total{node="uppercase"} 3
+curl -s http://127.0.0.1:9090/metrics | grep processed_total
+# wafer_node_processed_total{node="uppercase"} 0
 ```
 
 For an interactive collection, import
@@ -111,34 +112,36 @@ For an interactive collection, import
 
 ## 5 — Try a hot-swap
 
-Start the uppercase pipeline as above. In a second terminal, build a
-different transform and hot-swap it in:
+With the pipeline still running, hot-swap the `json-parse` plugin (built in
+step 2) into the `uppercase` node:
 
 ```bash
-mise run //plugins:build-plugin json-parse
 curl -X POST http://127.0.0.1:9090/api/v1/nodes/uppercase/hot-swap \
      -H 'content-type: application/json' \
      -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
-# {"node_id":"uppercase","replacement_adopted":true,"first_post_replacement_local_outcome":{"disposition":"forwarded/enqueued","after_adoption_ns":...},"compile_cache":"compiled","timeline":{"compile_ns":...,"instantiate_ns":...,"signal_ns":...,"replacement_adopted_ns":...,"first_post_replacement_local_outcome_ns":...}}
+# {"compile_cache":"compiled","first_post_replacement_local_outcome":null,"node_id":"uppercase","replacement_adopted":true,"timeline":{...}}
 ```
 
-The response proves adoption and a runner-local outcome, not sink convergence.
-The `uppercase` node's Wasm instance is replaced between messages; the next valid
-JSON line is processed by the replacement.
+The endpoint answers HTTP 202: the `uppercase` node adopted `json-parse`
+between messages. No message arrived within five seconds, so
+`first_post_replacement_local_outcome` is null; when one does, the endpoint
+answers 200 and reports it. From now on the node pretty-prints valid JSON and
+sends anything else to `dlq.jsonl`. The `wasm_path` is resolved against the
+runtime's working directory, here the repository root.
 
 ## 6 — Shut down cleanly
 
-```bash
-curl -X POST http://127.0.0.1:9090/api/v1/pipeline/shutdown
-# HTTP 200; cancellation has been signalled
-```
-
-Or press `Ctrl-C`. Cleanup is cooperative and bounded: sources close,
+Press `Ctrl-C` in the pipeline's terminal. That also stops `sleep`, so the
+stdin source sees the end of its input, every node exits cleanly and the
+process exits with `0`. Cleanup is cooperative and bounded: sources close,
 processing loops flush retries, sinks drain their current receiver buffers,
-and remaining tasks may be aborted after the 5 s shutdown deadline. If that
-still hangs, for example on a guest running with no fuel or epoch limit, press
-`Ctrl-C` again: a second signal exits at once with `130` (SIGINT) or `143`
-(SIGTERM), without flushing.
+and tasks still running after the 5 s shutdown deadline are aborted. A second
+`Ctrl-C` exits at once with `130`, without flushing.
+
+`POST /api/v1/pipeline/shutdown` starts the same cleanup, but it cannot
+interrupt a stdin source that is waiting for a line: that source is aborted
+at the deadline, the run exits with `3`, and the process only ends once its
+input closes. Use the endpoint with sources that are not stdin.
 
 The process exit code says whether the run succeeded: `0` when every node
 exited cleanly, `2` for an invalid configuration (nothing is started), `3`
@@ -172,24 +175,7 @@ in [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md#runtime-exit-status
 - **Port 9090 already in use** — set `[api].bind = "127.0.0.1:PORT"`
   in the pipeline TOML, or pass `--api-bind 127.0.0.1:PORT` on the command
   line (`cargo run -p wafer-runtime -- --config <path> --api-bind 127.0.0.1:PORT`).
-- **Hot-swap 404 for a node that exists** — make sure the target node
+- **Hot-swap rejected with `node-not-swappable`** — make sure the target node
   is a loaded Wasm node (Transform / Filter / Router). Native processing
   baselines and native Source/Sink nodes report `replacement_eligible = false` on
   `GET /api/v1/nodes/{id}`.
-
-## Notebook outputs
-
-Notebooks under `eval/analysis/notebooks/` are tracked without cell
-outputs so the repository stays small and free of local paths. `mise run setup`
-installs the version of `nbstripout` pinned in `eval/analysis/uv.lock` and
-registers it as this checkout's Git filter.
-
-Normalize notebooks before committing and check them with:
-
-```sh
-mise run //eval:notebooks-format
-mise run //eval:notebooks-check
-```
-
-CI runs the same normalization check. Regenerate outputs locally with
-`mise run //eval:notebooks`.

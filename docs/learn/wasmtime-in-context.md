@@ -1,10 +1,8 @@
 # Wasmtime in WAFER's context
 
-> **Documentation type:** Explanation
->
-> **Prerequisites:** [Workspace and ownership map](workspace-map.md) and [Rust in WAFER's context](rust-in-context.md).
+> **Read first:** [Follow one message through Wasm](message-through-wasm.md).
 
-This page explains the Wasmtime and Component Model techniques used by `crates/wafer-core/src/engine/` and `crates/wafer-core/src/node/wasm.rs`, in roughly the order the code uses them: create the engine, compile, link, pre-instantiate, create a Store, call the guest. It is a reading aid for those files, not a Wasmtime course. The pinned Wasmtime is 48.0.2, at the git revision in the root `Cargo.toml`.
+This page explains the Wasmtime and Component Model techniques used by `crates/wafer-core/src/engine/` and `crates/wafer-core/src/node/wasm.rs`, in the order the code uses them: create the engine, compile, link, pre-instantiate, create a Store, call the guest. By the end you will know which Wasmtime objects nodes share and which each node owns, how the host picks a WIT world, what `bindgen!` generates, why the payload buffer must be deleted by hand, and what fuel, epoch, and memory limits do and do not bound. It is a reading aid, not a Wasmtime course. The pinned Wasmtime is 48.0.2, at the git revision in the root `Cargo.toml`.
 
 ## Objects and who owns them
 
@@ -130,7 +128,7 @@ WAFER sets three limits on every new Store and resets two of them before each gu
 
 **Fuel.** In a metered engine most instructions consume one unit, and the guest traps with `Trap::OutOfFuel` when the Store reaches zero. Each call starts with `store.set_fuel(n)`, so the budget is per call, not per instance. The node's `fuel_limit` is `None` when the engine does not meter, and WAFER then skips `set_fuel`, which would return an error.
 
-**Epoch deadline.** `store.epoch_deadline_trap()` makes an expired deadline trap with `Trap::Interrupt`. `set_epoch_deadline(n)` is relative: the deadline is `n` ticks after the engine's current epoch. The ticker keeps advancing the epoch between calls, so `process` resets the deadline before every call. Without the reset, the deadline would stay where `validate_and_init` last set it, and once that passed every later call would trap at its first epoch check. A call can therefore run for roughly `n` ticks of `epoch_tick_ms` each.
+**Epoch deadline.** `store.epoch_deadline_trap()` makes an expired deadline trap with `Trap::Interrupt`. `set_epoch_deadline(n)` is relative: the deadline is `n` ticks after the engine's current epoch. The ticker keeps advancing the epoch between calls, so `process` resets the deadline before every call. Without the reset, the deadline would stay where `validate_and_init` last set it, and once that passed every later call would trap at its first epoch check. A call can therefore run for roughly `n` ticks of `epoch_tick_ms` each. Instantiation, `validate` and `init` get a longer budget: new Stores and `validate_and_init` set `lifecycle_epoch_deadline(n)` (`crates/wafer-core/src/node/wasm.rs`), which is at least 1,000 ticks, so a tight per-message deadline cannot fail the start or recovery of a healthy guest.
 
 **Memory.** `WaferState::new_with_memory_limit` builds `StoreLimits` with `memory_size(memory_limit)`, `table_elements(20_000)` and `trap_on_grow_failure(true)`. `store.limiter(|s| s.limits_mut())` installs it as the Store's `ResourceLimiter`. A `memory.grow` past the limit then traps instead of returning -1 to the guest. The limit is the node's `memory_limit` or the role default: 64 MiB for Transform, 16 MiB for Filter and Router. It covers guest linear memory and tables, not host-side WASI resources.
 
@@ -160,17 +158,18 @@ Wasmtime wraps a trap in context such as a backtrace, so `map_trap` reads the tr
 - **Fuel**: A per-Store instruction budget; WAFER resets it before every guest call and the guest traps with `Trap::OutOfFuel` when it runs out.
 - **Epoch deadline**: A per-Store limit counted in engine epoch ticks; WAFER resets it before every guest call and the guest traps with `Trap::Interrupt` when it passes.
 
-## Status boundaries
+## Limits to keep in mind
 
-**Current implementation:** One engine per pipeline with engine-wide fuel and epoch flags, a memory-only compile cache, a new linker per pre-instantiation, one typed pre-instance and one Store per Wasm node, async bindings for four worlds, explicit buffer deletion after each call, and per-call fuel and epoch resets, all in the files cited above.
+- The doc comment on `HostBuffer::drop` in `crates/wafer-core/src/engine/bindings.rs` says it runs when a `borrow<buffer>` goes out of scope. Wasmtime runs the destructor only for owned handles, so the explicit `delete_buffer` is what frees each payload entry.
+- `wasmtime_version_major` in `crates/wafer-core/src/engine/cache.rs` returns wafer-core's own major version, not Wasmtime's. This affects only the disk tier, which the runtime does not use.
 
-**Intended design:** The Engine and compiled components hold no guest state, so nodes share them, while everything a guest can change stays in its node's Store. [ADR-0001](../adr/0001-wasmtime-runtime.md), [ADR-0007](../adr/0007-buffer-resource-zero-copy.md), [ADR-0013](../adr/0013-aot-cache-and-metering.md) and [ADR-0016](../adr/0016-outbound-wasi-http-capability.md) give the reasons for the runtime, the buffer resource, metering and outbound HTTP.
-
-**Known drift:** The doc comment on `HostBuffer::drop` in `crates/wafer-core/src/engine/bindings.rs` says it runs when a `borrow<buffer>` goes out of scope. Wasmtime runs the destructor only for owned handles, so the explicit `delete_buffer` is what frees each payload entry. `wasmtime_version_major` in `crates/wafer-core/src/engine/cache.rs` returns wafer-core's own major version, not Wasmtime's. This affects only the disk tier, which the runtime does not use. `engine::WasmBindings` is exported but plays no part in choosing a world.
-
-## Checkpoint
+## Check yourself
 
 1. Two Transform nodes load the same `.wasm` file. Which of Engine, Component, Linker, pre-instance and Store do they share, and which does each node get for itself?
 2. Only one Filter sets `fuel = 5000`. What fuel budget does a Transform in the same pipeline get before each call, and why does it need one at all?
 3. Why does `process` call `set_epoch_deadline` before every call, and what would a later message see without that reset once enough ticks had passed?
 4. A guest calls `read-all()` on its payload. Name the host function that runs, the point where the bytes are copied, and the reason `process` must still call `delete_buffer` afterwards.
+
+## Next
+
+[Cross the plugin boundary](plugin-boundary.md) follows one plugin from its WIT world to a live instance using these objects.

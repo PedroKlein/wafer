@@ -125,11 +125,11 @@ Pinned source:
 - [`WasiHttpHooks::send_request`](https://github.com/bytecodealliance/wasmtime/blob/e9f1ea232fd245aea338ab3eb7d73487ae75cab1/crates/wasi-http/src/ctx.rs#L238-L306)
 - [`HttpRequestDenied` P2 mapping](https://github.com/bytecodealliance/wasmtime/blob/e9f1ea232fd245aea338ab3eb7d73487ae75cab1/crates/wasi-http/src/p2/error.rs#L318-L340)
 
-The P2-T1 compile probe established that this dependency feature set, `WasiHttpView`, custom hooks with default sending disabled, shared `ResourceTable`, existing async WASI linker, and HTTP-only async linker compile together. The P2-T2 implementation adopted that exact integration.
+A compile probe established that this dependency feature set, `WasiHttpView`, custom hooks with default sending disabled, shared `ResourceTable`, existing async WASI linker, and HTTP-only async linker compile together, and the implementation adopted that exact integration.
 
 ## Executable verification matrix
 
-P2-T2 and P2-T3 must implement these tests against real P2 components and controlled local servers. A missing fixture or skipped row is a failure.
+Each row is a required test against real P2 components and controlled local servers. A missing fixture or skipped row is a failure.
 
 | ID | Setup and request | Required observation |
 |---|---|---|

@@ -4,6 +4,12 @@
 - **Status**: Accepted
 - **Parent RFC**: [RFC-001](../rfcs/RFC-001-wit-contracts.md)
 
+> **Current amendment.** The `buffer` resource is part of the `types` interface
+> of the single `wafer:pipeline@0.1.0` package (`wit/pipeline-types.wit`), not a
+> separate `pipeline:types` package. The guest SDK reads the payload with the
+> `payload_bytes!` and `payload_as_str!` macros; there is no `from_input()`
+> helper.
+
 ## Context
 
 WAFER pipeline nodes receive messages at the WebAssembly Component Model boundary. The payload is the dominant allocation cost: telemetry messages range 100B–1KB (UC1 JSON) to 784B (UC2 MNIST). In a naïve design every boundary crossing copies the payload into component linear memory whether or not the guest reads it. Filter nodes that evaluate metadata alone, and router nodes that examine only a few bytes, would pay the full copy cost for zero benefit.
