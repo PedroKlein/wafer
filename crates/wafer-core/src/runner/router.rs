@@ -1,7 +1,7 @@
 //! Router node runner loop — cancel-safe select!, watch-channel hot-swap.
 //!
 //! Router BORROWS the envelope for port routing decision. Fan-out: clone for
-//! N-1 ports, move original to last port (Session 3 D12).
+//! N-1 ports, move original to last port (RFC-003 Decision 12).
 //!
 //! See docs/rfcs/RFC-005-orchestrator.md D3.
 

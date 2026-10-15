@@ -92,7 +92,7 @@ pub struct HotSwapMetrics {
     pub flip_time_ns: AtomicU64,
     pub retire_time_ns: AtomicU64,
     pub messages_drained_total: AtomicU64,
-    /// P0.10 (A3 residual): per-phase, per-node histogram of hot-swap
+    /// Per-phase, per-node histogram of hot-swap
     /// timings for E-Swap-6 phase decomposition. Keyed by
     /// `(phase, node_id)` for six phases: compile, instantiate, signal,
     /// replacement_adopted, first_post_replacement_local_outcome, rollback. Wrapped in RwLock because the label
@@ -100,7 +100,7 @@ pub struct HotSwapMetrics {
     /// touched inside record/emit paths, not on the message hot path.
     pub phase_histogram:
         std::sync::RwLock<std::collections::HashMap<(String, String), PhaseHistogram>>,
-    /// P0.11 (A7 residual): per-node recovery-duration histogram in
+    /// Per-node recovery-duration histogram in
     /// nanoseconds, populated on every Recovering → Running transition.
     /// Rendered as `wafer_node_recovery_duration_ms` at scrape time
     /// (buckets in ms; nanosecond samples are divided by 1_000_000 for

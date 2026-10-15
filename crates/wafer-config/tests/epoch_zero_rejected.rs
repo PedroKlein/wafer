@@ -1,6 +1,6 @@
-//! AC4: `epoch_deadline = 0` fails at load time with a clear error message.
+//! `epoch_deadline = 0` fails at load time with a clear error message.
 //!
-//! The P0.13 lesson: `0` traps immediately on the first epoch check, which is
+//! Why: `0` traps immediately on the first epoch check, which is
 //! indistinguishable from a real plugin bug. The type-safe guard (`NonZeroU64` +
 //! custom deserializer) makes this a parse-time error, not a runtime surprise.
 

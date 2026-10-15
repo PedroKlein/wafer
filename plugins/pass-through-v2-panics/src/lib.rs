@@ -1,6 +1,6 @@
 //! Pass-through v2 (fault-injection variant) — traps on first `process()` call.
 //!
-//! Used by RFC-008 E-Swap-5 to verify the A4 rollback path: when the new
+//! Used by RFC-008 E-Swap-5 to verify the rollback path: when the new
 //! plugin traps on its very first invocation, the runtime must roll the
 //! node back to v1's `InstancePre` and keep the pipeline running with zero
 //! message loss.
@@ -9,9 +9,10 @@
 //!
 //! This plugin is defined in `plugins/pass-through-v2-panics/`, sits under
 //! the same `plugins/` root as legitimate plugins for build parity, but must
-//! only appear inside `eval/configs/*` fixtures used by the E-Swap-5 test
-//! harness. The `plugin_version = "2.0.0-panic"` string in metadata is the
-//! sentinel a reviewer can grep for.
+//! only appear in rollback test fixtures: the E-Swap-5 config under
+//! `eval/configs/e-swap/` and the runtime's rollback tests in `wafer-core`.
+//! The `plugin_version = "2.0.0-panic"` string in metadata is the sentinel
+//! a reviewer can grep for.
 //!
 //! # Lifecycle semantics
 //!

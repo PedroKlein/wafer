@@ -1,9 +1,9 @@
-//! Runtime-side provenance emission for `metadata.json` (F2 / RESULT-CONTRACT §runtime).
+//! Runtime-side provenance emission for `metadata.json` (RESULT-CONTRACT §runtime).
 //!
 //! Writes a JSON snapshot of the fields only the runtime can produce
 //! authoritatively: resolved wasmtime and ONNX Runtime packages, build
 //! profile/flags/features/commit, config sha256, per-plugin sha256 (shared
-//! with the P0.12 hot-swap guard), runtime-binary sha256, rustc version,
+//! with the hot-swap plugin hash guard), runtime-binary sha256, rustc version,
 //! kernel string, and the effective tokio worker count and CPU affinity.
 //! The shell harness (`run-experiment.sh`) reads this file after the runtime
 //! exits and merges the fields into the per-run `metadata.json`.

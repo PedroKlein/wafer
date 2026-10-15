@@ -213,15 +213,11 @@ run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/da
 # Release builds per target (aarch64-linux for Pi / Jetson, native x86_64)
 # =============================================================================
 #
-# C1 (canonical-runs plan, 2026-08-02): cross-compile wafer, wafer-loadgen,
-# and waferctl for aarch64-unknown-linux-gnu using a `linux/arm64` Docker
-# container. On macOS aarch64 hosts (M-series) the `--platform linux/arm64`
-# flag runs the container natively (no qemu emulation) so build times are
-# comparable to a bare-metal Pi build.
-#
-# See docs/eval/cross-compile.md for the alternative paths tried
-# (`cross` crate, homebrew `aarch64-linux-gnu-gcc`) and why the Docker
-# path was chosen (reproducibility + no host toolchain drift).
+# Cross-compile wafer, wafer-loadgen, and waferctl for
+# aarch64-unknown-linux-gnu in a `linux/arm64` Docker container, so the
+# result does not depend on a host cross toolchain. On macOS aarch64 hosts
+# (M-series) the `--platform linux/arm64` flag runs the container natively
+# (no qemu emulation). See docs/eval/cross-compile.md.
 
 [tasks.cross-build-pi]
 description = "Cross-build wafer, wafer-loadgen, waferctl for aarch64-linux (Docker)"

@@ -40,9 +40,10 @@ use std::fmt;
 use std::sync::Arc;
 use wafer_types::NodeState;
 
-/// Enum for heterogeneous node storage in DAG orchestration.
+/// A boxed node of any role paired with its [`NodeStateTracker`].
 ///
-/// Each variant includes a shared [`NodeStateTracker`] for hot-swap support.
+/// The orchestrator does not use it: it spawns a typed runner task for
+/// each role instead.
 pub enum AnyNode {
     Transform(Box<dyn Transform>, Arc<NodeStateTracker>),
     Source(Box<dyn Source>, Arc<NodeStateTracker>),
@@ -303,8 +304,8 @@ impl From<NativeTransform> for TransformNode {
 use crate::node::wasm::WasmFilterNode;
 
 /// Runner-side wrapper unifying Wasm and native filters, mirroring
-/// [`TransformNode`]. Unblocks the RQ1 apples-to-apples native filter
-/// path (`docs/history/status/implementation-gaps-closed.md` A18).
+/// [`TransformNode`], so the RQ1 native baseline can run a filter that does
+/// the same work as the Wasm one.
 pub enum FilterNode {
     /// Full Wasm filter with sandboxing, hot-swap, and recovery.
     Wasm(Box<WasmFilterNode>),

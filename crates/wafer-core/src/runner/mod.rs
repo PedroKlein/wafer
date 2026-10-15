@@ -69,12 +69,12 @@ fn log_recovery_cause(
 // =============================================================================
 
 /// Error surfaces when a hot-swap fails after signal but before ACK, or
-/// when the runtime rolls back after a post-swap process-time trap (A17).
+/// when the runtime rolls back after a post-swap process-time trap.
 #[derive(Debug, Clone)]
 pub enum HotSwapError {
     /// The replacement instance's validate() or init() failed. v1 is preserved.
     InitFailed(String),
-    /// A17: the swap ACKed (v2 was live), but a subsequent process-time trap
+    /// The swap ACKed (v2 was live), but a subsequent process-time trap
     /// inside the canary window triggered an automatic rollback to v1. This
     /// is NOT a swap-failed-at-init case — the swap technically applied and
     /// was then reverted. Kept as `Err` so the API caller cannot mistake
@@ -268,7 +268,7 @@ impl HotSwapProgress {
         }
     }
 
-    /// A17: records a post-adoption rollback before any local outcome completes.
+    /// Records a post-adoption rollback before any local outcome completes.
     /// A response already returned for local adoption remains an adoption record,
     /// not a stable-canary completion claim.
     pub fn report_rolled_back(&self, rollback_time_ns: u64, reason: impl Into<String>) {
@@ -315,7 +315,7 @@ impl HotSwapProgress {
 }
 
 // =============================================================================
-// Canary rollback state (A17): retained after swap ACK for process-time rollback
+// Canary rollback state: retained after swap ACK for process-time rollback
 // =============================================================================
 
 /// Snapshot of v1 state retained after a hot-swap ACK for bounded rollback.
@@ -1050,7 +1050,7 @@ mod tests {
         assert!(first.first_post_replacement_local_outcome_at >= first.replacement_adopted_at);
     }
 
-    // ---- A17: rollback reporting ----
+    // ---- Rollback reporting ----
 
     #[tokio::test]
     async fn hot_swap_progress_reports_rolled_back_after_ack() {

@@ -87,7 +87,7 @@ impl WaferEngine {
     }
 
     fn build(engine_config: &EngineConfig, meters_fuel: bool) -> Result<Self> {
-        // AC F5.AC2: enable metering at engine level only when some limit is
+        // Enable metering at engine level only when some limit is
         // set. Skipping consume_fuel/epoch_interruption otherwise is what lets
         // per-store set_fuel/set_epoch_deadline be skipped without wasm traps
         // on the first instruction.
@@ -437,7 +437,7 @@ to = "sink"
         assert!(store.get_fuel().is_ok(), "node fuel must enable wasmtime fuel metering");
     }
 
-    /// AC F5.AC2: when epoch_deadline is None, wasmtime Config leaves
+    /// When epoch_deadline is None, wasmtime Config leaves
     /// epoch_interruption off; when fuel_limit is None, consume_fuel stays
     /// off. Store::get_fuel returns Err iff consume_fuel is disabled, which
     /// is the closest observable proof that the setter can be skipped without
@@ -463,7 +463,7 @@ to = "sink"
         // Behavioral proof: engine construction skipped consume_fuel(true), so
         // a fresh Store has fuel metering disabled and get_fuel returns Err.
         // If a future change re-enables consume_fuel unconditionally this test
-        // fails, catching the AC F5.AC2 regression.
+        // fails, catching the regression.
         let state = WaferState::new("test-node", Capabilities::default());
         let store: Store<WaferState> = Store::new(engine.inner(), state);
         assert!(
@@ -472,7 +472,7 @@ to = "sink"
         );
     }
 
-    /// AC F5.AC2 (positive path): with Some(fuel) the engine enables
+    /// Positive path: with Some(fuel) the engine enables
     /// consume_fuel at Config level; get_fuel returns Ok on a fresh Store.
     #[test]
     fn some_fuel_means_wasmtime_fuel_metering_enabled() {

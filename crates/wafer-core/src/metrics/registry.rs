@@ -286,7 +286,7 @@ impl MetricsRegistry {
         self.hotswap_metrics.failure_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// P0.10 (A3 residual): record one phase timing sample.
+    /// Record one phase timing sample.
     ///
     /// `phase` is one of {compile, instantiate, signal, replacement_adopted, first_post_replacement_local_outcome}. `node_id` is the swappable-node id. Duplicate
     /// `(phase, node_id)` calls accumulate into the same histogram.

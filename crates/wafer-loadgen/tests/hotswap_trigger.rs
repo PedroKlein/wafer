@@ -1,4 +1,4 @@
-//! Integration test for the hotswap-trigger load profile (P0.3 AC3).
+//! Integration test for the hotswap-trigger load profile.
 //!
 //! Spins up a mock HTTP server via `axum` that records the wall-clock
 //! timestamp of any POST to `/api/v1/nodes/:id/hot-swap`, and an in-process

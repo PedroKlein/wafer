@@ -29,8 +29,8 @@ pub enum NodeKind {
 
 /// Unified node representation with identity, state, metrics, and kind.
 ///
-/// Replaces the current `AnyNode` enum where each variant duplicates
-/// the `Arc<NodeStateTracker>` and `Box<dyn Trait>` pattern.
+/// An alternative to `AnyNode` that keeps the id, state tracker and metrics
+/// in one struct. Like `AnyNode`, it is not used by the runtime.
 #[derive(Debug)]
 pub struct Node {
     /// Immutable node identifier (Box<str> saves 8 bytes vs String).

@@ -153,7 +153,7 @@ pub async fn run_transform_loop_with_config(
                     progress.mark_replacement_adopted();
                     pending_swap_progress = Some(Arc::clone(&progress));
                     metrics.record_swap();
-                    // Install canary snapshot for process-time rollback (A17).
+                    // Install canary snapshot for process-time rollback.
                     //
                     // Only arm canary for full Transform swaps. Reconfigure
                     // reuses the same InstancePre and mutates `config_json`
@@ -244,7 +244,7 @@ pub async fn run_transform_loop_with_config(
                 metrics.record_error(error);
                 let msg = error.to_string();
 
-                // A17: a trap inside the canary window rolls back to v1 once;
+                // A trap inside the canary window rolls back to v1 once;
                 // taking the canary means a v1 trap afterwards is an ordinary
                 // failure, not another rollback.
                 if let Some(c) = canary.take() {
@@ -277,7 +277,7 @@ pub async fn run_transform_loop_with_config(
                                 metrics.record_recovery(duration_ns);
                             }
                             metrics.record_rollback();
-                            // B1: notify the API caller with a RolledBack
+                            // Notify the API caller with a RolledBack
                             // outcome before a later v1 message can report a local outcome.
                             // Taking the progress ensures the sender is
                             // consumed — subsequent mark_first_post_replacement_local_outcome calls
@@ -294,7 +294,7 @@ pub async fn run_transform_loop_with_config(
                                 %error,
                                 "process-time rollback failed — escalating to recovery"
                             );
-                            // B1: rollback attempt itself failed —
+                            // Rollback attempt itself failed —
                             // the API caller should still learn the
                             // swap did not converge. Report with
                             // rollback_time_ns=0 to signal the failure.
@@ -305,7 +305,7 @@ pub async fn run_transform_loop_with_config(
                     }
                 }
 
-                // Standard recovery path (existing A7 behavior)
+                // Standard recovery path: re-instantiate from the cached pre.
                 policy.record_condemned(safety, error, &metrics);
                 super::log_recovery_cause(&metrics, transform.node_id(), &msg, false);
                 state.transition_to_error();

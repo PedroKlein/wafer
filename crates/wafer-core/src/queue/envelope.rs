@@ -21,7 +21,7 @@ pub struct RuntimeEnvelope {
     pub header: Arc<EnvelopeHeader>,
     pub payload: Bytes,
     pub(crate) lineage: Lineage,
-    /// P0.11 (A7 residual): number of retry attempts this envelope has
+    /// Number of retry attempts this envelope has
     /// survived. Zero on first ingest; incremented by `error_policy::try_retry`
     /// before pushing into the retry buffer. When it reaches
     /// `ResolvedRetryConfig.retries`, the envelope is sent to the DLQ with

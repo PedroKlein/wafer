@@ -8,7 +8,7 @@
 //! monotonic sequence number for gap/duplicate detection at the sink. These
 //! travel as host-only [`BenchStamps`], so Wasm guests never see or copy them.
 //!
-//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3A.
+//! See docs/rfcs/RFC-008-evaluation-harness.md (Decision 3).
 
 use std::future::Future;
 use std::path::{Path, PathBuf};

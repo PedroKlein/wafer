@@ -194,7 +194,7 @@ pub struct WasmNodeDef {
     pub plugin: PluginSpec,
 
     /// Per-node fuel override. `None` = use engine default for this node type.
-    /// `NonZeroU64`: `0` would trap on the first fuel check (P0.13 lesson).
+    /// `NonZeroU64`: `0` would trap on the first fuel check.
     #[serde(
         default,
         deserialize_with = "engine::deserialize_metering_limit",
@@ -643,8 +643,8 @@ to = "snk"
         assert_eq!(reparsed.edges.len(), 1);
     }
 
-    /// AC1 guard: `epoch_deadline = 0` is rejected at deserialization time
-    /// because `NonZeroU64` does not accept zero. Prevents the P0.13 footgun
+    /// `epoch_deadline = 0` is rejected at deserialization time
+    /// because `NonZeroU64` does not accept zero. Prevents the footgun
     /// where a typo silently traps every Wasm call on first epoch check.
     #[test]
     fn config_epoch_zero_rejected() {
@@ -658,7 +658,7 @@ to = "snk"
         );
     }
 
-    /// AC1 guard: `fuel.transform = 0` is rejected at deserialization time.
+    /// `fuel.transform = 0` is rejected at deserialization time.
     #[test]
     fn config_fuel_zero_rejected() {
         let toml_str = r"
@@ -669,7 +669,7 @@ transform = 0
         assert!(result.is_err(), "fuel = 0 must fail deserialization");
     }
 
-    /// AC1 guard: missing fields deserialize to None (unlimited).
+    /// Missing fields deserialize to None (unlimited).
     #[test]
     fn config_missing_means_none() {
         let toml_str = r"epoch_tick_ms = 5";

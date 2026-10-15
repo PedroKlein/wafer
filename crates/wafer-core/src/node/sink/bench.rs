@@ -4,7 +4,7 @@
 //! gaps/duplicates via `SequenceTracker`, and monitors hot-swap version boundaries
 //! via `HotSwapRecorder`.
 //!
-//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D4, D7, D9.
+//! See docs/rfcs/RFC-008-evaluation-harness.md (Decisions 4, 7 and 9).
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -1101,7 +1101,7 @@ impl BenchSink {
     }
 
     fn write_sequence(&self, dir: &Path) -> std::io::Result<()> {
-        // Absence of the file signals "not tracked" — the P1.1 result contract
+        // Absence of the file signals "not tracked" — the result contract
         // treats sequence.csv as conditional-on-configuration.
         let Some(tracker) = &self.sequence_tracker else { return Ok(()) };
         let csv = format!(
@@ -1902,7 +1902,7 @@ mod tests {
         assert_eq!(recorder.pause_duration_ns(), None);
     }
 
-    /// P0.5 AC3: BenchSink's HotSwapRecorder detects the v1 → v2 transition
+    /// BenchSink's HotSwapRecorder detects the v1 → v2 transition
     /// via envelope metadata `plugin.version`, and both `first_v2_ns()` and
     /// `last_v1_ns()` are accessible and ordered.
     #[tokio::test]

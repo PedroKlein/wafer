@@ -1,6 +1,6 @@
 #![cfg(test)]
 #![expect(clippy::print_stderr, reason = "integration test: diagnostic output")]
-//! P0.8 — RQ2 Attack containment integration harness.
+//! RQ2 attack containment integration harness.
 //!
 //! Six real attack plugins live under `plugins/attacks/*`. This file
 //! supplies the assertion side: for each attack scenario in RFC-008
@@ -32,9 +32,8 @@
 //! Epoch-interrupt dependency (S3 — infinite loop):
 //! `PluginTestHarness::new()` enables epoch interruption with a 100-tick
 //! deadline (~1 s). This is required for S3 containment — without it, the
-//! guest `loop {}` runs forever. The harness was fixed in the T7 resolution
-//! (see docs/decisions/attack-containment-hang.md) after commit `6096dfd`
-//! disabled epoch interruption for the default `EngineConfig`.
+//! guest `loop {}` runs forever, because the default `EngineConfig`
+//! leaves epoch interruption off.
 //!
 //! Not covered here (deferred per non-goals):
 //! - Latency-to-contain (that is E-Iso-8's job).

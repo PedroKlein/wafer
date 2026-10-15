@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(tracker.state(), NodeState::Running);
     }
 
-    /// P0.11 (A7): Recovering → Running measures elapsed time; returns 0
+    /// Recovering → Running measures elapsed time; returns 0
     /// when no start marker existed (defensive path).
     #[test]
     fn recovery_duration_measured_from_error_to_running() {

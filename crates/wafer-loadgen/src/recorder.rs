@@ -19,7 +19,7 @@
 //! pauses, `ts` keeps following the schedule, so the recorded latency includes
 //! the time messages waited to be sent.
 //!
-//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D4 / D9.
+//! See docs/rfcs/RFC-008-evaluation-harness.md (Decisions 4 and 9).
 
 use std::ffi::OsString;
 use std::fs;
@@ -605,7 +605,7 @@ pub struct SubscriberMetadata {
     /// Git SHA of the wafer tree that built this binary, if the environment
     /// injected it (via `WAFER_GIT_SHA` at run time or build-time `env!`).
     pub git_sha: Option<String>,
-    /// Host tag as passed by the eval scripts (P1.1 result contract).
+    /// Host tag as passed by the eval scripts (see RESULT-CONTRACT).
     pub host_tag: Option<String>,
     /// Exclusive upper sequence bound for the measured population.
     #[serde(default)]
@@ -1065,13 +1065,13 @@ pub fn now_ns() -> u64 {
 }
 
 // =============================================================================
-// Unit tests — TDD anchor for the P0.1 acceptance criteria.
+// Unit tests
 // =============================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// AC1: 10 ms injected latency shows up in the p99 percentile within
+    /// 10 ms injected latency shows up in the p99 percentile within
     /// [`HdrHistogram`] quantization tolerance (0.1% at 3 sig digits).
     #[test]
     fn record_ten_ms_latency_lands_in_p99_within_hdrhistogram_tolerance() {
@@ -1210,7 +1210,7 @@ mod tests {
         assert_eq!(rec.clock_steps(), 2, "50 ms between two clock reads is not a step");
     }
 
-    /// AC2: `latency.hdr` begins with the [`HdrHistogram`] V2 cookie prefix. The
+    /// `latency.hdr` begins with the [`HdrHistogram`] V2 cookie prefix. The
     /// V2 cookie's low byte encodes counter word-size (hdrhistogram-rs picks
     /// the smallest counter that fits), so only the upper 3 bytes are
     /// stable — but those 3 bytes are what makes `xxd latency.hdr | head -1`

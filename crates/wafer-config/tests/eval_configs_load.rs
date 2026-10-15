@@ -10,7 +10,7 @@
 //!
 //! Ownership: this test guards against the historical situation where
 //! `[pipeline.source]` etc. were silently ignored and every eval run started
-//! with zero nodes (the P0.13 reconciliation).
+//! with zero nodes.
 
 use std::path::{Path, PathBuf};
 

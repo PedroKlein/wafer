@@ -7,7 +7,7 @@
 //! RQ1 apples-to-apples: native filter agrees with the WIT
 //! `plugins/threshold-filter` contract on a mixed-temperature corpus.
 //!
-//! Regression test for A18 (Closed). The native comparator in
+//! Regression test. The native comparator in
 //! `pipeline-a-native.toml` used a byte-forward passthrough while WAFER
 //! and eKuiper both did a JSON-decode + range compare, biasing the
 //! WAFER/native isolation-tax ratio downward. `NativeFilter::range` must
@@ -48,7 +48,7 @@ fn envelope_with_temperature(temp: f64) -> RuntimeEnvelope {
     RuntimeEnvelope::from_string("corpus", format!(r#"{{"temperature":{temp}}}"#))
 }
 
-/// AC3 regression: 1000 mixed-temp records through the native path
+/// Regression: 1000 mixed-temp records through the native path
 /// produce the exact same Forward/Drop set as the WIT plugin contract
 /// (`value >= min && value <= max`).
 #[tokio::test]
@@ -130,7 +130,7 @@ async fn native_threshold_filter_malformed_drops() {
     assert_eq!(filter.evaluate(&non_numeric).await.unwrap(), FilterOutcome::Drop);
 }
 
-/// AC F1 launcher-wired regression: loading `eval/configs/pipeline-a-native.toml`
+/// Launcher-wired regression: loading `eval/configs/pipeline-a-native.toml`
 /// via the real config loader + launcher dispatch produces a working native
 /// `FilterNode`. If someone reverts the `load_filter_node_dispatch` native
 /// branch in `crates/wafer-core/src/orchestrator/launcher.rs`, this test

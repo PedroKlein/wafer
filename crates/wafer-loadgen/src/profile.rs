@@ -199,7 +199,7 @@ mod tests {
         }
     }
 
-    /// AC1: burst profile doubles rate for 10s every 60s.
+    /// Burst profile doubles rate for 10s every 60s.
     /// Verify via message-count ratio in burst vs steady windows.
     #[test]
     fn burst_rate_doubles_in_burst_window_2x_pm_5pct() {
@@ -238,7 +238,7 @@ mod tests {
         );
     }
 
-    /// AC2: ramp profile monotonically increases. Steady progression means
+    /// Ramp profile monotonically increases. Steady progression means
     /// the rate function itself is non-decreasing over time (up to `max_rate`).
     #[test]
     fn ramp_rate_is_monotonically_non_decreasing() {

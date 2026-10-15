@@ -263,7 +263,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
         sink.write(&orchestrator.handle(), metadata::WrittenAt::Launch, None);
     }
 
-    // Spawn memory sampler if WAFER_BENCH_OUTPUT_DIR is set (A19).
+    // Spawn memory sampler if WAFER_BENCH_OUTPUT_DIR is set.
     let bench_cancel = tokio_util::sync::CancellationToken::new();
     let mut bench_tasks = Vec::new();
     if bench_output_dir.is_some() {

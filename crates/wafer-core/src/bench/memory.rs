@@ -6,7 +6,7 @@
 //! (the `always_use_statm` feature), which costs the same however many
 //! mappings the process holds.
 //!
-//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D14.
+//! See docs/rfcs/RFC-008-evaluation-harness.md (Decision 14).
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn memory_stats_source() {
-        // AC1: read_rss_bytes uses `memory_stats` crate on macOS + Linux.
+        // read_rss_bytes uses the `memory_stats` crate on macOS and Linux.
         let rss = read_rss_bytes();
         assert!(rss.is_some(), "memory-stats crate should return Some on this platform");
         let rss = rss.unwrap();
