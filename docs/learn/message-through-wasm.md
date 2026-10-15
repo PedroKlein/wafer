@@ -93,7 +93,32 @@ On success the runner counts the message (`NodeMetrics::record_processed` in `cr
 
 ## Check yourself
 
-Trace one message in your own words. Name each ownership move, each deliberate clone, the exact point at which payload bytes may be copied, and why cancellation waits around the receive but not around the guest call.
+**1. When the source fans an envelope out to two destinations, what does the clone copy?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+Only the two short lineage strings. The header is behind an `Arc` and the payload is `Bytes`, so cloning bumps their reference counts instead of copying them.
+
+</details>
+
+**2. Where are payload bytes copied on their way into and out of a transform?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+Into the guest only if it reads the payload: `WaferBuffer::read` or `read_all` copies into a `Vec<u8>`, and Wasmtime copies that list into guest memory. The output `list<u8>` is always copied out of guest memory into a host `Vec<u8>`.
+
+</details>
+
+**3. Why can cancellation stop a transform node only between messages?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+The runner waits for input inside a `select!` that includes cancellation, but it awaits the guest call as a plain statement. A running call always completes, and cancellation is seen at the next receive.
+
+</details>
 
 ## Next
 

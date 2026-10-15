@@ -1,56 +1,19 @@
 # 07. Quality requirements
 
-These non-functional requirements define the current evaluation boundaries. `eval/canonical-matrix.json` is the executable experiment source; `eval/RESULT-CONTRACT.md` defines required evidence.
+WAFER's quality goals follow its three research questions. This page maps each
+goal to the architectural mechanisms that serve it. The measurable criteria are
+listed once in [non-functional requirements](../requirements/non-functional.md),
+with thresholds declared in `verdict_rules` of `eval/canonical-matrix.json`.
+The measurement method is in [RFC-008](../rfcs/RFC-008-evaluation-harness.md)
+and the [result contract](../../eval/RESULT-CONTRACT.md).
 
-## RQ1: performance on an edge gateway
-
-| ID | Requirement | Final method and criterion |
+| Quality goal | Architectural mechanisms | Requirements |
 |---|---|---|
-| NFR-PERF-1 | Bound the typed Wasm call cost. | E-Perf-4 pairs each WAFER pass-through run with a native pass-through run of the same payload size and run index and reports the difference in service time against a 50 µs reference, which is not a pass criterion. The path is in-process only, so the broker is not part of the measurement. |
-| NFR-PERF-2 | Compare matched Pipeline A at the target load. | E-Perf-1 uses 30 runs per SUT at 1,000 msg/s. Pooled loss must be at most 1 percent, mean achieved/offered at least 0.99, and median WAFER p95 divided by median eKuiper p95 at most 2.0. |
-| NFR-PERF-3 | Measure the co-located gateway-capacity envelope. | E-Perf-10 uses 30 runs for every system-rate pair on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s, plus up to six bracket rates per host derived from that host's capacity scout. Report each delivery ceiling, bracketed by tested rates, and the normalized p99 knee with MQTT support-path censoring. WAFER's tested-grid delivery ceiling must be at least 0.70 of eKuiper's across the whole bracketed ratio interval. |
-| NFR-PERF-4 | Report memory growth with pipeline depth. | E-Perf-6 reports steady RSS at depths 1, 3, 5 and 10 and the run-level slope, with no pass limit. |
-| NFR-PERF-5 | Compare architecture-specific isolation cost. | E-Perf-5 compares matched Raspberry Pi 5 and x86 Linux runs at the same source and method. |
-| NFR-PERF-6 | Measure startup cache-state effects. | E-Perf-9 compares Linux filesystem page-cache cold/warm conditions. The runtime disk compiled-component cache is disabled, so no AOT-cache criterion is derived from this experiment. |
+| Low per-message cost on an edge gateway (RQ1) | Wasm only on processing nodes, with native sources and sinks. A persistent Store per node. Call-scoped `borrow<buffer>` input and the refcounted `Arc<EnvelopeHeader>` + `Bytes` envelope. One bounded channel per destination with end-to-end backpressure. Relaxed atomic counters as the only always-on measurement. | NFR-PERF-1 to NFR-PERF-6 |
+| Fault containment (RQ2) | One Store per node with `StoreLimits` (defaults 64 MiB for Transform, 16 MiB for Filter and Router). Fuel and epoch interruption, each off unless configured, with the epoch ticker on its own OS thread. A trapped or interrupted Store is replaced from the cached `InstancePre`, never reused. WASI gets no preopened directories, and stdio, environment, inference, and outbound HTTP only by explicit grant. | NFR-ISO-1 to NFR-ISO-4 |
+| Live, stateless replacement (RQ3) | Watch-channel swap between messages, with compile and link off the worker pool. `validate()` and `init()` run before adoption and v1 is kept on failure. Transform canary rollback. Pending retries go to the DLQ instead of being replayed against v2. | NFR-SWAP-1 to NFR-SWAP-5 |
+| Accountable overload | A per-edge overflow policy (`slow`, `drop`, `dead-letter`) with a counter for every disposition, and a DLQ envelope that records the reason. | E-Backpressure |
 
-Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-1 is not a capacity experiment. E-Perf-10 uses tested-grid bounds without interpolation and cannot assign an exact SUT ceiling beyond a delivery-bad MQTT loopback point; a ratio interval that straddles 0.70 is `CENSORED`.
-
-E-Backpressure evaluates `slow`, `drop`, and `dead-letter` with separate equations over source-authoritative offered counts, delivered counts, and the applicable dropped/dead-lettered/DLQ-failure counters. No universal lossless criterion applies.
-
-## RQ2: fault containment
-
-| ID | Requirement | Final method and criterion |
-|---|---|---|
-| NFR-ISO-1 | Contain all six attack scenarios. | The offending node may recover or fail, but the process and healthy nodes remain available. |
-| NFR-ISO-2 | Limit healthy-branch impact. | E-Iso-7 uses independent source/sink populations and requires less than 1 percent branch-A throughput drop. |
-| NFR-ISO-3 | Bound guest memory. | Per-store limits are 64 MiB for Transform and 16 MiB for Filter and Router unless configured otherwise. |
-| NFR-ISO-4 | Interrupt infinite execution. | E-Iso-4 isolates epoch containment with its matrix-declared metering exception and records trap/recovery evidence. |
-
-Runtime fuel and epoch limits default to `None`. Ordinary final WAFER configs enable both explicitly; attack-specific exceptions prevent another mechanism from preempting the fault under test.
-
-## RQ3: stateless hot-swap disruption
-
-| ID | Requirement | Final method and criterion |
-|---|---|---|
-| NFR-SWAP-1 | Report repeated-swap pause. | E-Swap-1 reports sink-observed gaps and internal phases separately, with no pass limit. |
-| NFR-SWAP-2 | Preserve message accounting. | E-Swap-2 requires zero sequence loss and duplication. |
-| NFR-SWAP-3 | Bound output disruption against measured comparators. | E-Swap-3 has 30 runs per strategy, one action at measured t=60, and 200 actual-t0-aligned 100 ms buckets over `[-10,+10)`. The WAFER criterion uses the one-sided 95% upper bootstrap bound of the median dip, which must be below 5 percent with zero loss and duplication. The WAFER restart, eKuiper rule update (PUT with `triggered` false, then start) and eKuiper make-before-break dips are measured comparators, not assumed, and each arm reports a placebo dip 6 s before the action as a noise floor. |
-| NFR-SWAP-4 | Bound pause during a transient burst. | E-Swap-4 has 30 independent runs, source rates 1,000/2,000/1,000 over measured boundaries 55 and 65 seconds, and one stateless swap at 60 seconds. Across-run p95 sink gap must be below 100 ms with zero full-run loss and duplication. Primary `[0,120s)` buckets and the separate `[120s,130s)` drain must reconcile; after-drain receives fail closed. |
-| NFR-SWAP-5 | Recover from a process-time failure. | E-Swap-5 verifies bounded rollback and continuity within the configured canary window. |
-
-A sink-observed gap, HTTP duration, and internal swap phases are separate measurements. No state-preservation claim is made.
-
-## Evidence rules
-
-- Complete process runs are the independent unit for N=30 experiments.
-- Bootstrap confidence intervals and non-parametric effects use run-level values.
-- Canonical analysis rejects incomplete, dirty, mixed-SHA, throttled, malformed, or unapproved batches.
-- Raspberry Pi 5 PMIC telemetry is an internal-rail proxy, not total board or USB-C input power.
-- Scout, diagnostic-batch, laptop, and synthetic fixture data remain diagnostic and are not pooled with final evidence.
-
-## Supporting documents
-
-- [RFC-008 evaluation harness](../rfcs/RFC-008-evaluation-harness.md)
-- [Result contract](../../eval/RESULT-CONTRACT.md)
-- [Pi 5 experiment runbook](../eval/pi5-experiment-runbook.md)
-- [Metering and cache ADR](../adr/0013-aot-cache-and-metering.md)
+The final evaluation enables fuel and epoch limits explicitly in every ordinary
+WAFER config. Only the metering ablation (E-Perf-7) and the attack stimuli that
+must not be pre-empted by another mechanism differ.

@@ -45,7 +45,7 @@ The rule update with its start and the rule list, which the harness calls now, w
 
 Three things did change. 2.1.0 opened an idle MQTT control-channel client to the local broker at startup, and 2.1.5 does not. The packaged `connections/connection.yaml` no longer defines sample connections, which Pipeline A never referenced. 2.1.5 also presizes some per-message maps in the projection path, so its numbers are not interchangeable with earlier 2.1.0 diagnostics.
 
-Results describe eKuiper 2.1.5 with this configuration, not a later release line or a tuned deployment. Before each host's final batch, the [runbook](../eval/pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch) re-runs the smoke test and a short series of each E-Swap-3 arm under load on that host.
+Results describe eKuiper 2.1.5 with this configuration, not a later release line or a tuned deployment. Before each host's final batch, the [runbook](../eval/experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch) re-runs the smoke test and a short series of each E-Swap-3 arm under load on that host.
 
 ## Pipeline A
 

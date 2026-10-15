@@ -9,8 +9,9 @@
 > `crates/wafer-core/tests/hotswap_success.rs`, which swaps an idle node and a
 > node under 1,000 msg/s).
 > Five-phase `SwapTimeline` (`compile` / `instantiate` / `signal` / `ack`
-> / `convergence`) is reported through the API. ACK-phase
-> `init()` is called on the new instance. Production Wasm nodes
+> / first post-replacement local outcome) is reported through the API. The
+> runner calls `validate()` and `init()` on the new instance before adopting
+> it and keeps v1 if either fails. Production Wasm nodes
 > run guest `validate()` and `init()` before the first message.
 > Config-only warm swap via `cached_pre()` is served by
 > `POST /api/v1/nodes/{id}/reconfigure`. The API dispatches per
@@ -174,4 +175,5 @@ Three native baselines: Layer 0 (single-flow, inline calls — floor), Layer 1 (
 - The orchestrator retains `watch_senders` after spawn for signaling hot-swaps — matching D12's design.
 - The three per-type runner loops (D3) are implemented in `crates/wafer-core/src/runner/` with the shared `select!` + watch-check pattern described in D6.
 - ADR-0003's `RoutingController` is absent from the codebase; the watch-channel model fully replaces it.
-- Beyond the differences listed in the banner at the top, code matches the decisions.
+- D8: `DlqReason` (`crates/wafer-core/src/runner/error_policy.rs`) also has `TimedOut`, `Trapped` (with the trap kind), and `Unrecoverable`, so when a DLQ is configured, a message lost to a trap or an `unrecoverable` error is dead-lettered with its cause.
+- Apart from the banner and D8, code matches the decisions.

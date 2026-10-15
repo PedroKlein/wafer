@@ -43,7 +43,7 @@ What becomes easier or more difficult to do because of this change?
 | ---- | ----- | ------ | ---- | ---------- |
 | [0001](0001-wasmtime-runtime.md) | Use Wasmtime as WASM Runtime | Accepted | 2026-02-14 | — |
 | [0002](0002-spsc-bounded-queues.md) | SPSC Bounded Queues with Backpressure | Amended | 2026-02-14 | — (amended after [RFC-005](../rfcs/RFC-005-orchestrator.md)) |
-| [0003](0003-hot-swap-mechanism.md) | Watch-Channel Between-Messages Hot-Swap | Implemented | 2026-07-12 | [RFC-005](../rfcs/RFC-005-orchestrator.md) |
+| [0003](0003-hot-swap-mechanism.md) | Drain-and-Flip Hot-Swap | Superseded by [ADR-0012](0012-watch-channel-hot-swap.md) | 2026-02-14 | — |
 | [0004](0004-native-sources-sinks.md) | Native Rust Sources and Sinks | Accepted | 2026-02-17 | — |
 | [0005](0005-registry-package-support.md) | Registry Package Support | Accepted | 2026-02-17 (updated) | — |
 | [0006](0006-workspace-architecture.md) | Workspace Architecture for Runtime Control Plane | Accepted | 2026-02-28 | — |
@@ -52,7 +52,7 @@ What becomes easier or more difficult to do because of this change?
 | [0009](0009-filter-as-first-class-node.md) | Filter as First-Class Node Type | Accepted | 2026-07-06 | [RFC-003](../rfcs/RFC-003-node-types.md) |
 | [0010](0010-merge-as-host-topology.md) | Merge as Host-Native Topology | Accepted | 2026-07-06 | [RFC-003](../rfcs/RFC-003-node-types.md) |
 | [0011](0011-arc-header-envelope.md) | `Arc<EnvelopeHeader>` + Bytes Payload + Lineage Runtime Envelope | Accepted | 2026-07-06 | [RFC-003](../rfcs/RFC-003-node-types.md) |
-| [0012](0012-watch-channel-hot-swap.md) | Watch-Channel Between-Messages Hot-Swap | Accepted | 2026-07-12 | [RFC-005](../rfcs/RFC-005-orchestrator.md) |
+| [0012](0012-watch-channel-hot-swap.md) | Watch-Channel Between-Messages Hot-Swap | Implemented | 2026-07-12 | [RFC-005](../rfcs/RFC-005-orchestrator.md) |
 | [0013](0013-aot-cache-and-metering.md) | Compiled-component cache and per-node metering | Implemented with evaluation clarification dated 2026-09-04 | 2026-07-12 | [RFC-007](../rfcs/RFC-007-performance-optimizations.md) |
 | [0014](0014-guest-sdk-design.md) | Guest SDK — `thread_local!` + `RefCell` State Pattern, No-Unsafe Plugin Ergonomics | Accepted | 2026-07-12 | [RFC-006](../rfcs/RFC-006-plugin-sdk.md) |
 | [0015](0015-command-runner-mise.md) | Adopt mise as Command Runner | Accepted | 2026-07-19 | — |
@@ -62,9 +62,7 @@ What becomes easier or more difficult to do because of this change?
 
 Titles, statuses, and dates are taken from each ADR's own header; the ADR's
 Status line carries any detail. ADR-0005 has no original date, only its
-2026-02-17 update. ADR-0003 and ADR-0012 share a title: ADR-0003 records the
-mechanism choice (it replaced the original 2026-02-14 drain-and-flip ADR in
-place), and ADR-0012 records the watch-channel implementation tactic.
+2026-02-17 update.
 
 ## Naming Convention
 
@@ -85,8 +83,9 @@ Proposed ──► Accepted ──► Implemented / Amended
 - **Proposed**: Decision is drafted, awaiting review
 - **Accepted**: Decision is approved and active
 - **Implemented**: Accepted, and the ADR records that its implementation is
-  complete (used by ADR-0003, ADR-0008, ADR-0013)
+  complete (used by ADR-0008, ADR-0012, ADR-0013)
 - **Amended**: Accepted, with a later amendment section that changes part of
   the decision (used by ADR-0002)
 - **Deprecated**: Decision is no longer relevant (e.g., feature removed)
-- **Superseded**: Replaced by a newer decision (link to replacement)
+- **Superseded**: Replaced by a newer decision (link to replacement; used by
+  ADR-0003)

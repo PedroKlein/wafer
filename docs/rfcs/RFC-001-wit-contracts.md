@@ -107,19 +107,19 @@ Four packages adopted:
 - **RFC-002** (host-runtime) — defines the host-side `RuntimeEnvelope` representation that implements the WIT contracts designed here. A3 amends the envelope payload from `list<u8>` to `Bytes`.
 - **RFC-003** (node-types) — A1 removes the Joiner world defined in Decision 4; A2 removes the `process-outcome` wrapper from Decision 2, making transform return `result<output-message, process-error>` directly.
 - **RFC-005** (orchestrator) — hot-swap mechanism that relies on the call-scoped buffer lifecycle (Decision 7).
-- **RFC-006** (plugin-sdk) — guest SDK providing `from_input()` helpers referenced in Decision 6.
+- **RFC-006** (plugin-sdk): the guest SDK, whose `output_from!` macro copies the input's identity fields into the output (Decision 6).
 
 ## Implementation Notes
 
 - **Package structure:** Implemented as one `wafer:pipeline@0.1.0` package across five WIT files: `wit/pipeline-types.wit`, `wit/pipeline-node.wit`, `wit/pipeline-routing.wit`, `wit/pipeline-host.wit`, and `wit/worlds.wit` (the `transform-node`, `filter-node`, `router-node`, and `inference-node` worlds).
 - **Decision 1 (envelope shape):** Implemented verbatim — `message` with `borrow<buffer>` and `output-message` with `list<u8>` in `wit/pipeline-types.wit`.
 - **Decision 2 (return type):** Amended by RFC-003 §A2. Current implementation: `process: func(input: message) -> result<output-message, process-error>` (no `process-outcome` wrapper). See `wit/pipeline-node.wit`.
-- **Decision 3 (router):** Implemented verbatim in `wit/pipeline-routing.wit`. `route(input: message) -> result<list<port-id>, process-error>`.
+- **Decision 3 (router):** Implemented in `wit/pipeline-routing.wit` as `route(input: message) -> result<list<port-id>, process-error>`, plus an `output-ports` export that the host calls after `init()` to reject configured edges whose port the router does not declare.
 - **Decision 4 (joiner):** Removed per RFC-003 §A1. No joiner interface or `joiner-node` world exists. Fan-in is implicit host topology (multi-producer mpsc).
 - **Decision 5 (payload type):** Implemented verbatim — `list<u8>` plus `content-type: string` on the message record.
 - **Decision 7 (buffer resource):** Implemented verbatim — `buffer { size, read, read-all }` in `wit/pipeline-types.wit`.
 - **Decision 8 (filter):** Implemented verbatim — `evaluate(input: message) -> result<bool, process-error>` in `wit/pipeline-node.wit`.
 - **F2 (error categories):** Implemented verbatim — five-variant `process-error` in `wit/pipeline-types.wit`.
-- **F7 (init config):** Implemented verbatim — `node-config { id: string, config: string }` in `wit/pipeline-node.wit`.
+- **F7 (init config):** Implemented in `wit/pipeline-node.wit` with one addition: `node-config` also carries `plugin-version: string`, empty unless the node sets `plugin_version`.
 - **F9 (host imports):** Implemented — `wafer:pipeline/logging` with `log(level: log-level, message: string)` in `wit/pipeline-host.wit`.
 - **F10 (inference node):** Restored after the single-package regression — `inference-node` in `wit/worlds.wit` exports current lifecycle/transform interfaces and imports the pinned `wasi:nn` package. The host registers those imports only for a Wasm Transform with `allow_inference=true`.

@@ -59,4 +59,4 @@ python3 eval/scripts/lib/canonical_runner.py \
   --experiments e-swap-1,e-swap-3,e-swap-4
 ```
 
-See [RFC-008](../rfcs/RFC-008-evaluation-harness.md), [the result contract](../../eval/RESULT-CONTRACT.md), and [the Pi 5 runbook](../eval/pi5-experiment-runbook.md).
+See [RFC-008](../rfcs/RFC-008-evaluation-harness.md), [the result contract](../../eval/RESULT-CONTRACT.md), and [the experiment runbook](../eval/experiment-runbook.md).

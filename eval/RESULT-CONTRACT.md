@@ -2,18 +2,18 @@
 
 Every WAFER experiment run produces one self-contained raw leaf beneath the
 selected results layout. Repository-local tests use
-`eval/results/<experiment-id>/<host-tag>-<UTC-timestamp>/`; campaign runs use
+`eval/results/<experiment-id>/<host-tag>-<UTC-timestamp>/`; evaluation batches use
 `<results-root>/raw/<experiment-id>/<host-tag>-<batch-id>/...`. This document is
 the authoritative manifest for both layouts.
 
 ## Path convention
 
-Repository-local tests retain the historical raw root:
+Repository-local tests write under `eval/results/`:
 
 ```
 eval/results/
 └── <experiment-id>/                    ← e.g. e-perf-4, e-swap-1, dry-run
-    └── <host-tag>-<UTC-timestamp>/     ← e.g. shakedown-macos-2026-07-21T14-30-15Z
+    └── <host-tag>-<UTC-timestamp>/     ← e.g. rpi5-2026-07-21T14-30-15Z
         ├── config.toml
         ├── metadata.json
         ├── stdout.log
@@ -39,7 +39,7 @@ eval/results/
         └── branch-b/                   ← E-Iso-7 only; same branch-local files
 ```
 
-Campaign runs pass an explicit results root. The approved volume layout is:
+Evaluation batches pass an explicit results root. The approved volume layout is:
 
 ```
 <results-root>/
@@ -54,7 +54,7 @@ The runner accepts `--results-root PATH` or `WAFER_RESULTS_ROOT`; a CLI value wi
 No platform path is inferred. Each host writes to its own root (`/mnt/wafer-results`
 on the Pi), and approval and analysis read one root that holds every host's copied
 results; see the
-[runbook](../docs/eval/pi5-experiment-runbook.md#set-the-hosts-results-root). An
+[runbook](../docs/eval/experiment-runbook.md#set-the-hosts-results-root). An
 explicit root must already exist and be a mounted filesystem before the runner
 creates any managed directory. Linux bind mounts count when the exact root appears in
 `/proc/self/mountinfo`; an ordinary child directory on that filesystem does not.
@@ -99,18 +99,18 @@ shared sample identity, machine evidence class `final`, and
 one admitted, thesis-eligible source leaf (a clean pass or a system outcome). Alias mappings must be acyclic; aliases may
 not target rejected, diagnostic, or candidate evidence. Copies, symlinks, and
 hardlinks are not alias mechanisms. `final` is the machine value; prose names its
-admitted analytical class `canonical-primary` or `final admitted`. Historical
-repository-local result trees remain unchanged.
+admitted analytical class `canonical-primary` or `final admitted`.
 
-**Host tags** (explicit whitelist — the harness rejects anything else):
+**Host tags** (the harness rejects any other):
 
-- `shakedown-macos` — MacBook laptop shakedown.
-- `rpi5` — Raspberry Pi 5 4 GB canonical run.
-- `jetson` — Jetson Orin Nano replication run.
-- `x86` — x86-64 Linux replication run.
+- `rpi5`: Raspberry Pi 5 4 GB, the primary host.
+- `jetson`: Jetson Orin Nano replication host.
+- `x86`: x86-64 Linux replication host.
+- `shakedown-macos`: development-machine runs; the default of `run-experiment.sh`
+  and `collect-results.sh` when no `--host` or `WAFER_HOST_TAG` is given.
 
-**Timestamp format**: `YYYY-MM-DDTHH-MM-SSZ` — UTC, colons replaced with
-hyphens so the path is `mv`-safe on every filesystem.
+**Timestamp format**: `YYYY-MM-DDTHH-MM-SSZ`, UTC with colons replaced by
+hyphens so the path is safe on every filesystem.
 
 ## Attempts and retries
 
@@ -249,7 +249,7 @@ before reading. The matrix below is authoritative:
 | `host-sched.csv` | Same as `cpu-cores.csv` | `eval/scripts/lib/proc_telemetry.py` | One row per second of system-wide scheduler and memory-pressure counters: `timestamp_ns,ctxt,processes,procs_running,procs_blocked,mem_available_bytes,psi_cpu_some_avg10,psi_memory_some_avg10,psi_memory_full_avg10,psi_io_some_avg10,psi_io_full_avg10,sampler_cpu_ms`. `ctxt` and `processes` are cumulative; PSI columns are empty on kernels without `/proc/pressure`; `sampler_cpu_ms` is the CPU time the sampler itself spent since its previous row, so every leaf carries its own overhead evidence. |
 | `sut-processes.csv` | Same as `cpu-cores.csv` | `eval/scripts/lib/proc_telemetry.py` | One row per second per tracked process (`wafer`, `wafer-runtime`, `wafer-loadgen`, `kuiperd`, `mosquitto`, matched on `/proc/<pid>/comm`): `timestamp_ns,pid,comm,utime,stime,minflt,majflt,voluntary_ctxt_switches,nonvoluntary_ctxt_switches,threads,rss_bytes,cpus_allowed_list`. Counters are cumulative for the process's lifetime. The two context-switch columns sum every thread in `/proc/<pid>/task`; a thread that exits keeps its last-seen counts in the total, so they never decrease, but a thread that starts and exits between two samples, or before the sampler first sees the process, is not counted. Support processes are recorded next to the SUT so the leaf shows where the broker and the load generator ran. |
 | `host-sidecar.json` | Same as `cpu-cores.csv` | `eval/scripts/lib/proc_telemetry.py` | Written when the sampler stops: `schema_version`, `sampler`, `interval_secs`, `started_unix_epoch_ns`, `finished_unix_epoch_ns`, `samples`, `sampler_affinity` (the CPU list it pinned itself to, the support cpuset under the canonical runner), `sut_cpus`, `sampler_cpu_seconds` and `sampler_max_rss_bytes` (its total cost), `clock_ticks_per_second`, `page_size_bytes`, `cpu_count`, `boot_id`, `kernel_cmdline`, `uptime_secs_at_start`, `tracked_comms`, `clocksource` (the kernel's current clocksource, null if unreadable) and `tsc_flags` (on x86, whether `/proc/cpuinfo` lists `constant_tsc`, `nonstop_tsc` and `tsc_reliable`; null on other hosts). If the sampler dies it writes `host-sidecar-error.json` (`error`, `timestamp_ns`) instead; the four files are supplementary host evidence, so their absence does not reject a leaf. |
-| `published.csv`, `received.csv` | Historical E-Perf-10 diagnostics only | `wafer-loadgen` opt-in tracing | Raw publisher/subscriber timestamp and sequence samples retained for v11-v17 compatibility. Final E-Perf-10 rejects these mandatory traces and uses bounded summaries. |
+| `published.csv`, `received.csv` | Local diagnostics only | `wafer-loadgen publish`/`subscribe --trace-file` | Per-message sequence and timestamp traces. The canonical runner never requests them, and the verifier rejects them in an E-Perf-10 leaf. |
 | `publisher-summary.json` | Every measured MQTT publisher: final E-Perf-1 to E-Perf-3, E-Perf-10 and E-Swap-3, and the MQTT candidate and diagnostic runs | `wafer-loadgen publish` | `schema_version`, bounded `intended`, `rejected`, `enqueued`, `acked`, and `unacked_at_exit` counters plus the scheduled `measurement_duration_ns`. `intended = rejected + enqueued` and `enqueued = acked + unacked_at_exit` are mandatory: `enqueued` is what was handed to the MQTT client, `acked` is what the broker acknowledged (QoS 1 PUBACK), and `unacked_at_exit` is what was still unacknowledged when the 5 s drain window after a completed schedule closed (a run stopped by a signal skips the drain). `connects` counts successful CONNACKs and `connection_errors` counts event-loop errors; the clock starts only after the first CONNACK (10 s timeout, then the run fails without a summary). The verifier rejects `connects != 1` or `unacked_at_exit != 0`, and loss downstream of the publisher is `acked - received_unique`. `published` and `errors` repeat `intended` and `rejected` under their older names. `elapsed_ms` and `actual_rate` are the wall time the schedule took and `intended` divided by it; `deadline_misses` counts messages whose hand-off to the client ended after the next message was due; `hotswap_triggered_at_secs` is the swap offset for the `hotswap-trigger` profile and null otherwise. `source_lag_ns` (`count`, `p50`, `p99`, `p999`, `max`) is how late each message was handed to the MQTT client relative to its scheduled time; payload `ts` is the scheduled time, so this lag is part of the measured latency. `exit_reason` is `duration` when the schedule ran to its end, `sigterm`/`sigint` when a signal stopped it, or `broker-lost` when the MQTT session ended for good mid-run; the counters then cover the messages offered before the stop, and the verifier rejects the run. A second signal exits at once without a summary. |
 | `subscriber-metadata.json` | Final E-Perf-10 and external-MQTT experiments | `wafer-loadgen subscribe` | Bounded receive, duplicate, ignored-warmup, parse, latency, and sequence totals: `broker`, `topic`, `started_at_ns`, `ended_at_ns`, `git_sha`, `host_tag`, `sequence_end_exclusive`, `total_messages` (every message read), `total_recorded` (the `latency.hdr` population), `ignored_sequence_count` (warmup), `parse_errors`, `latency_min_ns`, `latency_max_ns`, `latency_mean_ns`, `latency_p50_ns`, `latency_p95_ns`, `latency_p99_ns`, `latency_p999_ns`, the histogram range `histogram_lowest_ns`, `histogram_highest_ns`, `histogram_sig_digits`, and `sequence` (`expected`, `total_received`, `received_unique`, `total_gaps` (missing, tail included when `sequence_end_exclusive` is set), `total_duplicates`, `out_of_order`, `out_of_range`, plus bounded `gap_ranges` and `duplicate_seqs` examples and `examples_truncated`). The HDR count and received-event population must match. `negative_latency_count` and `above_highest_latency_count` count samples recorded at a histogram bound; `clock_steps` counts wall-clock steps larger than 100 ms seen between received messages (the gap between the wall clock and the monotonic clock changed). Latency subtracts the publisher's wall-clock schedule from the subscriber's wall-clock receive time, so a step shifts every later sample; the verifier rejects the run when any of the three is non-zero. `exit_reason` is `total-messages` (every distinct number up to `--total-messages` arrived), `sigterm`, `sigint`, or `eof`. `status` is `complete`, or `partial` when `interval-latency.json` or `throughput-buckets.json` overflowed its bound or failed its checks; `partial_reasons` names each failure. A partial run keeps `latency.hdr`, `sequence.csv` and this file, leaves out the failed artifact, exits non-zero, and is rejected by the verifier. Written last, so its presence means the other subscriber artifacts are complete. A second SIGTERM or SIGINT exits at once without flushing. |
 | `export-errors.json` | Any run with a `BenchSink` output directory, only when an artifact failed | `BenchSink` | `{"schema_version":1,"errors":[{"artifact":…,"error":…}]}`. `BenchSink` writes `sequence.csv`, `measurement-window.json`, `swap_timeline.json`, `latency.hdr`, `service.hdr`, `source-lag.hdr` and `throughput.csv` first and the derived artifacts after, and one failed artifact does not stop the rest. Its presence rejects the leaf. |
@@ -257,7 +257,6 @@ before reading. The matrix below is authoritative:
 | `invocation-receipt.json`, `loadgen-profile.toml` | Capacity scout, E-Perf-10 and E-Perf-Capacity-Knee | `canonical_runner.py` | The capacity invocation (system, config, controlled factors, subscriber topic, publisher and subscriber commands) and a copy of the load-generator profile it used. |
 | `resource-usage.csv` | E-Perf-10 and E-Perf-Capacity-Knee | `canonical_runner.py` | One-second SUT samples: wall-clock timestamp, aggregate process CPU ticks, RSS bytes, and process count. MQTT loopback records the explicit no-SUT zero baseline. |
 | `process-audit.json` | E-Perf-10 and E-Perf-Capacity-Knee | `canonical_runner.py` | Active SUT PID, process affinity, exclusivity, and allowed CPU set captured before measurement. |
-| `rate-sweep.json` | Historical E-Perf-10 diagnostics only | Earlier `canonical_runner.py` versions | Legacy trace-backed run summary, always `thesis_evidence=false`. It remains readable but is not accepted as a final-capacity leaf. |
 | `throughput-buckets.json` | Final E-Swap-3 and E-Swap-4 | `wafer-loadgen subscribe` / `BenchSink` / `canonical_runner.py` | Contiguous 100 ms output-rate buckets with unique/event/duplicate counts. E-Swap-3 bins exactly -10 s through +10 s around the actual disruption event. E-Swap-4 keeps 1,200 source-origin primary buckets over `[0,120s)` and a separate 100-bucket drain series over `[120s,130s)`, with O(1) after-drain evidence. Unix-epoch values are labeled for source/sink or cross-process alignment only. |
 | `throughput-buckets-10ms.json` | Final E-Swap-3 and E-Swap-4 | `wafer-loadgen subscribe` / `BenchSink` | Exactly 400 contiguous 10 ms buckets over `[-2s,+2s)` around actual `t0`, plus 40 nested actual-t0-aligned 100 ms parent buckets. Both levels carry unique/event/duplicate counts and reconcile exactly. E-Swap-3 parent buckets also match the canonical event-window slice; E-Swap-4 retains its separate source-origin primary/drain series as the loss-accounting authority. No message identity or timestamp trace is retained. |
 | `disruption-timeline.json` | Final E-Swap-3 | `canonical_runner.py` | Strategy, actual Unix-epoch action start/end for cross-process alignment, monotonic scheduling/duration labels, the scheduled t=60 target, measured offset, signed alignment error, and a 10 ms maximum alignment tolerance. This is the single retained runner-owned final action timeline for E-Swap-3. |
@@ -299,13 +298,11 @@ before reading. The matrix below is authoritative:
 - `canonical_runner.py` owns E-Perf-4 `service-percentiles.json`, summarised from the runtime's `service.hdr` with `wafer-loadgen hdr-summary`.
 - `wafer-loadgen subscribe` owns `subscriber-metadata.json`,
   `latency.hdr` (E2E path), `sequence.csv`, bounded `interval-latency.json`,
-  bounded `throughput-buckets.json`, and historical opt-in `received.csv` traces.
-- `wafer-loadgen publish` owns `publisher-summary.json` and historical opt-in
-  `published.csv` traces.
+  and bounded `throughput-buckets.json`.
+- `wafer-loadgen publish` owns `publisher-summary.json`.
 - `canonical_runner.py` owns final E-Perf-10 `capacity-run.json`,
-  `resource-usage.csv`, `process-audit.json`, and the composed `interval-metrics.json`;
-  historical diagnostics retain
-  `rate-sweep.json`. It also owns final E-Swap-3 `disruption-timeline.json`,
+  `resource-usage.csv`, `process-audit.json`, and the composed `interval-metrics.json`.
+  It also owns final E-Swap-3 `disruption-timeline.json`,
   `disruption-analysis.json`, `rule-update.json` and `rule-replacement.json`, final
   E-Swap-4 `swap-actual-t0.json`
   and `burst-timeline.json`, E-Backpressure `backpressure.json`,
@@ -836,7 +833,7 @@ authoritative through cross-compilation.
 ```json
 {
   "experiment": "e-perf-4",
-  "host_tag": "shakedown-macos",
+  "host_tag": "rpi5",
   "generated_at": "2026-07-21T14:30:15Z",
   "started_at": "2026-07-21T14:30:15Z",
   "finished_at": "2026-07-21T14:32:47Z",
@@ -1108,7 +1105,7 @@ Fields are omitted when not applicable:
   pipelines (RFC-008 §D5 baselines).
 
 `config_sha256` is the digest of the effective `config.toml` bytes as
-loaded by the runtime — reproducibility hinge for notebook cross-references.
+loaded by the runtime.
 
 ## Idempotency and safety
 
@@ -1117,13 +1114,5 @@ loaded by the runtime — reproducibility hinge for notebook cross-references.
   suffixed second timestamp.
 - **Never `sudo`** on the development machine. The Pi host setup how-to explicitly marks its privileged device configuration commands.
 - **Never `rm -rf`** on a result directory. Cleanup is the operator's job.
-- **Native broker on Pi 5**: canonical Pi runs pass `--broker 127.0.0.1:1883`; the harness never starts Docker there.
-- **Development fallback only**: when no broker is supplied, `run-experiment.sh` may auto-start a labelled Mosquitto container for laptop shakedowns.
-
-## Reproducibility hinge
-
-Every artefact carries the run's `metadata.json.config_sha256` as its
-provenance root. Notebooks that plot a result MUST read `metadata.json`
-before reading the artefact, and MUST assert the SHA256 against the
-notebook cell that produced the config revision. This is how P7.1
-achieves reproducibility across shakedown and canonical runs.
+- **Native broker on evaluation hosts**: canonical runs pass `--broker 127.0.0.1:1883`; the harness never starts Docker there.
+- **Development fallback only**: when no broker is supplied, `run-experiment.sh` may auto-start a labelled Mosquitto container for development-machine runs.

@@ -7,8 +7,9 @@ credentials, so the broker must accept anonymous clients on plain TCP.
 ## Prerequisites
 
 - Docker, installed and running.
-- The plugins built as in [Getting Started](getting-started.md) (only
-  `examples/dag-mqtt.toml` needs one: `pass-through`).
+- A Rust toolchain that builds WAFER, as in [Getting Started](getting-started.md).
+- For `examples/dag-mqtt.toml`, the `pass-through` plugin:
+  `plugins/build-plugins.sh pass-through`.
 - Optional: `mosquitto_pub` and `mosquitto_sub` (`mosquitto-clients` on
   Debian/Ubuntu, `brew install mosquitto` on macOS).
 

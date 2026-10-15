@@ -152,7 +152,7 @@ vcgencmd get_throttled
 
 ## 9. Mount the results root
 
-The Pi writes its evaluation batches to its own results root, the exFAT volume labeled `WAF_RESULTS` (the label fits exFAT's 11 UTF-16 code-unit limit) mounted at `/mnt/wafer-results`. Set `WAFER_RESULTS_ROOT=/mnt/wafer-results` in the shell that runs the batches. The runner writes `raw/` and `manifests/` there, with every stored path relative to the root, and refuses a root that is not a mounted filesystem or a Linux bind mount. The Jetson and x86 hosts keep their own roots; [Set the host's results root](pi5-experiment-runbook.md#set-the-hosts-results-root) and [Bring the host results together](pi5-experiment-runbook.md#bring-the-host-results-together) in the runbook describe the arrangement.
+The Pi writes its evaluation batches to its own results root, the exFAT volume labeled `WAF_RESULTS` (the label fits exFAT's 11 UTF-16 code-unit limit) mounted at `/mnt/wafer-results`. Set `WAFER_RESULTS_ROOT=/mnt/wafer-results` in the shell that runs the batches. The runner writes `raw/` and `manifests/` there, with every stored path relative to the root, and refuses a root that is not a mounted filesystem or a Linux bind mount. The Jetson and x86 hosts keep their own roots; [Set the host's results root](experiment-runbook.md#set-the-hosts-results-root) and [Bring the host results together](experiment-runbook.md#bring-the-host-results-together) in the runbook describe the arrangement.
 
 Do not format or relabel a device from this guide. If the volume ever needs formatting, confirm the exact device identity first. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
 
@@ -167,7 +167,7 @@ cd ~/wafer
 ./eval/scripts/run-rpi5-validation.sh
 ```
 
-Preflight must report zero failures. The smoke command writes its result under the repository-local `eval/results/e-smoke/` and runs the result-contract verifier against it; the validation command writes under `eval/results/e-val-1/`. Evaluation batches write to the results root instead. Continue with the [runbook](pi5-experiment-runbook.md).
+Preflight must report zero failures. The smoke command writes its result under the repository-local `eval/results/e-smoke/` and runs the result-contract verifier against it; the validation command writes under `eval/results/e-val-1/`. Evaluation batches write to the results root instead. Continue with the [runbook](experiment-runbook.md).
 
 ## Final checklist
 

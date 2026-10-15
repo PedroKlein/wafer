@@ -112,14 +112,38 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 
 ## Limits to keep in mind
 
-- Shutdown does not guarantee that every in-flight message completes; only sinks drain their own queue.
 - The guest `close()` export is never called, on shutdown or anywhere else.
 - A dead-letter send that fails because the DLQ is full or closed is counted as `dlq_lost`; the message is gone. The validator rejects a `dlq` action when no `[dead_letter]` sink is configured.
 - A `teardown` exit does not move the node's reported state to `Error`.
 
 ## Check yourself
 
-Explain three separate endings: natural channel closure, cooperative cancellation, and deadline-driven task abort. Then identify what each node type cleans up, why a running guest call is not cancelled, and where a typed guest error becomes a retry, DLQ entry, recovery attempt, or pipeline-wide shutdown.
+**1. Name the three ways a run can end.**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+Natural completion: the source returns `Ok(None)`, its senders drop, and end of input cascades downstream. Cooperative cancellation: the pipeline token is cancelled and each loop leaves at its next `select!`. Deadline abort: tasks still running after the 5 s window are aborted by `JoinSet::shutdown`.
+
+</details>
+
+**2. What does each kind of node clean up on its way out?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+A source calls `close()`. Transform, Filter, and Router loops flush buffered retries to the DLQ. A sink drains messages already in its queue, then calls `flush()` and `close()`.
+
+</details>
+
+**3. A Transform returns `bad-input` and its configured action is `teardown`. What happens to the run?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+The runner leaves its loop with `Err(policy_teardown())`. `spawn_node_task` sees the `Err` and cancels the pipeline token, the other nodes shut down cooperatively, and the process exits with status 3.
+
+</details>
 
 ## Next
 

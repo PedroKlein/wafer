@@ -42,24 +42,17 @@ Percentile summaries are never presented as an empirical CDF.
 
 `test_notebook_execution.py` executes every notebook against both fixture states; `test_focused.py` checks labels.
 
-## Run an explicit canonical batch
+## Canonical batch resolution
 
-Approve the finished batch first (`mise run approve-batch`, see the [runbook](../../../docs/eval/pi5-experiment-runbook.md#approve-the-finished-batch)). Then install the analysis environment, export the batch identifier once, and execute a notebook:
+To execute the notebooks against an approved batch, follow
+[Regenerate the analysis](../../../docs/eval/experiment-runbook.md#regenerate-the-analysis)
+in the runbook.
 
-```bash
-cd eval/analysis
-uv sync
-export WAFER_EVAL_BATCH_ID=<batch-id>
-export WAFER_ANALYSIS_OUTPUT_DIR=figures/final-<batch-id>
-uv run jupyter nbconvert --execute --to notebook --output-dir executed \
-  notebooks/09-saturation.ipynb
-```
-
-`WAFER_EVAL_BATCH_ID` resolves `$WAFER_RESULTS_ROOT/raw/<experiment>/rpi5-<batch-id>/` (`eval/results/<experiment>/rpi5-<batch-id>/` when `WAFER_RESULTS_ROOT` is unset). Canonical resolution verifies the batch against its entry in `eval/final-batches.json`, Raspberry Pi 5 provenance, final-evidence labeling, a clean source, zero throttling, one admitted completion receipt per unit (a clean pass or a system outcome), one source SHA, every required artifact, and the exact condition/run population declared by `eval/canonical-matrix.json`. It never selects the latest batch implicitly.
+`WAFER_EVAL_BATCH_ID` resolves `$WAFER_RESULTS_ROOT/raw/<experiment>/rpi5-<batch-id>/` (`eval/results/<experiment>/rpi5-<batch-id>/` when `WAFER_RESULTS_ROOT` is unset). Canonical resolution verifies the batch against its entry in `eval/final-batches.json`, host provenance, final-evidence labeling, a clean source, zero throttling, one admitted completion receipt per unit (a clean pass or a system outcome), one source SHA, every required artifact, and the exact condition/run population declared by `eval/canonical-matrix.json`. It never selects the latest batch implicitly.
 
 `WAFER_EVAL_BATCH_ID=jetson-<batch-id>` or `x86-<batch-id>` selects that host's batch instead. Each host has its own entry in `eval/final-batches.json`, and every leaf must carry that host's `host_tag`. A batch is never validated against another host's entry, and `require_cross_architecture` checks the Pi and x86 E-Perf-5 batches each against their own. Power reports take their label from each leaf's `power-boundary.json` and refuse to mix hosts or measurements in one figure.
 
-`mise run approve-batch -- --batch-id <id> --host <host>` writes the entry after it has checked that the finished batch is complete, clean, and from one commit. The gate then requires that the batch directory is `<host>-<batch_id>` from the entry, that the ledger `batch.json` has the entry's `wafer_git_sha` and `canonical_matrix_sha256`, that the current `eval/canonical-matrix.json` has that hash, and that the SHA-256 of the ledger's `raw.sha256` equals `raw_manifest_sha256`. It does not hash the raw files again; `sha256sum -c` on `raw.sha256` does that. A missing entry fails with the `approve-batch` command to run. Explicit diagnostic paths never consume or satisfy the approval gate.
+The approval gate requires that the batch directory is `<host>-<batch_id>` from the entry, that the ledger `batch.json` has the entry's `wafer_git_sha` and `canonical_matrix_sha256`, that the current `eval/canonical-matrix.json` has that hash, and that the SHA-256 of the ledger's `raw.sha256` equals `raw_manifest_sha256`. It does not hash the raw files again; `sha256sum -c` on `raw.sha256` does that. A missing entry fails with the `approve-batch` command to run. Explicit diagnostic paths never consume or satisfy the approval gate.
 
 ## Run an explicit diagnostic directory
 

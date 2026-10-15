@@ -168,4 +168,4 @@ on top of the underlying mpsc primitive.
 
 - [RFC-005 — Orchestrator & Runtime Simplification](../rfcs/RFC-005-orchestrator.md) — the long-form decision that motivates this amendment (D1, D2, D9).
 - [RFC-003 — Node Type Architecture](../rfcs/RFC-003-node-types.md) — removes Joiner (A1), defines merge as multi-producer mpsc (D9).
-- [ADR-0003](0003-hot-swap-mechanism.md) — hot-swap mechanism (rewritten; original was `0003-drain-and-flip-hotswap.md`, superseded by RFC-005's watch-channel model).
+- [ADR-0012](0012-watch-channel-hot-swap.md): the watch-channel hot-swap that replaced the drain-and-flip mechanism of [ADR-0003](0003-hot-swap-mechanism.md).

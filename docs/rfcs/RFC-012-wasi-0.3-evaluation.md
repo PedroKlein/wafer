@@ -17,11 +17,11 @@ host now uses Wasmtime's asynchronous Preview 2 bindings without changing guest
 WIT or plugin bytes, and processing nodes may receive a default-deny outbound
 `wasi:http` grant for exact destinations.
 
-The canonical campaign runs on the P2 `wafer:pipeline@0.1.0` contract. A
-Preview 3 PoC, if pursued, runs after the campaign under a separately versioned
+The thesis evaluation ran on the P2 `wafer:pipeline@0.1.0` contract. A
+Preview 3 PoC has not been started. If pursued, it uses a separately versioned
 package, tests native async functions and streams against the retained P2 path,
-and does not change campaign evidence. The PoC may lead to a versioned WIT
-migration; it is not production P3 support.
+and does not change the evaluation evidence. The PoC may lead to a versioned
+WIT migration; it is not production P3 support.
 
 ## Current implementation
 
@@ -117,187 +117,41 @@ The adoption evidence proves:
 
 All frozen correctness, simplicity, throughput, p95 latency, and RSS gates passed. The asynchronous P2 implementation is now the sole production linker-to-call path.
 
-### D2.1: Frozen production P2 host experiment
+### D2.1: How the async P2 host was adopted
 
-This experiment is independent of the P3 prototype. It changes only the host
-execution path for the existing `wafer:pipeline@0.1.0` worlds. The baseline is
-the P1-T1 checkpoint; the candidate is the later P1-T5 checkpoint. Both SHAs
-must be full 40-character commits, both worktrees must be clean when measured,
-and both must use byte-identical WIT files, P2 plugin artifacts, configs, and
-release-build inputs.
+The migration changed only the host execution path for the existing
+`wafer:pipeline@0.1.0` worlds. Before it, the host registered
+`p2::add_to_linker_sync`, ran each Wasm runner through `spawn_blocking` plus
+`Handle::block_on`, and wrapped every guest call in `block_in_place`. After it,
+the host registers `wasmtime_wasi::p2::add_to_linker_async`, generates async
+imports and exports in each `bindgen!` invocation, awaits instantiation,
+lifecycle, and processing calls, and runs each runner as an ordinary Tokio
+task. WIT files and plugin bytes did not change.
 
-The workspace and lockfile pin Wasmtime 48.0.2 to
-`e9f1ea232fd245aea338ab3eb7d73487ae75cab1`. At that revision the candidate API
-surface is:
+The change was accepted only if three gates passed:
 
-- `wasmtime_wasi::p2::add_to_linker_async` from
-  `crates/wasi/src/p2/mod.rs`;
-- `imports: { default: async }`, `exports: { default: async }`, and
-  `require_store_data_send: true` in each host `bindgen!` invocation;
-- generated `TransformNodePre`, `InferenceNodePre`, `FilterNodePre`, and
-  `RouterNodePre` `instantiate_async` methods; and
-- awaited generated lifecycle and processing calls. The generated method names
-  remain `call_validate`, `call_init`, `call_process`, `call_evaluate`, and
-  `call_route`; their return values become futures because the exports are
-  generated as async.
+- **Correctness.** The prepared-artifact test matrix (Transform, Filter,
+  Router, inference, Rust and TinyGo P2 components, trap cleanup, saturated
+  workers, shutdown, recovery, reconfigure, hot-swap and rollback, limits,
+  metering, logging, metadata, lineage, retry count) passed with no skips.
+- **Strict simplicity.** Zero production `spawn_blocking` or `block_in_place`
+  bridges around guest calls, one linker-to-call path with no sync fallback,
+  and no Store mutex, per-message spawn, or Wasm future in `select!`.
+- **Performance.** On the in-process E-Perf-4 pass-through configs at 120 B,
+  1 KiB, and 100 KiB, 10 counterbalanced baseline/candidate pairs per payload
+  had to keep median throughput no more than 5 percent below the baseline,
+  median p95 latency no more than 5 percent above it, and peak RSS no more
+  than max(5 percent, 2 MiB) above it.
 
-`Config::async_support(true)` is not part of the candidate: it is deprecated
-and has no effect at the pinned revision. `wasmtime_wasi_nn::wit::add_to_linker`
-remains the inference import wiring; the inference world's instantiation,
-lifecycle, and Transform export calls still use the async Component Model API.
-No P3 feature or binding is enabled.
+All three passed, and the async path replaced the synchronous one. The
+measurements were taken on a development machine to decide the
+implementation; they are not thesis evidence.
 
-#### Frozen baseline/candidate inventory
+### D3: A possible P3 PoC
 
-| Path | Frozen synchronous baseline | Async candidate | Preserved boundary |
-| --- | --- | --- | --- |
-| Startup and linker | `WaferEngine::build_linker` registers `p2::add_to_linker_sync`; `pre_instantiate_{transform,inference,filter,router}` creates typed `*Pre` values. `launch_pipeline_timed` loads each component and creates one Store per loaded node. | Register `p2::add_to_linker_async`, generate async imports/exports, and keep the same typed `*Pre` split. | One engine, one Store owner and one loaded instance per node; the four existing worlds and capabilities do not change. |
-| Initial instantiation | `load_transform_node`, `load_filter_node`, and `load_router_node` call synchronous `*Pre::instantiate`, then synchronous lifecycle methods. | Await `*Pre::instantiate_async`, `validate`, and `init` in the existing sequential launch future. | Store limits, fuel before start functions, relative epoch deadline, plugin version, config, and inference grant remain identical. |
-| Lifecycle | `Wasm*Node::validate_and_init` resets configured fuel and epoch, calls `validate` then `init`, and flushes guest logs. The baseline Wasm runner does not invoke the guest `close` export; retirement drops the Store. | Await the same ordered calls. Do not add a new `close` behavior as part of this migration. | No lifecycle-policy change and no early-return cleanup change. |
-| Processing | `WasmTransformNode::process`, `WasmFilterNode::evaluate`, and `WasmRouterNode::route` synchronously clear logs, reset metering, push one borrowed buffer, call the guest, flush logs, delete the buffer on success/error/trap, and map the result. | Make these methods async and await the generated export while retaining that exact setup/call/cleanup order. | Metadata, payload, lineage, retry count, logging, metering, and resource cleanup remain unchanged. |
-| Runner scheduling | `spawn_wasm_runner` uses `JoinSet::spawn_blocking` plus `Handle::block_on`; each Transform, Filter, and Router call is wrapped in `tokio::task::block_in_place`. | Spawn each runner as an ordinary `JoinSet` task and await the node call directly. | One guest call completes before the runner takes the next message. No per-message task, Store mutex, task abort, timeout race, or `select!` branch around a Wasm future. |
-| Trap and timeout recovery | Each runner handles the completed error, then `recover_from_cached_pre` creates a fresh Store, reapplies capabilities, memory, fuel, and epoch configuration, synchronously instantiates the cached pre-instance, and reruns lifecycle. | Await fresh-Store instantiation and lifecycle before receiving another message. | A trapped or interrupted Store is never reused. |
-| Reconfigure | `try_reconfigure` prepares a fresh Store and cached instance synchronously, swaps it in, runs lifecycle, and restores the complete prior Store/bindings/config on rejection. | Await preparation and lifecycle before committing or rolling back. | Reconfigure remains atomic and between messages. |
-| Hot-swap preparation and adoption | `prepare_*_swap_timed` already calls `instantiate_async`, but the `*Pre` was built from the synchronous P2 linker; the runner applies the prepared Store between messages and runs synchronous lifecycle. | Use the async P2 linker and generated bindings for preparation and await lifecycle during between-message adoption. | Watch-channel signalling, capabilities, memory limits, canary rollback, and one active call remain unchanged. |
-| Direct test/benchmark harness | `PluginTestHarness::load_transform_with_memory_limit` synchronously instantiates; `TransformHarness::process` calls the synchronous wrapper. | Provide the same async instantiation/call route needed by production-bound tests and benchmarks without exporting test-only production APIs. | The harness still exercises the production bindings and cached pre-instance. |
-| Existing mixed async site | Hot-swap preparation uses `instantiate_async` while startup, recovery, reconfigure, and calls remain synchronous. | One async production path from linker through calls; no sync compatibility branch. | Existing plugin bytes and WIT ABI remain unchanged. |
-
-The inventory is reconciled with these repository searches. Results from tests
-or comments are retained in evidence but do not count as production sites:
-
-```sh
-DEVELOPER_DIR=/Library/Developer/CommandLineTools git grep -n -E \
-  'add_to_linker_(sync|async)|spawn_blocking|block_in_place|\.instantiate(_async)?\(|call_(validate|init|process|evaluate|route)' \
-  -- crates/wafer-core/src
-
-WASMTIME_REPO=<path to a wasmtime checkout>
-DEVELOPER_DIR=/Library/Developer/CommandLineTools git -C "$WASMTIME_REPO" \
-  grep -n -E 'pub fn add_to_linker_(async|sync)|require_store_data_send' \
-  e9f1ea232fd245aea338ab3eb7d73487ae75cab1 -- \
-  crates/wasi/src/p2 crates/wasmtime/src/runtime/component examples/wasip2-async/main.rs
-```
-
-#### Strict-simplicity gate
-
-The candidate is strictly simpler only if all of the following are true:
-
-1. production has zero Wasm-runner `spawn_blocking` calls and zero production
-   `block_in_place` calls;
-2. startup, recovery, reconfigure, hot-swap, lifecycle, and processing use one
-   async linker/binding/call path, with no sync fallback, feature switch, or
-   duplicate node wrapper;
-3. each node still owns its Store directly and executes at most one guest call;
-4. no Store mutex, per-message spawn, normal-path abort, cancellation timeout,
-   or Wasm future in `select!` is introduced; and
-5. the candidate removes the blocking bridge without adding an equivalent
-   scheduling bridge elsewhere.
-
-The P1-T5 receipt records the before/after production-site inventory and these
-counts:
-
-```text
-blocking_bridge_sites = production spawn_blocking sites for Wasm runners
-                      + production block_in_place sites around guest calls
-production_p2_execution_paths = distinct sync or async linker-to-call paths
-```
-
-Strict simplicity requires candidate `blocking_bridge_sites = 0`, candidate
-`production_p2_execution_paths = 1`, and both candidate values lower than the
-baseline values where the baseline is nonzero. A source diff must also confirm
-that no replacement bridge or dual mode was added. Failure of any item rejects
-the candidate even if performance improves.
-
-#### Correctness gate
-
-Before any performance result is admissible, the mandatory prepared-artifact
-matrix must pass without a missing fixture, ignored required test, or skip. It
-covers Transform, Filter, Router, inference, Rust P2 plugins, the TinyGo P2
-uppercase component, repeated success/error/trap cleanup, saturated workers,
-active-call shutdown, fresh-Store recovery, reconfigure, hot-swap/rollback,
-capabilities, memory limits, metering, logging, metadata, lineage, retry count,
-and exactly-once forwarding. Formatting, clippy with warnings denied, and the
-workspace test suite are also mandatory. The exact matrix is frozen in P1-T2
-and executed in P1-T5; a failure leaves performance results diagnostic only.
-
-#### Matched A/B workload
-
-Three conditions use the existing in-process E-Perf-4 boundary: one
-`bench-source`, one pass-through P2 Transform, and one `bench-sink`.
-
-| Condition | Checked-in config | Payload |
-| --- | --- | ---: |
-| `120b` | `eval/configs/canonical/e-perf-4-120b.toml` | 120 bytes of `0x42` |
-| `1kb` | `eval/configs/canonical/e-perf-4-1kb.toml` | 1,024 bytes of `0x42` |
-| `100kb` | `eval/configs/canonical/e-perf-4-100kb.toml` | 102,400 bytes of `0x42` |
-
-Every condition has 10 matched pairs: 20 runs per condition and 60 runs total.
-Order is counterbalanced and alternating: odd pairs run `baseline,candidate`;
-even pairs run `candidate,baseline`. Runs are not pooled across payload
-conditions. A failed or incomplete run remains in place and does not count; its
-replacement uses the next attempt number without changing the pair index or
-arm order.
-
-Controlled factors for every run are fixed as follows:
-
-- `TOKIO_WORKER_THREADS=4`;
-- release mode with `--locked` builds;
-- queue capacity 1,024, resolved from the unchanged
-  `EngineConfig::default_queue_capacity` because these configs omit an override;
-- 1,000 messages/s, 30,000 warmup messages, 60,000 measured messages, and a
-  120-second outer duration;
-- 30-second sink warmup and a 60-second declared measurement window;
-- Transform fuel 10,000,000, Filter/Router fuel 500,000, epoch deadline 100,
-  and epoch tick 10 ms;
-- the same machine, OS session, power mode, toolchain, config bytes, runtime
-  arguments, pass-through artifact bytes, and no unrelated workload; and
-- one condition completed before moving to the next condition.
-
-The A/B tooling and its non-thesis artifact schema have been retired; the
-decision table below records the gates and the outcome.
-
-#### Metrics and fail-closed decision
-
-For run `i`, measured after warmup:
-
-- `T_arm,i = measured_unique_messages / measurement_duration_seconds`;
-- `L_arm,i = p95_ns` from the complete `latency.hdr`;
-- `R_arm,i = max(rss_bytes)` from `memory.csv`.
-
-For each condition, `T_arm` and `L_arm` are the medians of the 10 run values.
-`R_arm` is the maximum observed run-level peak, preserving a fail-closed memory
-gate. Deltas use the baseline denominator:
-
-```text
-throughput_delta_pct = 100 * (T_candidate - T_baseline) / T_baseline
-p95_latency_delta_pct = 100 * (L_candidate - L_baseline) / L_baseline
-rss_delta_bytes = R_candidate - R_baseline
-rss_allowance_bytes = max(0.05 * R_baseline, 2 * 1024 * 1024)
-```
-
-| Correctness | Strict simplicity | Every condition: throughput | Every condition: p95 latency | Every condition: peak RSS | Decision |
-| --- | --- | --- | --- | --- | --- |
-| pass | pass | `throughput_delta_pct >= -5.0` | `p95_latency_delta_pct <= 5.0` | `rss_delta_bytes <= rss_allowance_bytes` | `adopt-async-p2` |
-| fail | any | any | any | any | `retain-sync-p2` |
-| pass | fail | any | any | any | `retain-sync-p2` |
-| pass | pass | below budget in any condition | any | any | `retain-sync-p2` |
-| pass | pass | pass | above budget in any condition | any | `retain-sync-p2` |
-| pass | pass | pass | pass | above budget in any condition | `retain-sync-p2` |
-| missing, malformed, dirty, unpaired, or fewer than 10 valid pairs | any | any | any | any | `retain-sync-p2` |
-
-The matched experiment admitted all 30 required pairs and selected
-`adopt-async-p2`. The retained implementation has zero production blocking
-bridge sites and one production P2 execution path. Median throughput remained
-within ±0.001% of the fixed 1,000 msg/s offered rate, while median p95 latency
-decreased by 29.85%, 12.79%, and 7.71% for 120 B, 1 KiB, and 100 KiB payloads.
-These macOS measurements support the implementation decision only and are not
-canonical thesis evidence. The retained host migration is commits `fb129b4` and
-`e7b9779`; decision tooling is `75ab337`.
-
-### D3: Run any P3 PoC after the canonical campaign
-
-The canonical campaign runs on the P2 `wafer:pipeline@0.1.0` contract. A P3
-PoC, if pursued, runs after the campaign under a separately versioned package
-and does not change campaign evidence. Run before the first release, it still
+The thesis evaluation ran on the P2 `wafer:pipeline@0.1.0` contract. A P3
+PoC, if pursued, uses a separately versioned package and does not change the
+evaluation evidence. Run before the first release, it
 lets a breaking WIT change land without external compatibility cost. It leaves
 the verified `@0.1.0` P2 path intact until the adoption decision. It has two
 stages:
@@ -344,8 +198,7 @@ Outbound `wasi:http` is implemented independently of P3 under
 scoped to exact `(scheme, canonical-host, effective-port)` destinations, and
 enforced per request through a policy-controlled single-resolution connector.
 Recovery, reconfigure, hot-swap, and rollback retain the loaded node's immutable
-grant. The contract, implementation, and H01–H20 verification checkpoints are
-`eaffa91`, `40a730a`, and `f173151` respectively.
+grant.
 
 Runtime config and key-value proposals remain conditional:
 
@@ -403,7 +256,7 @@ This PoC does not:
 
 1. **Complete:** adopt asynchronous P2 host bindings after matched correctness, simplicity, and performance gates.
 2. **Complete:** implement and adversarially verify bounded outbound P2 `wasi:http`.
-3. **After the canonical campaign, if pursued:** build the isolated P3 Rust/HTTP/Go toolchain smoke test.
+3. **If pursued:** build the isolated P3 Rust/HTTP/Go toolchain smoke test.
 4. **Next if the smoke passes:** build one P3 streaming pass-through slice.
 5. Compare P2, P3 message-at-a-time, and P3 streaming behavior under fixed conditions.
 6. Before release, decide whether to migrate to a new WIT package version or ship P2 as the initial contract.

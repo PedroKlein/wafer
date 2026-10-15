@@ -35,7 +35,7 @@ Nothing in CI prevents another config from loading it.
 
 ## Related
 
-- `docs/adr/0003-hot-swap-mechanism.md`: hot-swap and rollback.
+- `docs/adr/0012-watch-channel-hot-swap.md`: hot-swap and process-time rollback.
 - `docs/benchmarks/hot-swap.md`: the E-Swap-5 measurement.
 - `plugins/pass-through-v2/`: the well-behaved counterpart used by the other
   E-Swap experiments.

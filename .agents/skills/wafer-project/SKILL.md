@@ -223,11 +223,11 @@ or ADRs for *why*.
 
 | Need | Read |
 |------|------|
-| Architecture overview (post-migration) | `wafer/main/docs/architecture/` |
-| Implementation status (post-migration) | `wafer/main/docs/status/implementation-status.md` |
-| WIT contract reference (post-migration) | `wafer/main/docs/interfaces/wit-contracts.md` |
-| HTTP API reference (post-migration) | `wafer/main/docs/interfaces/http-api.md` |
-| Config schema reference (post-migration) | `wafer/main/docs/interfaces/config-schema.md` |
+| Architecture overview | `wafer/main/docs/architecture/` |
+| Implementation status | `wafer/main/docs/status/implementation-status.md` |
+| WIT contract reference | `wafer/main/docs/interfaces/wit-contracts.md` |
+| HTTP API reference | `wafer/main/docs/interfaces/http-api.md` |
+| Config schema reference | `wafer/main/docs/interfaces/config-schema.md` |
 | RFC archive (design decisions) | `wafer/main/docs/rfcs/` |
 | Architecture Decision Records | `wafer/main/docs/adr/` |
 | Ground-truth WIT contracts | `wafer/main/wit/*.wit` (one `wafer:pipeline@0.1.0` package) |

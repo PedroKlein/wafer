@@ -81,7 +81,7 @@ New/modified files span `runner/source.rs`, `runner/sink.rs`, `testing.rs`, `tes
 - Source and sink adapter loops are implemented in `crates/wafer-core/src/runner/source.rs` and `crates/wafer-core/src/runner/sink.rs` respectively.
 - `PluginTestHarness` lives in `crates/wafer-core/src/testing/harness.rs`.
 - The pass-through plugin was rewritten to the new WIT contracts and builds against the `transform-node` world.
-- The builder constructs all node instances (native I/O and Wasm) during the build phase; the orchestrator's `spawn_bundles()` invokes real runner loops.
+- Sources and sinks are built and `validate()`d in `launch_pipeline` (`crates/wafer-core/src/orchestrator/launcher.rs`), handed to `build_pipeline_with_io`, and `init()`ed inside their spawned tasks, as Decision 3 says. Wasm nodes differ from Decision 5: the builder takes no `&WaferEngine`; `launch_pipeline` compiles each Wasm node, runs its guest `validate()` and `init()` before any task spawns, and injects it into its bundle. The orchestrator's `spawn_bundles()` then starts the real runner loops.
 - The MQTT zero-copy fix eliminates the `to_vec()` allocation in the MQTT source.
 - E2E integration tests use `ChannelSource` / `ChannelSink` from `wafer_core::testing`, which is compiled only for tests and benches (or with the `test-support` feature).
 - Source poll errors back off from 1 ms to 1 s and stop the source after 20 consecutive failures, which fails the run.

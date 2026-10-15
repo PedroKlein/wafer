@@ -90,7 +90,32 @@ A Router with `plugin.kind = "native"` passes `validate`, and the doc comment on
 
 ## Check yourself
 
-Starting at `main`, name the function that owns each transition: runtime construction, TOML to `Config`, semantic checks, the structural graph check, queue creation, plugin loading, and bundle-to-task movement. Then explain why `wafer_config::DagGraph` is not on this call path, and what decides the order in which tasks start.
+**1. Which function turns the TOML file into a `Config`, and which one collects the semantic errors?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+`wafer_config::load_config` reads and deserializes the file. `wafer_config::validate` runs every semantic check and returns all errors together, before any engine, queue, or task exists.
+
+</details>
+
+**2. Why is the graph checked again inside `wafer-core` after `validate` has passed?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+`wafer-core` does not depend on `wafer-config` in production, and a test or embedding program can build a pipeline from a `Config` that never went through `validate`. `DagGraph::from_config` protects that path.
+
+</details>
+
+**3. What decides the order in which node tasks start?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+Nothing topological. The graph is only a check and `topo_order` is never called; bundles are built and spawned in the iteration order of `config.nodes`, which is a `HashMap`.
+
+</details>
 
 ## Next
 

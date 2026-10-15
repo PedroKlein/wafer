@@ -9,7 +9,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 | **What to build next** | GitHub issues. `ROADMAP.md` gives the longer-horizon narrative. |
 | **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) |
 | **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
-| **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology), `eval/canonical-matrix.json` (the executable schedule and host profiles), `docs/eval/pi5-experiment-runbook.md` (operator steps), `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
+| **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology), `eval/canonical-matrix.json` (the executable schedule and host profiles), `docs/eval/experiment-runbook.md` (operator steps), `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
 | **Evaluation numbers** | The evaluation is finished. Final results come only from the batches approved in `eval/final-batches.json` and are reported in the thesis (`tcc-doc`, TG2 Chapter 8). Every number under `docs/benchmarks/` or `docs/history/` is a pre-final diagnostic; never quote one as a result. |
 | **RQs and pass/fail criteria** | `tcc-doc/research/analysis/thesis-statement-v3.md` |
 | **Pipeline topologies to implement** | `tcc-doc/context/use-cases.md` |
@@ -40,7 +40,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 - **Zero-copy envelope** — Messages cross the boundary as an `Arc<EnvelopeHeader>` plus `Bytes` payload plus lineage trail. Guests read the payload via a `borrow<buffer>` resource handle exposed by `pipeline:types`.
 - **Error policy** — Every host-observed guest error maps to one of five categories (`bad-input`, `dependency-failed`, `processing-failed`, `timed-out`, `unrecoverable`) which the policy engine dispatches to `retry` / `dead-letter` / `skip` / `teardown`.
 - **Multiple I/O** — Native sources and sinks support stdin/stdout, files, MQTT pub/sub, and HTTP webhooks.
-- **Control plane** — axum HTTP REST API + Prometheus metrics on a separate port.
+- **Control plane**: axum HTTP REST API, with Prometheus metrics on the same port by default (`--metrics-bind` moves them to their own listener).
 - **OCI registry** — Wasm components can be pulled from container registries (ghcr.io, Docker Hub) via the same `plugin` field used for local paths, with content-addressable local caching.
 - **Fuel + epoch metering** — When a config enables them (both default to off), guests are bounded in both computation (fuel) and wall-clock time (epoch interruption on a dedicated OS thread).
 
@@ -95,7 +95,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 | `docs/benchmarks/README.md` | Current benchmark reference pages. The shakedown pages are archived under `docs/history/benchmarks/`. |
 | `docs/benchmarks/hot-swap.md` | Hot-swap phases and the E-Swap experiment definitions. |
 | `docs/benchmarks/ekuiper-comparator.md` | Native eKuiper 2.1.5 comparator: install, Pipeline A, run procedure and the E-Swap-3 rule changes. |
-| `docs/eval/pi5-experiment-runbook.md` | **Operator runbook** for running a batch: gates, diagnostic batch, launch, resume, approval, analysis. |
+| `docs/eval/experiment-runbook.md` | **Operator runbook** for running a batch: gates, diagnostic batch, launch, resume, approval, analysis. |
 | `docs/eval/pi5-host-setup.md`, `jetson-host-setup.md`, `x86-host-setup.md` | Host preparation for the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts. |
 | `docs/eval/cross-compile.md` | aarch64-linux cross-compile recipe via docker (`mise run cross-build-pi`) and the glibc each binary needs. |
 | `eval/canonical-matrix.json` | **Executable source** of the evaluation: experiments, repetitions, rates, host profiles, verdict thresholds. |
@@ -191,21 +191,16 @@ mise run //eval:figures                            # Re-execute notebooks + list
 
 Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) declares numpy, matplotlib, seaborn, pandas and Jupyter. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. Notebooks are committed without cell outputs: `mise run setup` registers the pinned `nbstripout` Git filter, `mise run //eval:notebooks-format` normalizes them, and `mise run //eval:notebooks-check` (also run by CI and `mise run test-eval`) fails on un-normalized notebooks. See `eval/analysis/notebooks/README.md` for the notebook-to-experiment mapping.
 
-### Evaluation Campaign
+### Reproducing the Evaluation
 
-Run these on the evaluation host itself, from a `~/wafer` checkout with mise (the deployed Pi bundle has no `mise.toml`; call the scripts the runbook names there), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`), and `approve-batch`, which runs on the analysis machine against the results root that holds the host's copied batch. The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
+The evaluation is finished; these tasks re-run it. `docs/eval/experiment-runbook.md` has the full sequence and says where each step runs (the deployed Pi bundle has no `mise.toml`, so on the Pi call the scripts the runbook names).
 
 ```bash
-mise run preflight-pi5                               # or preflight-jetson / preflight-x86 on those hosts
 mise run plan-campaign -- --host rpi5                # Print the schedule (no runs)
-mise run run-campaign -- --host rpi5 --capacity-scout --batch-id SCOUT   # Next scout probe; repeat until it stops
-mise run run-campaign -- --host rpi5 --batch-id ID --scout-batch-id SCOUT   # Run or resume a batch
-mise run run-campaign -- --host rpi5 --batch-id ID --scout-batch-id SCOUT --repetitions 3   # Diagnostic batch, never thesis evidence
-mise run smoke-swap3 -- --host rpi5 --batch-id ID    # Every E-Swap-3 arm once before a batch, diagnostic
+mise run run-campaign -- --host rpi5 --batch-id ID --scout-batch-id SCOUT   # Run or resume a batch on the host
 mise run campaign-status -- --host rpi5 --batch-id ID
-mise run approve-batch -- --host rpi5 --batch-id ID  # Check a finished final batch, record it in eval/final-batches.json
-mise run idle-baseline-pi5                           # Diagnostic idle-power baseline
-mise run instrument-ab-pi5                           # Cost of the host telemetry sidecars
+mise run approve-batch -- --host rpi5 --batch-id ID  # On the analysis machine: check the batch, record it in eval/final-batches.json
+mise run //eval:figures ID                           # Regenerate the figures and tables
 ```
 
 ### Running Pipelines

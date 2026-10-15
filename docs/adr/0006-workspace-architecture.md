@@ -19,8 +19,7 @@
 > (`crates/wafer-core/src/orchestrator/pipeline.rs`) spawns one task per node
 > into a `JoinSet`, and the API server holds a cloneable `PipelineHandle` that
 > reads per-node state and metrics through atomics and signals hot-swap over
-> per-node watch channels. See [ADR-0003](0003-hot-swap-mechanism.md),
-> [ADR-0012](0012-watch-channel-hot-swap.md), and
+> per-node watch channels. See [ADR-0012](0012-watch-channel-hot-swap.md) and
 > [RFC-005](../rfcs/RFC-005-orchestrator.md) for that task-per-node model. The
 > commands now run through mise ([ADR-0015](0015-command-runner-mise.md)), not
 > a justfile.

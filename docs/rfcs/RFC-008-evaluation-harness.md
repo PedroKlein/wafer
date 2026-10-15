@@ -151,10 +151,33 @@ python3 eval/scripts/verify-result-contract.py --canonical <result-directory>
 
 Canonical notebook resolution also requires the batch's entry in `eval/final-batches.json`. `mise run approve-batch` writes that entry after checking the finished batch, as described by `eval/analysis/notebooks/README.md`.
 
+## Measurement risks
+
+The sections above already bound the main threats: MQTT support-path
+censoring and tested-grid brackets (E-Perf-10), event alignment (E-Swap-3,
+E-Swap-4), open-loop scheduling against coordinated omission, the PMIC proxy,
+and the E-Perf-9 cache label. Four more limits apply:
+
+- **Metering drift.** Runtime fuel and epoch limits default to `None`, so an
+  evaluation config that forgot them would measure an unprotected runtime.
+  `crates/wafer-config/tests/eval_configs_load.rs` checks the evaluation
+  configs, and the runtime metadata records the effective fuel budgets, epoch
+  deadline and tick, and metering mode of every run.
+- **Internal versus observed swap timing.** Internal swap phases, the HTTP
+  action duration, and sink-observed gaps are separate fields. Queued output
+  can hide an internal disruption, so a small sink gap is not evidence of a
+  small compile or instantiate phase.
+- **Healthy-branch baseline.** E-Iso-7 gives the healthy and faulty branches
+  independent sources and sinks; a shared source would carry the fault
+  branch's backpressure into the healthy baseline.
+- **Sampling resolution.** PMIC and one-second process sampling do not expose
+  every transient. They support the latency and sequence artifacts; they do
+  not replace them.
+
 ## Related documents
 
 - [Result contract](../../eval/RESULT-CONTRACT.md)
-- [Pi 5 experiment runbook](../eval/pi5-experiment-runbook.md)
+- [Experiment runbook](../eval/experiment-runbook.md)
 - [Config schema](../interfaces/config-schema.md)
 - [ADR-0013](../adr/0013-aot-cache-and-metering.md)
 
@@ -162,7 +185,7 @@ Canonical notebook resolution also requires the batch's entry in `eval/final-bat
 
 <!-- historical-diagnostic-below -->
 
-The following text is the earlier decision or diagnostic record. It is preserved for traceability and does not override the current sections above.
+The following text is the earlier decision or diagnostic record. It is preserved for traceability, because code comments cite its decision numbers, and does not override the current sections above. Several names in it were never built: there is no `PipelineBuilder`, `TestPipeline`, `BenchmarkPipeline`, `MemorySource`, `CollectorSink`, or `NullSink` (tests use `PluginTestHarness` and the in-memory `ChannelSource` / `ChannelSink`). `SwapTimeline` ends at `first_post_replacement_local_outcome`, not `first_v2_output`, and the E-Perf-10 grid, repetition counts, and statistics are the ones in the sections above.
 
 # RFC-008: Evaluation Harness Design
 
@@ -308,8 +331,8 @@ Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1
 
 ## Implementation Notes
 
-- The production-path runtime, load generator, result metadata, and analysis notebooks are implemented. The Pi 5 deployment, preflight, native-eKuiper adapter, and canonical experiment wrappers are tracked by the active `rpi5-canonical-runs` plan.
-- `eval/configs/` contains telemetry, passthrough, metering-ablation, native-baseline, depth-scaling, isolation, and hot-swap configurations. A runbook identifies which configurations already have executable runners and which canonical wrappers remain to be completed.
+- The production-path runtime, load generator, result metadata, analysis notebooks, host preflight scripts, native-eKuiper adapter, and canonical runner are implemented.
+- `eval/configs/` contains telemetry, passthrough, metering-ablation, native-baseline, depth-scaling, isolation, and hot-swap configurations.
 - The `wafer-loadgen` crate exists (`crates/wafer-loadgen/src/main.rs`) as a workspace binary.
 
 ### Amendments to prior RFCs noted in source

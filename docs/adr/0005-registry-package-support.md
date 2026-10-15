@@ -207,7 +207,7 @@ wafer --config pipeline.toml
 ## Related
 
 - [ADR-0001](0001-wasmtime-runtime.md): Use Wasmtime as WASM Runtime
-- [ADR-0003](0003-hot-swap-mechanism.md): Watch-Channel Between-Messages Hot-Swap
+- [ADR-0012](0012-watch-channel-hot-swap.md): Watch-Channel Between-Messages Hot-Swap
 
 ## Amendment (2026-07-06 — `plugin_path` → single `plugin` field)
 

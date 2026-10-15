@@ -10,7 +10,7 @@ The evaluated contribution is the integration of typed DAG composition, per-stag
 
 ## Research questions
 
-The Raspberry Pi 5 4 GB decides every verdict. A Jetson Orin Nano (CPU only) and an x86-64 Linux host repeat the same experiments as replication strata. [07. Quality requirements](07-quality-requirements.md) maps each question to its experiments, and `verdict_rules` in `eval/canonical-matrix.json` holds the thresholds.
+The Raspberry Pi 5 4 GB decides every verdict. A Jetson Orin Nano (CPU only) and an x86-64 Linux host repeat the same experiments as replication strata. [Non-functional requirements](../requirements/non-functional.md) map each question to its experiments, [07. Quality requirements](07-quality-requirements.md) to the mechanisms that serve it, and `verdict_rules` in `eval/canonical-matrix.json` holds the thresholds.
 
 - **RQ1:** What is the performance cost of typed Wasm boundaries on edge hardware?
 - **RQ2:** Do per-stage sandboxes contain faults without pipeline-wide failure?

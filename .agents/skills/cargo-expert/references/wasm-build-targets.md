@@ -175,13 +175,10 @@ wasm-tools component wit plugins/my-plugin/target/wasm32-wasip2/release/my_plugi
 
 ### Host Binary for Different Architectures
 
-```bash
-# Build for ARM64 Linux (e.g., Raspberry Pi, Jetson)
-cargo build --target aarch64-unknown-linux-gnu --release
-
-# Build for x86_64 Linux
-cargo build --target x86_64-unknown-linux-gnu --release
-```
+The repository has no cross-linker setup. ARM64 binaries come from a Docker
+`linux/arm64` container (`mise run cross-build-pi`); the Jetson and x86 hosts build
+natively (`cargo build --locked --release`, `mise run build-release-x86`). See
+`docs/eval/cross-compile.md`.
 
 ### WASM Plugins are Architecture-Independent
 

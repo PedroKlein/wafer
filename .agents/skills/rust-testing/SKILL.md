@@ -3,7 +3,7 @@ name: rust-testing
 description: >
   Testing and benchmarking patterns for WAFER's async pipeline runtime. Covers async test
   harnesses with tokio::test, integration tests for WASM components, criterion benchmarks
-  for measuring Wasm boundary overhead (thesis RQ1), fixture management for .wasm plugin
+  for measuring Wasm boundary overhead, fixture management for .wasm plugin
   files, proptest for envelope/config invariants, and test organization for a Cargo workspace.
   Use when writing tests (unit, integration, benchmark), designing test fixtures, measuring
   performance, or reviewing test quality. Triggers on: test, benchmark, criterion, proptest,
@@ -19,7 +19,8 @@ description: >
 Ask yourself:
 - **What am I testing?** Behaviour (unit/integration) or performance (benchmark)?
 - **Does this need a built WASM plugin?** If yes: fixture guard + skip if missing.
-- **Am I measuring thesis RQ1 (WASM overhead)?** → criterion with paired native baseline.
+- **Am I measuring WASM overhead?** → criterion with a paired native baseline for local
+  regressions. Thesis numbers (E-Perf-4) come only from the evaluation harness, never from criterion.
 - **Flakiness risk from timeouts/timing?** → `tokio::time::pause()` for deterministic time.
 - **Am I testing the topology or the execution?** Topology: pure `#[test]`. Execution: `#[tokio::test]`.
 

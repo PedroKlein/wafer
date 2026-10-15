@@ -164,25 +164,25 @@ Hot-swap accepts a local filesystem path today. To swap a running
 Wasm node to a newer OCI-hosted version:
 
 1. Publish the new version to your registry.
-2. `mise run //plugins:pull-plugin uppercase 1.1.0` — writes
+2. Run `mise run //plugins:pull-plugin uppercase 1.1.0`. It writes
    `downloads/uppercase-1.1.0.wasm` at the repository root.
-3. `POST /api/v1/nodes/<id>/hot-swap` with
-   `{"wasm_path": "<that path>"}` — see
-   [`../interfaces/http-api.md`](../interfaces/http-api.md).
+3. Send `POST /api/v1/nodes/<id>/hot-swap` with
+   `{"wasm_path": "<that path>"}` (see
+   [`../interfaces/http-api.md`](../interfaces/http-api.md)).
 
 Hot-swap targets any Wasm node type: Transform, Filter, or Router.
 Native Source and Sink nodes are not swappable.
 
 ## Troubleshooting
 
-- **"Package not found"** — verify authentication (`mise run
+- **"Package not found"**: verify authentication (`mise run
   //plugins:registry-status`), verify the OCI namespace (`WAFER_REGISTRY`),
   and note that hyphens in plugin names become underscores in the
   OCI name.
-- **"Version not found"** — list tags via your registry UI or GitHub
+- **"Version not found"**: list tags via your registry UI or GitHub
   Packages page; pin to an exact tag or digest.
-- **Stale content served after a re-push to the same tag** — clear
-  the cache (`rm -rf ~/.cache/wafer/plugins`) or pin to a digest
+- **Stale content served after a re-push to the same tag**: clear
+  the cache (`[registry].cache_dir`, by default `~/.cache/wafer/plugins` on Linux) or pin to a digest
   (`plugin = "…@sha256:…"`). Cached entries expire after 24 hours.
 
 ## Supply-chain notes

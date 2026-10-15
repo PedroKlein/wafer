@@ -2,8 +2,8 @@
 #
 # Tasks default to cwd = eval/ (this config_root). Invocation from repo root:
 # `mise run //eval:notebooks`; from inside eval/: `mise run :notebooks`.
-# The experiments themselves run through the canonical runner:
-# `mise run plan-canonical-pi5` / `mise run run-canonical-pi5` (root mise.toml).
+# The experiments themselves run through the canonical runner (root mise.toml
+# `plan-campaign` and `run-campaign`); see docs/eval/experiment-runbook.md.
 
 [tasks.build-plugins-eval]
 description = "Build the four plugins consumed by the E-* experiments"
