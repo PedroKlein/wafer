@@ -53,8 +53,7 @@ fn spawn_line_reader(
                     }
                     Err(e) => Err(e),
                 };
-                let failed = read.is_err();
-                if sender.blocking_send(read).is_err() || failed {
+                if sender.blocking_send(read).is_err() {
                     return;
                 }
             }
@@ -147,6 +146,22 @@ mod tests {
 
         drop(writer);
         assert!(source.poll().await.expect("poll").is_none(), "closed input ends the source");
+    }
+
+    #[tokio::test]
+    async fn failing_input_keeps_failing_instead_of_ending() {
+        struct Broken;
+        impl std::io::Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("broken input"))
+            }
+        }
+
+        let mut source = StdinSource::new("stdin");
+        source.lines = Some(spawn_line_reader("stdin", BufReader::new(Broken)).expect("reader"));
+
+        assert!(source.poll().await.is_err(), "the read error reaches the runner");
+        assert!(source.poll().await.is_err(), "a failed read must not look like end of input");
     }
 
     #[tokio::test]

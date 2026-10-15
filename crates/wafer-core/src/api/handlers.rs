@@ -910,6 +910,26 @@ allow_inference = {allow_inference}
     }
 
     #[tokio::test]
+    async fn source_replacement_is_not_found() {
+        let config: crate::config::Config =
+            toml::from_str("[nodes.source]\ntype = \"source\"\nkind = \"stdin\"\n")
+                .expect("source config");
+        let (sender, swaps) = watch::channel(None);
+        let handle = Arc::new(
+            PipelineHandle::for_replacement_test(config, "mnist", sender).expect("test handle"),
+        );
+        let request = HotSwapRequest { wasm_path: MNIST_COMPONENT.to_string() };
+
+        let error = hot_swap(State(handle), Path("source".to_string()), Json(request))
+            .await
+            .map(IntoResponse::into_response)
+            .expect_err("a source cannot be replaced");
+
+        assert_eq!(error.0, StatusCode::NOT_FOUND, "{}", error.1);
+        assert!(swaps.borrow().is_none(), "rejected request reached the runner");
+    }
+
+    #[tokio::test]
     async fn concurrent_replacement_is_conflict() {
         let (handle, swaps) = replacement_handle(true);
         let _in_flight = handle.try_begin_swap("mnist").expect("first claim");

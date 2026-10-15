@@ -143,7 +143,7 @@ Other errors are plain-text bodies:
 
 - 400: replacement file cannot be read, or the node's capability grant
   cannot be rebuilt;
-- 404: the node does not exist or is a source or sink;
+- 404: the node does not exist or is not a Wasm node;
 - 409: replacement initialization failed, or another hot-swap or reconfigure
   of the same node is still in progress;
 - 500: preparation failed, or the runner exited before reporting adoption;

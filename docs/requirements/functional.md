@@ -166,8 +166,9 @@ hot-swap) live in `non-functional.md`.
   *Statement:* `POST /api/v1/nodes/{id}/hot-swap` shall reject
   requests targeting native Source / Sink nodes with 404 (id not in
   the Wasm-node set).
-  *Verify:* `unknown_node_replacement_is_not_found` in
-  `crates/wafer-core/src/api/handlers.rs` checks the status code;
+  *Verify:* `source_replacement_is_not_found` and
+  `unknown_node_replacement_is_not_found` in
+  `crates/wafer-core/src/api/handlers.rs` check the status code;
   `replacement_eligibility_uses_loaded_wasm_roles` in
   `crates/wafer-core/src/orchestrator/pipeline.rs` checks which nodes
   are eligible.
