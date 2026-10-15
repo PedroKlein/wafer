@@ -114,7 +114,7 @@ impl PayloadTemplate {
     /// Hard-coded per template. If the render logic changes, the
     /// `payload_size_exact` unit test will fail and the developer must
     /// intentionally update this value — that manual step is the "build-time
-    /// checksum" per AC1.
+    /// checksum".
     #[must_use]
     pub const fn fingerprint_hex(self) -> &'static str {
         match self {
@@ -231,8 +231,8 @@ mod tests {
         hex::encode(h.finalize())
     }
 
-    /// AC1: byte-length AND SHA-256 fingerprint asserted per template.
-    /// AC2: `telemetry-120b` schema + 120 ±5 bytes.
+    /// Byte-length AND SHA-256 fingerprint asserted per template;
+    /// `telemetry-120b` schema + 120 ±5 bytes.
     #[test]
     fn payload_size_exact() {
         for tpl in PayloadTemplate::ALL {
@@ -276,7 +276,7 @@ mod tests {
         let bytes = PayloadTemplate::Telemetry120b.render(CANONICAL_TS_NS, CANONICAL_SEQ);
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
         let obj = json.as_object().expect("object");
-        // AC2: schema is {device_id, temperature, humidity, ts, seq}.
+        // Schema is {device_id, temperature, humidity, ts, seq}.
         for key in ["device_id", "temperature", "humidity", "ts", "seq"] {
             assert!(obj.contains_key(key), "telemetry-120b missing field `{key}`");
         }

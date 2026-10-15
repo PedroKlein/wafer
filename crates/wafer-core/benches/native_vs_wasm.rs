@@ -82,7 +82,7 @@ fn bench_native_transform(c: &mut Criterion) {
             });
         });
 
-        // P0.4 AC3: json-parse transform. Payload must contain a
+        // json-parse transform. Payload must contain a
         // "temperature" field; we synthesise one at the requested
         // size by padding a canonical JSON body.
         group.bench_with_input(BenchmarkId::new("json_parse", size), &size, |b, &size| {
@@ -112,7 +112,7 @@ fn bench_native_transform(c: &mut Criterion) {
     group.finish();
 }
 
-/// P0.4 AC3: Native filter benchmark — threshold-filter (matches the
+/// Native filter benchmark — threshold-filter (matches the
 /// wafer-threshold-filter Wasm plugin). Payload is a JSON body with a
 /// numeric "temperature" field; the filter forwards when the value
 /// exceeds the threshold.
@@ -149,7 +149,7 @@ fn bench_native_filter(c: &mut Criterion) {
     group.finish();
 }
 
-/// P0.4 AC3: Native router benchmark — content-router. Values above
+/// Native router benchmark — content-router. Values above
 /// threshold route to "high"; below to "low".
 fn bench_native_router(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();

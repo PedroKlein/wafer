@@ -1,6 +1,6 @@
 #![cfg(test)]
 #![expect(clippy::large_futures, reason = "integration test: large launch_pipeline future")]
-//! P0.14 regression: WASI async host calls (`std::thread::sleep` in guest,
+//! Regression test: WASI async host calls (`std::thread::sleep` in guest,
 //! `wasi:clocks/monotonic-clock.subscribe-duration` on the wire) must NOT
 //! panic when invoked from a Tokio worker thread.
 //!

@@ -2,8 +2,8 @@
 //! `LatencyRecorder`, and flushes artifacts on graceful exit.
 //!
 //! Runs one broker + one topic. Multi-topic recording is explicitly out of
-//! scope (see P0.1 non-goals in the plan). One subscriber instance per output
-//! topic is the intended composition model — the eval scripts (P1.1) start
+//! scope. One subscriber instance per output
+//! topic is the intended composition model — the eval scripts start
 //! one per SUT/comparator.
 //!
 //! Cancel model: two exit signals compete. Whichever fires first wins.
@@ -56,8 +56,7 @@ pub struct SubscribeArgs {
     #[arg(long, default_value = "wafer-loadgen-sub")]
     pub client_id: String,
 
-    /// Host tag baked into subscriber-metadata.json. Set by the eval scripts
-    /// (P1.1) — `shakedown-macos` for this plan.
+    /// Host tag baked into subscriber-metadata.json. Set by the eval scripts.
     #[arg(long)]
     pub host_tag: Option<String>,
 

@@ -3,7 +3,7 @@
     clippy::large_futures,
     reason = "test: launch_pipeline future is large due to WASM Store/Component loading"
 )]
-//! A17 — Process-time hot-swap rollback integration tests.
+//! Process-time hot-swap rollback integration tests.
 //!
 //! Verifies that when a v2 plugin passes `validate()/init()` but traps on
 //! `process()`, the runtime automatically rolls back to v1 within a bounded
@@ -178,7 +178,7 @@ async fn hotswap_process_time_rollback() {
     // Send the swap
     handle.send_swap("transform", timed_swap.payload).expect("send_swap");
 
-    // B1 (A17): the API caller must receive `RolledBack`, NOT a fabricated
+    // The API caller must receive `RolledBack`, NOT a fabricated
     // `swap_converged`. Await the completion channel with the 10s canary
     // window budget. Before this fix the runner would drop the sender
     // silently and the next v1 message would call mark_first_v2, so this

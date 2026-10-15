@@ -142,8 +142,8 @@ pub async fn launch_pipeline_timed(
 
     let mut build_output = build_pipeline_with_io(&config, sources, sinks)?;
 
-    // Seed with the SHA256 of every Wasm plugin loaded at launch so the P0.12
-    // hot-swap guard and metadata.json provenance share one source of truth.
+    // Seed with the SHA256 of every Wasm plugin loaded at launch so the plugin
+    // hash guard and metadata.json provenance share one source of truth.
     let mut plugin_hashes: HashMap<Box<str>, String> = HashMap::new();
 
     for bundle in &mut build_output.node_bundles {
@@ -353,8 +353,8 @@ fn resolve_bench_sink_output_dir(
 // =============================================================================
 
 /// Dispatch: build a Wasm or Native transform depending on `wasm.plugin`.
-/// This is where the `plugin.kind = "native"` schema variant is honoured
-/// (P0.4 AC2). Wasm construction still goes through the original
+/// This is where the `plugin.kind = "native"` schema variant is honoured.
+/// Wasm construction still goes through the original
 /// `load_transform_node` helper unchanged.
 #[expect(
     clippy::too_many_arguments,
@@ -439,7 +439,7 @@ async fn load_transform_node(
     let state = WaferState::new_with_memory_limit(node_id, capabilities.clone(), memory_limit);
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
-    // AC F5.AC2: None → unlimited; engine construction leaves consume_fuel /
+    // None → unlimited; engine construction leaves consume_fuel /
     // epoch_interruption off in that case, so calling the setter would trap
     // or error. Fuel + epoch must be set before instantiation — start functions
     // consume fuel, and the epoch ticker is running from engine init.
@@ -545,7 +545,7 @@ fn as_f64(v: &toml::Value) -> Option<f64> {
 
 /// Dispatch: build a Wasm or Native filter depending on `wasm.plugin`.
 /// Mirrors [`load_transform_node_dispatch`] so the native baseline can
-/// implement `type = "filter"` (RQ1 apples-to-apples — A18).
+/// implement `type = "filter"` with the same work as the Wasm filter (RQ1).
 #[expect(
     clippy::too_many_arguments,
     reason = "node loader params are a flat list; a config struct would add indirection for a private function"
@@ -637,7 +637,7 @@ async fn load_filter_node(
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
     let fuel_limit = engine.fuel_budget(NodeKind::Filter, wasm.fuel);
-    // AC F5.AC2: skip metering setters when unlimited; see transform loader.
+    // Skip metering setters when unlimited; see transform loader.
     if let Some(n) = fuel_limit {
         store
             .set_fuel(n.get())
@@ -703,7 +703,7 @@ async fn load_router_node(
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
     let fuel_limit = engine.fuel_budget(NodeKind::Router, wasm.fuel);
-    // AC F5.AC2: skip metering setters when unlimited; see transform loader.
+    // Skip metering setters when unlimited; see transform loader.
     if let Some(n) = fuel_limit {
         store
             .set_fuel(n.get())
@@ -734,8 +734,8 @@ async fn load_router_node(
 
 /// Resolve plugin source, read bytes, compute SHA256, and load the Wasm
 /// component. Returning the hash lets the launcher seed
-/// `PipelineHandle::plugin_hashes` with the same value the P0.12 guard
-/// checks on hot-swap — single source of truth (metadata.json AC2).
+/// `PipelineHandle::plugin_hashes` with the same value the plugin hash
+/// guard checks and `metadata.json` reports.
 #[expect(
     clippy::large_futures,
     reason = "OCI resolution + WASM compilation hold large intermediates across awaits; called once per node"

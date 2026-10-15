@@ -5,7 +5,7 @@
 
 //! Integration test: `MemoryRecorder` flushes samples on cancel-safe shutdown.
 //!
-//! AC4: SIGTERM flushes memory.csv cleanly.
+//! SIGTERM flushes memory.csv cleanly.
 //! Spawns the sampler, cancels after a brief window, verifies samples were
 //! captured and CSV output is valid.
 

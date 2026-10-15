@@ -2,12 +2,12 @@
 //!
 //! Two subcommands:
 //! - `publish`    — pre-refactor publisher behaviour (see `publish.rs`).
-//! - `subscribe`  — MQTT subscriber + [`HdrHistogram`] sink (P0.1, see `sub.rs`).
+//! - `subscribe`  — MQTT subscriber + [`HdrHistogram`] sink (see `sub.rs`).
 //!
 //! Publisher flags are preserved verbatim from the pre-refactor binary.
 //! Subscribe is a new subcommand.
 //!
-//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3B / D4 / D9.
+//! See docs/rfcs/RFC-008-evaluation-harness.md (Decisions 3, 4 and 9).
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;

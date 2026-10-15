@@ -102,7 +102,7 @@ impl PluginTestHarness {
         );
         let mut store = Store::new(self.engine.inner(), state);
         store.limiter(|s| s.limits_mut());
-        // AC F5.AC2: skip metering setters when unlimited; consume_fuel /
+        // Skip metering setters when unlimited; consume_fuel /
         // epoch_interruption are gated at Config level so set_fuel would
         // return Err when fuel_limit is None. Fuel + epoch must be applied
         // before instantiation — start functions consume fuel and the epoch
@@ -333,7 +333,7 @@ mod tests {
         }
     }
 
-    /// P0.7 AC2: delay-injector with delay_ms=50 measures ≥45 ms latency.
+    /// delay-injector with delay_ms=50 measures ≥45 ms latency.
     /// Tolerance absorbs Wasm scheduling slack (wasi:io/poll granularity,
     /// runtime epoch-tick alignment, cold-instantiation overhead on the
     /// first call).
@@ -362,7 +362,7 @@ mod tests {
         let output = transform.process(input).await.unwrap();
         let elapsed = started.elapsed();
 
-        // Default delay is 50 ms (see plugin lib.rs). AC2 tolerance: ≥45 ms
+        // Default delay is 50 ms (see plugin lib.rs). The ≥45 ms floor
         // accounts for wasi:io/poll granularity plus wasmtime call overhead.
         // The ceiling of 200 ms exists to catch pathological schedulers.
         assert!(
@@ -382,7 +382,7 @@ mod tests {
         );
     }
 
-    /// P0.6 AC1: pass-through-v2-panics traps on the first process() call.
+    /// pass-through-v2-panics traps on the first process() call.
     /// The exact trap reason is left opaque to the caller (wasmtime maps
     /// panics through several possible reasons depending on codegen and
     /// wasi bindings); the invariant is that `process()` returns an error

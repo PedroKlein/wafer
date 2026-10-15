@@ -9,14 +9,14 @@ use super::source_sink::{AuthConfig, TlsConfig};
 /// positive integer → `Some(NonZeroU64)`, zero → hard error.
 ///
 /// Standard `Option<NonZeroU64>` silently maps `0` to `None` (TOML trait
-/// semantics). We reject it instead so the P0.13 footgun stays impossible.
+/// semantics). We reject it instead so a zero budget cannot trap every call.
 pub(super) fn deserialize_metering_limit<'de, D>(
     deserializer: D,
 ) -> Result<Option<NonZeroU64>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    // Reject `0` explicitly (would trap the Wasm call immediately — P0.13).
+    // Reject `0` explicitly (would trap the Wasm call immediately).
     // `NonZeroU64::new(0)` returns None, which we translate to the same error
     // so there's a single source of truth for the rejection.
     let Some(n) = Option::<u64>::deserialize(deserializer)? else {
@@ -61,9 +61,9 @@ pub(super) const fn default_true() -> bool {
 pub struct EngineConfig {
     /// Epoch ticks before a Wasm call traps. `None` = no epoch interrupt.
     ///
-    /// `NonZeroU64` prevents the `0 = trap immediately` footgun (P0.13 lesson:
-    /// a typo or off-by-one silently makes every Wasm call trap on first
-    /// epoch check, indistinguishable from a plugin bug).
+    /// `NonZeroU64` prevents the `0 = trap immediately` footgun: a typo or
+    /// off-by-one would silently make every Wasm call trap on the first
+    /// epoch check, indistinguishable from a plugin bug.
     #[serde(
         default,
         deserialize_with = "deserialize_metering_limit",
@@ -110,7 +110,7 @@ impl Default for EngineConfig {
 pub struct FuelBudgets {
     /// Fuel per transform `process()` call. `None` = unlimited.
     ///
-    /// `NonZeroU64`: `0` would trap on the first fuel check (P0.13 lesson).
+    /// `NonZeroU64`: `0` would trap on the first fuel check.
     #[serde(
         default,
         deserialize_with = "deserialize_metering_limit",
@@ -118,7 +118,7 @@ pub struct FuelBudgets {
     )]
     pub transform: Option<NonZeroU64>,
 
-    /// Fuel per filter `apply()` call. `None` = unlimited.
+    /// Fuel per filter `evaluate()` call. `None` = unlimited.
     #[serde(
         default,
         deserialize_with = "deserialize_metering_limit",
@@ -158,7 +158,7 @@ impl Default for MemoryLimits {
     }
 }
 
-/// Configuration for process-time hot-swap rollback (A17).
+/// Configuration for process-time hot-swap rollback.
 ///
 /// After a swap succeeds (ACK phase), the runner retains a rollback snapshot
 /// of v1 for a bounded canary window. If v2 traps during `process()` within

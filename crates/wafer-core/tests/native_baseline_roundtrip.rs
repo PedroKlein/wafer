@@ -1,5 +1,5 @@
 #![cfg(test)]
-//! P0.4 — Native Rust baseline roundtrip.
+//! Native Rust baseline roundtrip.
 //!
 //! RFC-008 §D5 Layer 1: same envelope, same channels-shape, no Wasm
 //! boundary. Four node kinds cover the Pipeline A set:
@@ -17,10 +17,8 @@
 //!      to the async `Transform` surface for `NativeTransform`
 //!      (confirms the trait is a faithful mirror, not a divergent path).
 //!
-//! Not covered here (deferred to P0.4 follow-up commits): TOML
-//! `plugin.kind = "native"` schema, orchestrator wire-up, and the
-//! bench-harness extension. Those satisfy AC2 and AC3; this file
-//! satisfies AC1.
+//! The TOML `plugin.kind = "native"` path through the launcher is covered
+//! by `native_threshold_filter.rs`.
 
 use wafer_core::node::{
     Filter, FilterOutcome, NativeFilter, NativeRouter, NativeTransform, ProcessNode, ProcessResult,

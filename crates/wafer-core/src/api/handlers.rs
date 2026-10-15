@@ -47,7 +47,7 @@ pub struct NodeInfoResponse {
 pub struct ReconfigureRequest {
     /// New node configuration as an arbitrary JSON object.
     pub config: serde_json::Value,
-    /// P0.12 (A5 residual): optional SHA-256 (hex) of the plugin bytes the
+    /// Optional SHA-256 (hex) of the plugin bytes the
     /// caller believes are currently loaded. When set and non-empty, the
     /// server compares this against the cached hash from the last
     /// successful hot-swap. Mismatch → 409 CONFLICT.

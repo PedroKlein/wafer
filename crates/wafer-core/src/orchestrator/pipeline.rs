@@ -95,11 +95,11 @@ pub struct PipelineHandle {
     replacement_eligible: HashSet<Box<str>>,
     /// Per-node compare-and-swap guards shared by hot-swap and reconfigure.
     swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>>,
-    /// P0.10 (A3 residual): shared hot-swap-metrics store, populated on
+    /// Shared hot-swap-metrics store, populated on
     /// every successful swap via [`record_hotswap_phase`](Self::record_hotswap_phase)
     /// and rendered by the /metrics handler.
     hotswap_metrics: Arc<crate::metrics::types::HotSwapMetrics>,
-    /// P0.12 (A5 residual): per-node cached SHA-256 (hex) of the currently
+    /// Per-node cached SHA-256 (hex) of the currently
     /// loaded plugin bytes. Seeded by the launcher for every Wasm node and
     /// updated by the hot-swap handler on successful convergence. Consumed by
     /// [`verify_plugin_hash`](Self::verify_plugin_hash) so `/reconfigure`
@@ -171,7 +171,7 @@ impl PipelineHandle {
         Ok(SwapGuard { flag: Arc::clone(flag) })
     }
 
-    /// P0.10 (A3 residual): record a single hot-swap phase timing on the
+    /// Record a single hot-swap phase timing on the
     /// shared `hot_swap_phase_ns` histogram. Phase label is one of
     /// {compile, instantiate, signal, replacement_adopted, first_post_replacement_local_outcome}.
     pub fn record_hotswap_phase(&self, phase: &str, node_id: &str, ns: u64) {
@@ -188,7 +188,7 @@ impl PipelineHandle {
         }
     }
 
-    /// P0.11 (A7 residual): record a single Recovering → Running duration
+    /// Record a single Recovering → Running duration
     /// (nanoseconds) on the shared per-node recovery histogram.
     pub fn record_recovery_duration(&self, node_id: &str, ns: u64) {
         let key = node_id.to_owned();
@@ -204,9 +204,9 @@ impl PipelineHandle {
         }
     }
 
-    /// P0.12 (A5 residual): register the SHA-256 (hex) of the plugin bytes
+    /// Register the SHA-256 (hex) of the plugin bytes
     /// currently loaded on `node_id`. Called by the launcher for every Wasm
-    /// plugin at initial load. Shared with F2 provenance emission.
+    /// plugin at initial load. The same map feeds `metadata.json` provenance.
     pub fn record_plugin_hash(&self, node_id: &str, hex_hash: impl Into<String>) {
         if let Ok(mut guard) = self.plugin_hashes.write() {
             guard.insert(node_id.into(), hex_hash.into());
@@ -228,8 +228,8 @@ impl PipelineHandle {
     /// Snapshot of `node_id -> sha256_hex` for every Wasm plugin currently
     /// loaded. Empty when the pipeline has no Wasm nodes (all-native
     /// baseline) or when the launcher has not yet registered any hashes.
-    /// Reader‑facing single source of truth for the F2 metadata.json
-    /// `wafer_plugin_hashes` field (AC2).
+    /// Single source of truth for the `wafer_plugin_hashes` field in
+    /// `metadata.json`.
     #[must_use]
     pub fn plugin_hashes_snapshot(&self) -> HashMap<String, String> {
         self.plugin_hashes
@@ -238,7 +238,7 @@ impl PipelineHandle {
             .unwrap_or_default()
     }
 
-    /// P0.12 (A5 residual): verify that `expected_hex` matches the cached
+    /// Verify that `expected_hex` matches the cached
     /// hash for `node_id`. Returns:
     /// - `Ok(())` when the node has no cached hash. The launcher registers
     ///   every Wasm plugin it loads, so this only applies to nodes without
@@ -273,9 +273,10 @@ impl PipelineHandle {
         &self.hotswap_metrics
     }
 
-    /// Test-only constructor for P0.10 unit tests. Populates just the
-    /// fields needed to exercise `try_begin_swap` and
-    /// `record_hotswap_phase`; everything else is defaulted.
+    /// Test-only constructor for unit tests of the swap guard, phase
+    /// histogram, plugin hash guard and `/metrics` handler. Populates the
+    /// swap guards and replacement set for `swappable_ids`; everything else
+    /// is defaulted.
     #[cfg(test)]
     pub(crate) fn for_p0_10_test(swappable_ids: &[&str]) -> Self {
         let swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>> = swappable_ids
@@ -1776,10 +1777,10 @@ mod tests {
     }
 
     // ========================================================================
-    // P0.10 (A3 residual) unit tests
+    // Swap guard and hot-swap phase histogram
     // ========================================================================
 
-    /// AC2: overlapping same-node swap requests return "swap-in-progress";
+    /// Overlapping same-node swap requests return "swap-in-progress";
     /// serialised requests succeed one after another.
     #[test]
     fn swap_guard_prevents_overlapping_swap() {
@@ -1861,7 +1862,7 @@ mod tests {
         );
     }
 
-    /// AC1: recording every phase populates six independent series in
+    /// Recording every phase populates six independent series in
     /// the phase histogram. The Prometheus emitter reads from this map.
     #[test]
     #[expect(
@@ -1906,10 +1907,10 @@ mod tests {
     }
 
     // ========================================================================
-    // P0.12 (A5 residual) tests
+    // Plugin hash guard
     // ========================================================================
 
-    /// AC1: `verify_plugin_hash` short-circuits when the node has no
+    /// `verify_plugin_hash` short-circuits when the node has no
     /// cached hash (initial-launcher path). After a hot-swap-shaped hash
     /// registration, a mismatched supplied hash yields the exact
     /// `plugin-hash-mismatch` error prefix so the handler can map it to

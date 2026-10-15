@@ -125,14 +125,14 @@ fn recovery_store(
     let state = WaferState::new_with_memory_limit(node_id, capabilities, memory_limit);
     let mut store = Store::new(&engine, state);
     store.limiter(|s| s.limits_mut());
-    // AC F5.AC2: None skips the setter entirely — engine construction leaves
+    // None skips the setter entirely — engine construction leaves
     // consume_fuel/epoch_interruption off when the limit is None, so the
     // store's default 0 deadline never triggers a trap.
     if let Some(n) = epoch_deadline {
         store.epoch_deadline_trap();
         store.set_epoch_deadline(lifecycle_epoch_deadline(n));
     }
-    // M2 (safety review): reapply fuel BEFORE the caller instantiates from
+    // Reapply fuel BEFORE the caller instantiates from
     // the cached InstancePre. Component start functions can consume fuel
     // during `instantiate`; if the store's fuel is still 0 (default), the
     // guest traps on its first fuel-checking instruction. `validate_and_init`
@@ -457,7 +457,7 @@ impl WasmTransformNode {
     ) -> Result<RuntimeEnvelope, WasmProcessError> {
         self.store.data_mut().clear_log_buffer();
 
-        // AC F5.AC2: None means unlimited — engine has consume_fuel disabled
+        // None means unlimited — engine has consume_fuel disabled
         // in that case, so calling set_fuel would return an error.
         if let Some(n) = self.fuel_limit {
             self.store
@@ -516,7 +516,7 @@ impl WasmTransformNode {
     /// Call guest lifecycle validate() and init() before first message processing.
     pub async fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
         let node_id = self.node_id().to_string();
-        // AC F5.AC2: None → unlimited; engine has metering disabled at Config
+        // None → unlimited; engine has metering disabled at Config
         // level so the setter must be skipped, not called with a sentinel.
         if let Some(n) = self.fuel_limit {
             self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
@@ -594,7 +594,7 @@ impl WasmTransformNode {
         &self.cached_pre
     }
 
-    /// Replace the cached InstancePre (used by process-time rollback A17
+    /// Replace the cached InstancePre (used by process-time rollback
     /// to restore v1's pre after rollback).
     pub(crate) fn set_cached_pre(&mut self, pre: TransformPre) {
         self.cached_pre = pre;
@@ -725,7 +725,7 @@ impl WasmFilterNode {
                 config: config_json.to_string(),
                 plugin_version: self.plugin_version.clone(),
             };
-        // AC F5.AC2: skip metering setters when unlimited; see transform path.
+        // Skip metering setters when unlimited; see transform path.
         if let Some(n) = self.fuel_limit {
             self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
                 message: format!("filter '{}' lifecycle fuel reset failed: {e}", self.node_id()),
@@ -773,7 +773,7 @@ impl WasmFilterNode {
     ) -> Result<FilterOutcome, WasmProcessError> {
         self.store.data_mut().clear_log_buffer();
 
-        // AC F5.AC2: skip metering setters when unlimited.
+        // Skip metering setters when unlimited.
         if let Some(n) = self.fuel_limit {
             self.store
                 .set_fuel(n.get())
@@ -1034,7 +1034,7 @@ impl WasmRouterNode {
         ports
     }
 
-    // AC F5.AC2: skip metering setters when unlimited; see transform path.
+    // Skip metering setters when unlimited; see transform path.
     fn arm_lifecycle_limits(&mut self) -> Result<(), WaferError> {
         if let Some(n) = self.fuel_limit {
             self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
@@ -1056,7 +1056,7 @@ impl WasmRouterNode {
     ) -> Result<RouteOutcome, WasmProcessError> {
         self.store.data_mut().clear_log_buffer();
 
-        // AC F5.AC2: skip metering setters when unlimited.
+        // Skip metering setters when unlimited.
         if let Some(n) = self.fuel_limit {
             self.store
                 .set_fuel(n.get())

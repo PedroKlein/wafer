@@ -178,8 +178,10 @@ impl host_types::HostBuffer for WaferState {
         std::future::ready(bytes)
     }
 
-    /// Called by the Component Model when a `borrow<buffer>` goes out of scope.
-    /// Removes the resource from the table, freeing the underlying Bytes handle.
+    /// Called by the Component Model only when the guest drops an owned
+    /// `buffer` handle. WAFER passes buffers as `borrow<buffer>`, which never
+    /// reaches this; the host removes each buffer itself with
+    /// `WaferState::delete_buffer` after the guest call returns.
     fn drop(
         &mut self,
         resource: Resource<WaferBuffer>,

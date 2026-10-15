@@ -7,9 +7,9 @@
     clippy::large_futures,
     reason = "test: launch_pipeline future is large due to WASM Store/Component loading"
 )]
-//! F2 regression: `metadata.json` provenance completeness (RESULT-CONTRACT).
+//! Regression test: `metadata.json` provenance completeness (RESULT-CONTRACT).
 //!
-//! Before F2, `metadata.json` produced by `eval/scripts/run-experiment.sh`
+//! Previously, `metadata.json` produced by `eval/scripts/run-experiment.sh`
 //! recorded `git_sha` + `host_tag` + arch + os but missed the fields the
 //! canonical Pi runs need for reproducibility: resolved wasmtime version,
 //! config sha256, per-plugin sha256, runtime binary sha256, rustc version,
@@ -17,7 +17,7 @@
 //! wasmtime commit + rustc + plugin bytes are unrecoverable). This test
 //! locks the runtime-produced provenance JSON so drift fails loudly.
 //!
-//! Plugin-hash source of truth: the same cached hash the P0.12 hot-swap
+//! Plugin-hash source of truth: the same cached hash the hot-swap
 //! guard uses. We assert this by hot-loading pipeline-shakedown.toml (which
 //! uses the pass-through plugin) and comparing the emitted hash to a
 //! SHA256 computed over the same .wasm bytes.
@@ -47,7 +47,7 @@ fn pass_through_plugin_bytes() -> Vec<u8> {
     std::fs::read(PASS_THROUGH_WASM).expect("read pass-through plugin")
 }
 
-/// AC1 + AC2 + AC3: fresh launch produces a provenance JSON containing all
+/// Fresh launch produces a provenance JSON containing all
 /// six new keys, populated non-empty, with `wafer_plugin_hashes` matching
 /// the SHA256 of the on-disk .wasm bytes (single-source-of-truth invariant).
 #[tokio::test]

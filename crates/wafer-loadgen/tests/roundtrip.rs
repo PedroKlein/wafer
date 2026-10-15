@@ -3,11 +3,11 @@
 //! Spins up `eclipse-mosquitto:2.0.18` in a Docker container via `testcontainers`,
 //! runs the publisher and subscriber against it in-process, and asserts:
 //!
-//! - `AC3a`: `10_000` messages round-trip.
-//! - `AC3b`: zero loss (no sequence gaps).
-//! - `AC3c`: zero duplicates.
-//! - `AC3d`: `latency.hdr` starts with the [`HdrHistogram`] V2 cookie prefix (`1c 84 93`).
-//! - `AC3e`: `subscriber-metadata.json` deserialises and reports the expected counts.
+//! - `10_000` messages round-trip.
+//! - zero loss (no sequence gaps).
+//! - zero duplicates.
+//! - `latency.hdr` starts with the [`HdrHistogram`] V2 cookie prefix (`1c 84 93`).
+//! - `subscriber-metadata.json` deserialises and reports the expected counts.
 //!
 //! Needs a Docker daemon: `mise run test-docker`. With colima, export
 //! `DOCKER_HOST` first.
@@ -138,7 +138,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
             anyhow::anyhow!("subscriber did not finish within 30s of publisher exit: {e}")
         })???;
 
-    // AC3a: 10k messages observed.
+    // 10k messages observed.
     assert_eq!(
         sub_report.total_messages, TOTAL_MESSAGES,
         "expected {TOTAL_MESSAGES} messages, got {}",
@@ -152,7 +152,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     assert_eq!(sub_report.parse_errors, 0, "unexpected JSON parse errors");
     assert_eq!(sub_report.ignored_sequences, 100, "warmup sequences entered measurement");
 
-    // AC3b + AC3c: zero loss, zero duplicates.
+    // Zero loss, zero duplicates.
     assert_eq!(sub_report.total_gaps, 0, "expected zero gaps, got {}", sub_report.total_gaps);
     assert_eq!(
         sub_report.total_duplicates, 0,
@@ -160,7 +160,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         sub_report.total_duplicates
     );
 
-    // AC3d: latency.hdr magic bytes.
+    // latency.hdr magic bytes.
     let hdr = std::fs::read(output_dir.join("latency.hdr"))?;
     assert!(hdr.len() > 4, "latency.hdr suspiciously small: {} bytes", hdr.len());
     assert_eq!(
@@ -170,7 +170,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         &hdr[..hdr.len().min(8)]
     );
 
-    // AC3e: subscriber-metadata.json.
+    // subscriber-metadata.json.
     let meta_text = std::fs::read_to_string(output_dir.join("subscriber-metadata.json"))?;
     let meta: SubscriberMetadata = serde_json::from_str(&meta_text)?;
     assert_eq!(meta.total_recorded, TOTAL_MESSAGES);

@@ -24,7 +24,7 @@ use crate::runner::{HotSwapProgress, SwapPayload};
 // ready to send via watch channel.
 
 // =============================================================================
-// Legacy hot-swap coordinator — feature-gated for old tests
+// SwapError: exported, but the runtime's own swap path does not raise it
 // =============================================================================
 
 /// Error types for hot-swap operations.
@@ -79,7 +79,7 @@ pub struct SwapTimeline {
     pub swap_acked: Option<std::time::Instant>,
     /// When the runner observed the first post-replacement local outcome.
     pub first_post_replacement_local_outcome: Option<std::time::Instant>,
-    /// Duration of process-time rollback to v1, if triggered (A17).
+    /// Duration of process-time rollback to v1, if triggered.
     pub rollback_time_ns: Option<u64>,
     /// Whether the compile phase compiled the component or reused a cached one.
     pub compile_cache: Option<CacheOutcome>,
@@ -332,10 +332,10 @@ fn new_swap_store(
         engine.inner(),
         WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
     );
-    // Activate configured StoreLimits (A8): without this, `memory_size` is ignored
+    // Activate configured StoreLimits: without this, `memory_size` is ignored
     // and the swapped-in instance can outgrow the launcher-enforced budget.
     store.limiter(|s| s.limits_mut());
-    // AC F5.AC2: skip metering setters when unlimited; consume_fuel and
+    // Skip metering setters when unlimited; consume_fuel and
     // epoch_interruption are gated at Config level so calling the setter
     // would return Err when the limit is None.
     if let Some(n) = fuel_limit {

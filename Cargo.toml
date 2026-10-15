@@ -195,8 +195,8 @@ lto = "thin"
 codegen-units = 1
 debug = false
 strip = "debuginfo"
-# Node failures are contained with catch_unwind and JoinSet panic handling;
-# `abort` would turn any panic into a process exit.
+# A panicking node task is caught by Tokio and reported through the
+# pipeline's JoinSet; `abort` would turn any panic into a process exit.
 panic = "unwind"
 
 [patch.crates-io]

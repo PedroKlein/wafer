@@ -4,7 +4,7 @@
 //! form exists so integration tests (`tests/roundtrip.rs`) can drive both the
 //! publisher and subscriber in-process against a broker container.
 //!
-//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3B / D4 / D9.
+//! See docs/rfcs/RFC-008-evaluation-harness.md (Decisions 3, 4 and 9).
 
 pub mod hdr_summary;
 pub mod payload;

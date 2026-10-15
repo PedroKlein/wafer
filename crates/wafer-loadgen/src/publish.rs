@@ -1,4 +1,4 @@
-//! MQTT publisher — refactored (P0.3) to drive from a `LoadShape` scheduler
+//! MQTT publisher, driven by a `LoadShape` scheduler
 //! rather than rebuilding `tokio::time::interval` per tick.
 //!
 //! # Load shapes
@@ -22,7 +22,7 @@
 //!
 //! # Compat
 //! Publisher CLI flags from the pre-refactor binary are preserved. The
-//! `--profile` string still accepts `steady`, `burst`, `ramp`; P0.3 adds
+//! `--profile` string still accepts `steady`, `burst`, `ramp`, and adds
 //! `hotswap-trigger` and the `--hotswap-*` flags to configure it.
 
 use std::io::{BufWriter, Write};
@@ -214,7 +214,7 @@ pub struct HotswapProfile {
     /// New plugin identifier — this field previously held a plugin *name*
     /// (e.g. `pass-through-v2`); we also accept a filesystem path.
     pub new_plugin: Option<String>,
-    /// Explicit `.wasm` path (preferred over `new_plugin` for P0.3).
+    /// Explicit `.wasm` path (preferred over `new_plugin`).
     pub new_plugin_path: Option<String>,
     /// Runtime node to target.
     pub target_node: Option<String>,

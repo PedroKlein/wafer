@@ -205,7 +205,7 @@ pub struct NodeMetrics {
     dropped_on_teardown: AtomicU64,
     /// Total hot-swap operations completed on this node.
     swaps: AtomicU64,
-    /// P0.11 (A7 residual): cumulative Recovering → Running time in
+    /// Cumulative Recovering → Running time in
     /// nanoseconds and total recovery events. Runners populate this from
     /// [`NodeStateTracker::transition_recovering_to_running_timed`].
     /// Exposed on /metrics as `wafer_node_recovery_duration_ms`.
@@ -213,7 +213,7 @@ pub struct NodeMetrics {
     recovery_count: AtomicU64,
     recovery_max_ns: AtomicU64,
     recovery_samples_ns: Mutex<VecDeque<u64>>,
-    /// A17: Total process-time hot-swap rollbacks triggered.
+    /// Total process-time hot-swap rollbacks triggered.
     rollbacks: AtomicU64,
 }
 
@@ -329,13 +329,13 @@ impl NodeMetrics {
         self.swaps.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A17: Record a process-time hot-swap rollback.
+    /// Record a process-time hot-swap rollback.
     #[inline]
     pub fn record_rollback(&self) {
         self.rollbacks.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// P0.11 (A7 residual): record one Recovering → Running duration.
+    /// Record one Recovering → Running duration.
     /// Called by every runner (transform/filter/router) after a successful
     /// re-instantiation from the cached `InstancePre`.
     #[inline]
@@ -481,7 +481,7 @@ impl NodeMetrics {
         self.swaps.load(Ordering::Relaxed)
     }
 
-    /// A17: Total process-time hot-swap rollbacks.
+    /// Total process-time hot-swap rollbacks.
     #[inline]
     pub fn rollbacks(&self) -> u64 {
         self.rollbacks.load(Ordering::Relaxed)

@@ -495,7 +495,7 @@ impl ErrorPolicyExecutor {
         category: ErrorCategory,
         error_msg: String,
     ) -> ErrorPolicyAction {
-        // P0.11 (A7 residual): persist per-envelope retry_count on the envelope
+        // Persist per-envelope retry_count on the envelope
         // itself so a retry that succeeds partially then fails again keeps
         // its history. Previously we hard-coded retry_count = 0 for every
         // retry, so envelopes could loop forever without hitting
@@ -978,10 +978,10 @@ mod tests {
     }
 
     // ========================================================================
-    // P0.11 (A7 residual) tests
+    // Per-envelope retry count
     // ========================================================================
 
-    /// AC1: try_retry reads envelope.retry_count, increments it, re-enqueues.
+    /// try_retry reads envelope.retry_count, increments it, re-enqueues.
     /// After max_retries is exceeded, the envelope goes to DLQ with
     /// DlqReason::RetriesExhausted { max_retries } instead of being requeued.
     #[test]
@@ -1000,7 +1000,7 @@ mod tests {
         assert_eq!(requeued.retry_count, 1, "retry_count must be incremented before requeue");
     }
 
-    /// AC1: on the (retries + 1)th failure, envelope goes to DLQ with
+    /// On the (retries + 1)th failure, envelope goes to DLQ with
     /// DlqReason::RetriesExhausted rather than being pushed into the retry
     /// buffer again.
     #[test]
