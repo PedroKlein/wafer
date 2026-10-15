@@ -123,12 +123,8 @@ there is no config key for it.
 rm -rf ~/.cache/wafer/plugins
 ```
 
-The runtime accepts a `--no-cache` flag, but it currently has no effect:
-the launcher builds the registry settings from `[registry]` alone and
-never passes the flag through. `mise run run-remote-nocache` therefore
-behaves exactly like `mise run run-remote` (both run
-`examples/dag-remote.toml`). To bypass the cache today, delete the cached
-entry or point `[registry].cache_dir` at an empty directory.
+To bypass the cache, delete the cached entry or point `[registry].cache_dir`
+at an empty directory.
 
 ## Registry-command reference
 
@@ -147,7 +143,6 @@ entry or point `[registry].cache_dir` at an empty directory.
 | `mise run //plugins:pull-plugin-auth <user> <token> <name> <version>` | Pull with inline credentials. |
 | `mise run run-local` | Run the sample pipeline with only local plugins. |
 | `mise run run-remote` | Run `examples/dag-remote.toml`, whose plugin reference points at a placeholder registry; edit it to name a component you published. |
-| `mise run run-remote-nocache` | Same with `--no-cache`, which has no effect yet (see [Cache management](#cache-management)). |
 
 ## Environment variables
 

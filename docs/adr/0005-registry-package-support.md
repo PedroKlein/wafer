@@ -11,9 +11,8 @@ Accepted (Updated: 2026-02-17)
 >   are rejected at parse time, so `cache_ttl_hours` in a pipeline TOML is a
 >   configuration error. The registry client's cache TTL is fixed at its
 >   built-in default of 24 hours.
-> - `wafer-runtime --no-cache` is accepted on the command line but is not
->   passed to the registry client, so it has no effect; cached entries within
->   the TTL are still used.
+> - There is no `--no-cache` flag; cached entries within the TTL are always
+>   used.
 > - There is no stale-cache fallback. The cache is consulted only before a
 >   fetch; if the fetch fails, the error is returned (step 5 under "Cache
 >   behavior" is not implemented).

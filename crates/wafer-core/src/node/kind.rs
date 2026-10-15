@@ -9,10 +9,7 @@ use std::sync::Arc;
 use super::metrics::NodeMetrics;
 use super::state::NodeStateTracker;
 
-/// Concrete node type, replacing `Box<dyn Transform>` etc.
-///
-/// Enum dispatch for the closed set of pipeline node types. The runner's
-/// match statement compiles to a jump table — no vtable indirection.
+/// The closed set of pipeline node roles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
     /// Wasm transform: 1→1 message transformation.

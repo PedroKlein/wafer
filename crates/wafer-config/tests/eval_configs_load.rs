@@ -85,7 +85,7 @@ fn every_eval_config_loads_and_validates() {
         let edges = config.edges.len();
         if !has_source || !has_sink || edges == 0 {
             failures.push(format!(
-                "{display}: parsed shape is degenerate (has_source={has_source}, has_sink={has_sink}, edges={edges}); the P0.13 schema-reconcile guard failed"
+                "{display}: parsed shape is degenerate (has_source={has_source}, has_sink={has_sink}, edges={edges})"
             ));
         }
         // Extra check: NodeDef variants are non-empty (each entry deserialised

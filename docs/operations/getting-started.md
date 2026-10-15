@@ -62,13 +62,13 @@ HELLO, WORLD!
 
 ## 4. Start a pipeline that keeps running
 
-In the first terminal, start the same pipeline with an input that stays open until you press Enter and then sends one JSON line:
+In the first terminal, start the same pipeline without piping anything into it, so it reads what you type:
 
 ```bash
-{ read -r; echo '{"temp": 21}'; } | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
+cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
 ```
 
-Wait for `HTTP API server listening`, and leave the pipeline running. Do not type input straight into a running pipeline: the stdin source may hold it until its input closes ([#235](https://github.com/PedroKlein/wafer/issues/235)).
+Wait for `HTTP API server listening`, type `hello` and press Enter. The pipeline prints `HELLO` and keeps running.
 
 ## 5. Look at the running pipeline
 
@@ -122,12 +122,17 @@ After about five seconds the answer arrives:
 
 ## 7. See the new plugin at work
 
-Go back to the first terminal and press Enter. The pipeline receives `{"temp": 21}`, and the node that upper-cased text before now pretty-prints JSON. The input then ends, and the pipeline stops:
+Go back to the first terminal, type `{"temp": 21}` and press Enter. The node that upper-cased text before now pretty-prints JSON:
 
 ```text
 {
   "temp": 21
 }
+```
+
+Press Ctrl+D to end the input, and the pipeline stops:
+
+```text
 ... INFO wafer: Pipeline completed
 ... INFO wafer: WAFER Runtime stopped
 ```

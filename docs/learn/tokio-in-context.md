@@ -111,9 +111,9 @@ Core code uses `std::sync::Mutex` and `RwLock` only for short critical sections 
 
 Atomics replace locks where one value is enough. [Rust in context](rust-in-context.md#arc-atomics-and-raii) explains the `Relaxed` metric counters and the `compare_exchange` claim in `PipelineHandle::try_begin_swap`. `HotSwapProgress::try_claim` and `try_withdraw` race on one `AtomicU8` in the same way, so the runner and the API handler cannot both own a payload.
 
-## Limits to keep in mind
+## Blocking reads
 
-- `StdinSource::poll` (`crates/wafer-core/src/node/source/stdin.rs`) calls the blocking `read_line` from `std::io` inside its future. While it waits for a line it holds a worker thread, and its loop cannot see cancellation until a line or end of input arrives ([#235](https://github.com/PedroKlein/wafer/issues/235)).
+Blocking reads stay off the worker threads. `StdinSource` (`crates/wafer-core/src/node/source/stdin.rs`) reads lines on its own thread and hands them to `poll` through a one-slot `tokio::sync::mpsc` channel, so a worker never waits for a person to type. Tokio's own `stdin()` would not do here: it reads on a blocking-pool thread that cannot be cancelled, so shutdown would wait for the next line.
 
 ## Check yourself
 
