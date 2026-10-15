@@ -68,7 +68,7 @@ Pipeline-wide default. A present `[nodes.NAME.error_policy]` table replaces the 
 
 `RetryConfig` fields: `retries: u32`, `backoff_ms: u64`, `exhausted: SimpleAction`. The first retry waits exactly `backoff_ms`; later delays double up to 30 seconds. The bounded buffer selects the earliest due entry, so an earlier-deadline retry cannot be stranded behind a later one. Exhaustion honors the configured `skip`, `dlq`, or `teardown` action. DLQ-full and DLQ-closed outcomes are distinct and exhausted envelopes are not requeued.
 
-`unrecoverable` errors and traps are not configurable: the message is written to the DLQ (reason `unrecoverable` or `trapped`) and the node is re-instantiated from the cached `InstancePre`.
+`unrecoverable` errors and traps are not configurable: the message is written to the DLQ (reason `unrecoverable` or `trapped`) and the node is re-instantiated from the cached `InstancePre`. Fuel exhaustion and epoch interrupts are the exception: they follow `timed_out`.
 
 ## `[dead_letter]`
 

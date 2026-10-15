@@ -72,7 +72,32 @@ For every message, `WasmTransformNode::process`, `WasmFilterNode::evaluate`, or 
 
 ## Check yourself
 
-Starting at `plugins/pass-through/src/lib.rs`, identify the guest-generated trait, the matching host-generated call, the launcher function that builds its Store, and the call site that deletes the borrowed buffer resource. Then explain why adding a new kind of source requires a native adapter rather than a new world.
+**1. In `plugins/pass-through/src/lib.rs`, which generated trait does the guest implement for processing, and which host call invokes it?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+The guest implements `exports::wafer::pipeline::transform::Guest` and its `process`. The host calls it through the generated `TransformNode` as `wafer_pipeline_transform().call_process(...)`.
+
+</details>
+
+**2. Which function builds the Store for a Wasm Transform and runs the guest's `validate` and `init`?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+`load_transform_node` in `crates/wafer-core/src/orchestrator/launcher.rs` creates the `Store<WaferState>`, instantiates the component, and calls `validate_and_init`.
+
+</details>
+
+**3. Why does a new kind of source need a native adapter rather than a new WIT world?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+The WIT worlds describe processing, not transport. There is no source or sink world; sources and sinks are native Rust adapters created by `create_source` and `create_sink`.
+
+</details>
 
 ## Next
 

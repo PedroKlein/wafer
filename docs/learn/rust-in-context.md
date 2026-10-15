@@ -52,7 +52,7 @@ plugin = "../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_throug
 
 ## Ownership, moves, borrowing, and shared storage
 
-Rust gives each value one owner unless the type explicitly supports shared ownership. Pipeline queues use that rule as part of their design. Sending a `RuntimeEnvelope` into a Tokio channel moves the envelope to the receiver. The sender cannot keep using that same value afterward.
+Rust gives each value one owner unless the type explicitly supports shared ownership. Pipeline queues use that rule as part of their design. The builder connects nodes with bounded `mpsc::channel(capacity)` queues, each holding at most `capacity` values. Sending a `RuntimeEnvelope` into one moves the envelope to the receiver, and the sender cannot keep using that value afterward. Node state moves the same way: `PipelineOrchestrator::spawn_bundles` moves each prepared bundle into its runner task, so `run_source_loop` owns a source adapter and its downstream senders, and `run_sink_loop` owns a sink adapter and its receiver. [Tokio in context](tokio-in-context.md#bounded-mpsc-between-nodes) explains how a queue's capacity is chosen and how a full queue makes the sender wait.
 
 A borrow such as `&Config` or `&RuntimeEnvelope` grants temporary access without transferring ownership. `build_pipeline` borrows the configuration because it only needs to inspect it. `FilterNode::evaluate` borrows an envelope because a filter decides whether to forward the original message rather than constructing a replacement.
 
@@ -70,7 +70,7 @@ Processing nodes use enum dispatch instead. `TransformNode` and `FilterNode` in 
 
 ## Async trait methods as boxed futures
 
-`Lifecycle::init` and `Source::poll` are asynchronous, but they are not declared `async fn`. They return a boxed future:
+An `async fn` returns a future that pauses at each `.await` whose operation is not ready, so other Tokio tasks can run in the meantime. `Lifecycle::init` and `Source::poll` are asynchronous, but they are not declared `async fn`. They return a boxed future:
 
 ```rust
 fn poll(&mut self) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>>;
@@ -84,12 +84,6 @@ The reason is the trait object above. Rust accepts `async fn` in a trait, but su
 - `+ '_` ties the future's lifetime to the `&mut self` borrow, because the async block captures `self`.
 
 Implementations wrap their body in `Box::pin(async move { ... })`, as `StdinSource::poll` in `crates/wafer-core/src/node/source/stdin.rs` does. The cost is one heap allocation per call. The processing path avoids it: `TransformNode::process` is a plain `async fn`, because it is an inherent method on an enum and never called through `dyn`.
-
-## Async functions and bounded channels
-
-An async function can pause at `.await` while other Tokio tasks run. `run_source_loop` owns a source adapter and downstream senders; `run_sink_loop` owns a sink adapter and one receiver. `PipelineOrchestrator::spawn_bundles` moves each prepared bundle into its runner task.
-
-The pipeline builder connects nodes with bounded `mpsc::channel(capacity)` queues, which hold at most `capacity` values each; [Tokio in context](tokio-in-context.md#bounded-mpsc-between-nodes) explains how the capacity is chosen and how `send_one` sends into them.
 
 ## Arc, atomics, and RAII
 
@@ -110,32 +104,57 @@ The workspace uses edition 2024 with the toolchain pinned in `rust-toolchain.tom
 
 ## Working vocabulary
 
-- **Arc**: `std::sync::Arc<T>`, an atomically reference-counted owner used when tasks or cloned envelopes share one allocation.
-- **Async function**: A function declared with `async` whose future can suspend at `.await`.
-- **Borrow**: Temporary access through a reference such as `&Config` without taking ownership.
-- **Bounded channel**: A queue with a fixed capacity, such as Tokio `mpsc::channel(capacity)`.
-- **Boxed future**: The return type `Pin<Box<dyn Future<Output = T> + Send + '_>>`, which lets a trait method be asynchronous and still be called through a trait object.
-- **Cargo feature**: A named compile-time option from a crate's `[features]` table; code under `#[cfg(feature = "http-api")]` is compiled only when that feature is on.
-- **Crate**: A Rust compilation unit. In this workspace a crate may be a library or binary target.
-- **Enum**: A closed set of variants, such as `NodeDef`, that callers handle with pattern matching.
-- **Enum dispatch**: Choosing behavior with a `match` over a closed enum, such as `TransformNode::Wasm` and `TransformNode::Native`, instead of through a trait object.
-- **Error context**: A layer that `anyhow`'s `.context(...)` wraps around an error; `downcast_ref` and `chain` can find it again later.
-- **From conversion**: An `impl From<A> for B`. `?` calls it to turn the error it receives into the function's error type, and `thiserror`'s `#[from]` generates it.
-- **Internally tagged enum**: A serde enum marked `#[serde(tag = "...")]`, whose variant is named by a key inside the same table, such as `type = "transform"`.
-- **Let-else**: `let PATTERN = value else { ... };`, which binds when the pattern matches and otherwise must leave the enclosing block, usually with `return`.
-- **Lint expectation**: An `#[expect(lint, reason = "...")]` attribute, which silences a lint and warns if the lint no longer fires.
-- **Move**: Transfer of a value's ownership, such as sending an envelope or moving a node bundle into a task.
-- **Ownership**: Rust's rule that a value has an owner responsible for its lifetime and cleanup.
-- **Public re-export**: A `pub use` that exposes an item through a crate or module boundary.
-- **RAII**: Resource acquisition is initialization; an owned guard restores state in its `Drop` implementation.
-- **Result**: `Result<T, E>`, an enum carrying either a success value or a typed error.
-- **Trait object**: A value such as `Box<dyn Source + Send>` that stores an unknown concrete type behind a trait interface.
-- **Untagged enum**: A serde enum marked `#[serde(untagged)]`, which tries each variant in order until one matches the input, such as `PluginSpec`.
-- **Workspace**: A group of Cargo packages that share resolution, dependency declarations, and configuration.
+- <a id="arc"></a>**Arc**: `std::sync::Arc<T>`, an atomically reference-counted owner used when tasks or cloned envelopes share one allocation.
+- <a id="async-function"></a>**Async function**: A function declared with `async` whose future can suspend at `.await`.
+- <a id="borrow"></a>**Borrow**: Temporary access through a reference such as `&Config` without taking ownership.
+- <a id="bounded-channel"></a>**Bounded channel**: A queue with a fixed capacity, such as Tokio `mpsc::channel(capacity)`.
+- <a id="boxed-future"></a>**Boxed future**: The return type `Pin<Box<dyn Future<Output = T> + Send + '_>>`, which lets a trait method be asynchronous and still be called through a trait object.
+- <a id="cargo-feature"></a>**Cargo feature**: A named compile-time option from a crate's `[features]` table; code under `#[cfg(feature = "http-api")]` is compiled only when that feature is on.
+- <a id="crate"></a>**Crate**: A Rust compilation unit. In this workspace a crate may be a library or binary target.
+- <a id="enum"></a>**Enum**: A closed set of variants, such as `NodeDef`, that callers handle with pattern matching.
+- <a id="enum-dispatch"></a>**Enum dispatch**: Choosing behavior with a `match` over a closed enum, such as `TransformNode::Wasm` and `TransformNode::Native`, instead of through a trait object.
+- <a id="error-context"></a>**Error context**: A layer that `anyhow`'s `.context(...)` wraps around an error; `downcast_ref` and `chain` can find it again later.
+- <a id="from-conversion"></a>**From conversion**: An `impl From<A> for B`. `?` calls it to turn the error it receives into the function's error type, and `thiserror`'s `#[from]` generates it.
+- <a id="internally-tagged-enum"></a>**Internally tagged enum**: A serde enum marked `#[serde(tag = "...")]`, whose variant is named by a key inside the same table, such as `type = "transform"`.
+- <a id="let-else"></a>**Let-else**: `let PATTERN = value else { ... };`, which binds when the pattern matches and otherwise must leave the enclosing block, usually with `return`.
+- <a id="lint-expectation"></a>**Lint expectation**: An `#[expect(lint, reason = "...")]` attribute, which silences a lint and warns if the lint no longer fires.
+- <a id="move"></a>**Move**: Transfer of a value's ownership, such as sending an envelope or moving a node bundle into a task.
+- <a id="ownership"></a>**Ownership**: Rust's rule that a value has an owner responsible for its lifetime and cleanup.
+- <a id="public-re-export"></a>**Public re-export**: A `pub use` that exposes an item through a crate or module boundary.
+- <a id="raii"></a>**RAII**: Resource acquisition is initialization; an owned guard restores state in its `Drop` implementation.
+- <a id="result"></a>**Result**: `Result<T, E>`, an enum carrying either a success value or a typed error.
+- <a id="trait-object"></a>**Trait object**: A value such as `Box<dyn Source + Send>` that stores an unknown concrete type behind a trait interface.
+- <a id="untagged-enum"></a>**Untagged enum**: A serde enum marked `#[serde(untagged)]`, which tries each variant in order until one matches the input, such as `PluginSpec`.
+- <a id="workspace"></a>**Workspace**: A group of Cargo packages that share resolution, dependency declarations, and configuration.
 
 ## Check yourself
 
-Open `crates/wafer-core/src/node/source/stdin.rs` and explain why `poll` returns a boxed future instead of being an `async fn`. Then name the exit code `wafer` returns when a node table contains a misspelled key, and trace each conversion that carries the error from `toml::from_str` to `startup_exit_code`.
+**1. Why does `StdinSource::poll` return a boxed future instead of being an `async fn`?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+Sources are stored as `Box<dyn Source + Send>`, and a trait with an `async fn` cannot be used as a trait object, because each implementation would return its own future type. The boxed future gives every implementation the same return type, at the cost of one heap allocation per call.
+
+</details>
+
+**2. A node table contains a misspelled key. Which exit code does `wafer` return, and which conversions carry the error there?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+Exit code 2. `deny_unknown_fields` makes `toml::from_str` fail, `?` in `load_config` turns the `toml::de::Error` into `ConfigError::Parse` through the `From` impl that `#[from]` generates, and `run` wraps that in `anyhow::Error` with `.context("Failed to load configuration")` and the `ConfigInvalid` marker. `startup_exit_code` finds the marker with `downcast_ref` and returns 2.
+
+</details>
+
+**3. Why does the hot-swap handler write `let _replacement_guard = ...` and not `let _ = ...`?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+`let _ = ...` drops the `SwapGuard` at once, which would release the swap-in-progress flag before the swap runs. A named binding keeps the guard alive to the end of the scope, and its `Drop` releases the flag on every exit path, including early returns through `?`.
+
+</details>
 
 ## Next
 

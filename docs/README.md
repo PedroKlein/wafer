@@ -19,7 +19,7 @@ arc42-lite framework, split into subdirectories by reader intent.
   [`eval/pi5-host-setup.md`](eval/pi5-host-setup.md) for the canonical
   Raspberry Pi 5, [`eval/jetson-host-setup.md`](eval/jetson-host-setup.md)
   and [`eval/x86-host-setup.md`](eval/x86-host-setup.md) for the replication
-  hosts, then [`eval/pi5-experiment-runbook.md`](eval/pi5-experiment-runbook.md).
+  hosts, then [`eval/experiment-runbook.md`](eval/experiment-runbook.md).
 - **Investigating a design decision?** →
   [`rfcs/`](rfcs/) for long-form and [`adr/`](adr/) for short summaries.
 - **Checking what is implemented today?** →
@@ -83,7 +83,7 @@ docs/
 │   ├── pi5-host-setup.md
 │   ├── jetson-host-setup.md
 │   ├── x86-host-setup.md
-│   ├── pi5-experiment-runbook.md
+│   ├── experiment-runbook.md
 │   └── cross-compile.md
 ├── status/               Current state of the world (Reference)
 │   ├── README.md
@@ -110,7 +110,7 @@ evaluation as they are today.
 ## Reader profiles
 
 - **Thesis reviewer**: read `architecture/00-vision.md`,
-  `architecture/07-quality-requirements.md`, `architecture/09-comparators.md`,
+  `requirements/non-functional.md`, `architecture/09-comparators.md`,
   and skim `rfcs/README.md` for the amendments graph. To check a claim
   against the source, follow the numbered first-read order in
   `learn/README.md`.

@@ -197,12 +197,10 @@ mise run cross-build-pi-check  # confirm the three are aarch64 ELF
 mise run glibc-floor -- --max 2.36 target/docker-aarch64-linux/release/wafer
 ```
 
-Jetson (L4T, older glibc) and x86 hosts build on the host itself
-(`cargo build --locked --release ...` or `mise run build-release-x86`). See
-`docs/eval/cross-compile.md` for the rationale and the glibc each binary needs.
-
-**When to cross-compile vs build on target**: Cross-compile for CI and quick iteration.
-Build on target for final benchmarks (ensures matching LLVM codegen for the actual CPU).
+Jetson and x86 hosts build on the host itself (`cargo build --locked --release ...`
+on the Jetson, `mise run build-release-x86` on x86). The Jetson's L4T glibc (2.35) is
+older than the one the container build links against; `docs/eval/cross-compile.md`
+("Which glibc a binary needs") explains why and how to check a binary.
 
 ---
 

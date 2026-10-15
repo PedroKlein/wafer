@@ -71,11 +71,36 @@ The documented node-state tracker has Error, Recovering, and Running transitions
 
 - Every Transform, Filter, and Router bundle gets a watch channel, but only loaded Wasm nodes are marked replacement-eligible. A native Transform or Filter baseline rejects a Wasm swap.
 - Only the Transform runner has process-time canary rollback. Do not generalize it to Filter or Router.
-- The API response proves adoption and one runner-local outcome. It says nothing about sink transition, sequence continuity, loss, or throughput; those need evaluation artifacts.
+- A 200 response proves adoption and one runner-local outcome; a 202 response reports adoption only. It says nothing about sink transition, sequence continuity, loss, or throughput; those need evaluation artifacts.
 
 ## Check yourself
 
-Locate the point where `take_pending_swap` checks `swap_rx.has_changed()`. List what a full replacement transfers, what survives only as reusable host-side code/configuration, and what mutable guest state disappears. Finally, explain why `rolled_back` is an API outcome rather than a new `NodeState` variant.
+**1. When does a running Transform adopt a replacement?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+Only between guest calls. `take_pending_swap` checks for an unseen payload at the top of each iteration, and the idle input wait also wakes on `swap_rx.changed()`, so an idle node swaps at once.
+
+</details>
+
+**2. Which guest state survives a successful swap?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+None. The new instance starts from its own `init`, and the old Store is dropped without a call to `close`. The prior pre-instance kept for rollback is compiled code, not a snapshot of guest memory.
+
+</details>
+
+**3. What does a successful hot-swap response prove?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+A 200 response proves that the node adopted the replacement and completed one local outcome with it. A 202 response means no outcome arrived within five seconds; its `replacement_adopted` field says whether the node adopted the replacement. Neither says anything about sink delivery, sequence continuity, loss, or throughput.
+
+</details>
 
 ## Next
 

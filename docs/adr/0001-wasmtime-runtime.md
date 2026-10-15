@@ -9,9 +9,7 @@
 > `e9f1ea232fd245aea338ab3eb7d73487ae75cab1`; `ort` is pinned at
 > `d1ebde95d386513fea836593815e8f86f7b96a85`. The current WIT exposes a
 > capability-gated `inference-node`; the host registers wasi-nn and constructs
-> an ONNX backend only for a Wasm Transform with `allow_inference=true`. The
-> engine uses Wasmtime's default on-demand instance allocator, not the pooling
-> allocator listed under "Key Features Used".
+> an ONNX backend only for a Wasm Transform with `allow_inference=true`.
 >
 > The remainder is the historical selection record and does not define current
 > versions or release capabilities.
@@ -54,7 +52,7 @@ Wasmtime is developed by the Bytecode Alliance and has the most complete support
 ### Key Features Used
 
 - `wasmtime::component::Component` - For loading WASM components
-- `wasmtime::Engine` with pooling allocator - For efficient instantiation
+- `wasmtime::Engine` with the default on-demand instance allocator. The pooling allocator was considered and deferred ([RFC-007](../rfcs/RFC-007-performance-optimizations.md) Decision 2).
 - `wasmtime-wasi` - For WASI capability injection
 - Fuel metering - For execution limits per invocation
 - Epoch interrupts - For timeout enforcement

@@ -129,7 +129,7 @@ A compile probe established that this dependency feature set, `WasiHttpView`, cu
 
 ## Executable verification matrix
 
-Each row is a required test against real P2 components and controlled local servers. A missing fixture or skipped row is a failure.
+Each row is a required behaviour of the host policy. The tests that cover each row are listed after the table.
 
 | ID | Setup and request | Required observation |
 |---|---|---|
@@ -154,14 +154,35 @@ Each row is a required test against real P2 components and controlled local serv
 | H19 | Accepted hot-swap and process-time rollback | Replacement and rollback Stores both retain the exact original grant. |
 | H20 | Enable inference and outbound HTTP together | Both explicit grants survive recovery without enabling any unconfigured capability. |
 
-`mise run test-http-security` builds and validates the P2 HTTP fixture component, then runs the fixture-backed tests in `crates/wafer-core/tests/wasi_http_capability.rs`, which are `#[ignore]`d in the default test run because they need the fixture. The other rows run with the ordinary workspace tests.
+### Tests per row
 
-Each row's tests:
+The fixture-backed tests drive a real P2 component (`crates/wafer-core/tests/fixtures/http-transform`). They are `#[ignore]`d in the default test run and run with `mise run test-http-security`, which builds and validates the fixture first. The host-level tests in the same file call the policy hook directly and run with the ordinary workspace tests.
 
-- Fixture-backed, in `wasi_http_capability.rs`: H01-H03 and H09 `real_p2_component_default_denial_and_exact_allow`; H04-H07 `real_p2_component_rejects_authority_variations`; H10 and H14 `real_p2_component_rejects_dns_loopback_and_connect`; H13 `real_p2_component_does_not_expand_redirect_authority`; H15 `real_p2_component_redacts_request_data_from_host_logs`; H16 and H17 `real_p2_component_preserves_grant_through_recovery_and_reconfigure`; H18 and H19 `real_p2_component_hot_swap_retains_original_grant`.
-- Workspace tests: H02 also `wafer-config` `validation::tests::omitted_and_empty_outbound_http_are_valid`; H08 `outbound_http_wildcard_is_rejected`, `invalid_outbound_http_destinations_report_index_without_echoing_value` and `duplicate_normalized_outbound_http_destination_is_rejected` in the same module; H11 `engine::http::tests::mixed_dns_answers_select_only_a_permitted_address`; H12 `wafer-types` `prohibited_ip_literals_cannot_be_granted`; H18 and H19 also `node::wasm::tests::accepted_hot_swap_preserves_outbound_http_grant` and `hot_swap_rejects_outbound_http_expansion`; H19 also the `hotswap_process_time_rollback` integration test, which exercises the rollback path without a grant; H20 `node::wasm::tests::inference_and_outbound_http_survive_recovery_together`.
+| Row | Tests |
+|---|---|
+| H01 | fixture: `real_p2_component_default_denial_and_exact_allow`; host: `omitted_outbound_http_denies_before_loopback_connect` |
+| H02 | fixture: `real_p2_component_default_denial_and_exact_allow`; `wafer-config`: `omitted_and_empty_outbound_http_are_valid` |
+| H03 | fixture: `real_p2_component_default_denial_and_exact_allow`; host: `exact_loopback_destination_is_allowed` |
+| H04, H05 | fixture: `real_p2_component_rejects_authority_variations`; host: `scheme_and_host_mismatches_are_denied` |
+| H06 | fixture: `real_p2_component_rejects_authority_variations`; host: `mismatched_port_is_denied_before_connect` |
+| H07 | fixture: `real_p2_component_rejects_authority_variations` |
+| H08 | `wafer-config`: `outbound_http_wildcard_is_rejected`, `invalid_outbound_http_destinations_report_index_without_echoing_value`, `duplicate_normalized_outbound_http_destination_is_rejected` |
+| H09 | fixture: `real_p2_component_default_denial_and_exact_allow` (the allowed destination is a loopback literal); host: `exact_loopback_destination_is_allowed` |
+| H10 | fixture: `real_p2_component_rejects_dns_loopback_and_connect`; host: `dns_name_resolving_only_to_loopback_is_prohibited` |
+| H11 | `engine::http::tests::mixed_dns_answers_select_only_a_permitted_address` (address selection only) |
+| H12 | `wafer-types`: `prohibited_ip_literals_cannot_be_granted` |
+| H13 | fixture: `real_p2_component_does_not_expand_redirect_authority`; host: `redirect_is_returned_without_contacting_location` |
+| H14 | fixture: `real_p2_component_rejects_dns_loopback_and_connect`; host: `connect_method_is_denied_before_loopback_connect` |
+| H15 | fixture: `real_p2_component_redacts_request_data_from_host_logs` |
+| H16, H17 | fixture: `real_p2_component_preserves_grant_through_recovery_and_reconfigure` |
+| H18 | fixture: `real_p2_component_hot_swap_retains_original_grant`; `node::wasm::tests::accepted_hot_swap_preserves_outbound_http_grant`, `hot_swap_rejects_outbound_http_expansion` |
+| H19 | accepted hot-swap half only: the H18 tests |
+| H20 | `node::wasm::tests::inference_and_outbound_http_survive_recovery_together` |
 
-No test observes the "no second lookup" half of H11. It holds by construction: `engine/http.rs` calls `tokio::net::lookup_host` once per request, and `send_request` connects to the address selected from that result.
+Two halves have no test:
+
+- H11, "no second lookup": it holds by construction. `engine/http.rs` calls `tokio::net::lookup_host` once per request, and `send_request` connects to the address selected from that result.
+- H19, rollback: no test rolls back a node that holds a grant. The `hotswap_process_time_rollback` integration test covers rollback without a grant. Rollback rebuilds the v1 Store through `recover_from_cached_pre`, the same path whose grant handling H16 tests.
 
 ## Native transport boundary
 

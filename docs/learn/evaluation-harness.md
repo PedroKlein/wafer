@@ -59,8 +59,24 @@ Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final 
 
 ## Check yourself
 
-Choose one figure from an analysis notebook and trace it back to its batch, the physical result leaves it reads, their independent run indexes, nested observations, and evidence class. Then explain why fifty swap events in each of five runs still means N=5 rather than N=250.
+**1. Which file defines an experiment, and which file says which result batches are final?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+`eval/canonical-matrix.json` defines each experiment. `eval/final-batches.json` lists the approved final batches; a matrix entry alone does not prove a run happened or was admitted.
+
+</details>
+
+**2. Five runs each record fifty swap events. What is N?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+N=5. A complete host run is the independent sample; events, messages, aliases, and intervals are nested observations inside it.
+
+</details>
 
 ## Next
 
-For operator steps, see the [evaluation runbook](../eval/pi5-experiment-runbook.md). To revisit any runtime behavior a result depends on, return to the [first-read order](README.md#first-read-order).
+For operator steps, see the [evaluation runbook](../eval/experiment-runbook.md). To revisit any runtime behavior a result depends on, return to the [first-read order](README.md#first-read-order).

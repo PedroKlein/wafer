@@ -107,7 +107,7 @@ The root manifest depends on `wafer-core` with `default-features = false`, so ea
 
 ## Build, run, and test
 
-The commands come from `mise.toml` and `plugins/mise.toml`. [Getting started](../operations/getting-started.md) covers installing the tools with `mise run setup`.
+The commands come from `mise.toml` and `plugins/mise.toml`. [Toolchain and dependencies](../operations/dependencies.md#development-tool-manager-and-command-runner) covers installing the tools with `mise run setup`.
 
 ```bash
 mise run build                                # cargo build --locked --workspace
@@ -125,7 +125,32 @@ Many tests that need a built plugin check for it with `artifact_available` in `c
 
 ## Check yourself
 
-Without opening implementation details, name the owner for a new config field, a queue-runner change, a plugin helper, a benchmark traffic change, a runtime flag, and an operator command. If any answer is unclear, follow that crate's `src/lib.rs` or `src/main.rs` before moving on. Then use the module table to name the file that handles a full destination queue and the file that decides whether a failed message is retried.
+**1. Which crate do you change to add a configuration field, a runtime startup flag, an operator command, and a helper used inside guest components?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+A configuration field starts in `wafer-types`, gains semantic checks in `wafer-config` when needed, and is consumed in `wafer-core` or the runtime. A startup flag belongs in `wafer-runtime`, an operator command in `waferctl`, and a guest helper in `wafer-plugin`.
+
+</details>
+
+**2. Which file decides whether a failed message is retried, and which holds the send path into a downstream queue?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+`crates/wafer-core/src/runner/error_policy.rs` makes the retry, skip, dead-letter, and teardown decisions. The send path (`send_one`, `DownstreamSender`) is in `crates/wafer-core/src/runner/mod.rs`.
+
+</details>
+
+**3. Why can a plain `cargo test` report `ok` for a test that checked nothing?**
+
+<details markdown="1">
+<summary>Answer</summary>
+
+Plugins are outside the workspace, so `cargo test` does not build them. A test that needs a missing plugin prints `SKIP` and returns early. `mise run test` builds every plugin first and sets `WAFER_REQUIRE_PLUGINS=1`, which turns a missing plugin into a failure.
+
+</details>
 
 ## Next
 

@@ -1,144 +1,43 @@
-# ADR-0003: Watch-Channel Between-Messages Hot-Swap
+# ADR-0003: Drain-and-Flip Hot-Swap
 
-- **Date**: 2026-07-12
-- **Status**: Implemented. Supersedes the earlier drain-and-flip mechanism from 2026-02-14.
-- **Parent RFC**: [RFC-005](../rfcs/RFC-005-orchestrator.md)
+- **Date**: 2026-02-14
+- **Status**: Superseded by [ADR-0012](0012-watch-channel-hot-swap.md)
 
-> **Implementation status.** The `watch::channel(None)` primitive, the
-> between-messages check in each runner, and the end-to-end swap behavior are
-> live and tested. The runner calls guest `validate()` and `init()` on the new
-> instance before adopting it. Config-only warm swap via `cached_pre()` is
-> served by `POST /api/v1/nodes/{id}/reconfigure`, and `/hot-swap` dispatches
-> per node type. Process-time rollback: after adoption, a Transform runner
-> retains v1's `InstancePre` for a bounded canary window; if v2 traps during
-> `process()`, the runtime restores v1, at most once per swap. This replaces
-> the "No rollback is attempted" sentence in the Decision below.
->
-> **Current response boundary.** Successful replacement reports
-> `replacement_adopted` and `first_post_replacement_local_outcome`; neither is
-> sink convergence. Sink transition, sequence, throughput, and gap artifacts
-> remain authoritative for external disruption. Process-time rollback is
-> Transform-only, and `/metrics` has no rollback counter
-> ([A20](../status/implementation-gaps.md)).
->
-> **Guest lifecycle on replacement.** The runtime does not call the old
-> instance's guest `close()` when it is replaced (nor at shutdown). The
-> replacement runs in a new Store, so guest state starts fresh after every
-> swap; nothing carries over from v1. Compilation and linking for a swap run
-> on a blocking thread (`spawn_blocking`) through the shared compiled-component
-> cache, and the swap response reports which cache tier served it.
-> The drain-and-flip node states (`Draining`, `Retired`) have been removed
-> from `NodeState`.
->
-> The remainder is the historical design record; old ACK/convergence names are
-> preserved only as prior terminology.
-
-<!-- historical-design-below -->
+> This record keeps the original decision only. The current mechanism, a
+> per-node watch channel checked between messages, is
+> [ADR-0012](0012-watch-channel-hot-swap.md). The `RoutingController` and the
+> `Draining` and `Retired` node states named below do not exist in the code.
 
 ## Context
 
-WAFER requires per-node hot-swap: the ability to replace a running Wasm
-component (v1) with a new version (v2) without stopping the pipeline. The
-original mechanism (ADR-0003, 2026-02-14) used a 4-phase
-"stop-routing → drain in-flight → flip → retire" algorithm that required a
-`RoutingController` and introduced a drain window during which new messages
-queued behind a gate. RFC-005's task-per-node execution model makes this
-unnecessary: because each node task owns its own Wasm instance and processes
-messages sequentially in a `select!` loop, there is never an in-flight Wasm
-call at the moment the swap fires. This simplification eliminates all mutexes
-from the hot path and removes the `RoutingController` entirely.
+WAFER needs per-node hot-swap: replacing a running Wasm component (v1) with a
+new version (v2) without stopping the pipeline, and without losing or
+duplicating the messages already queued for that node.
 
 ## Decision
 
-We use a **tokio::sync::watch channel** per Wasm node for hot-swap signaling.
-The orchestrator holds the `watch::Sender<Option<SwapPayload>>` for each node;
-the node runner loop holds the corresponding `watch::Receiver`. The swap is
-checked **between messages** — after the current Wasm invocation returns and
-before the next `recv()` on the input queue — and the swap signal is also a
-wake-up source of that wait, so an idle node adopts it without new input. No
-explicit drain phase is required. The previous 4-phase drain-and-flip model is superseded.
+Replace a node in four phases:
 
-Swap flow — five observable phases (measured by `SwapTimeline`):
+1. **PREPARE.** Compile and instantiate v2 next to the running v1.
+2. **DRAIN.** A `RoutingController` stops routing new messages to the node and
+   waits for in-flight Wasm calls to finish, up to a configurable drain
+   timeout. New messages queue behind the routing gate.
+3. **FLIP.** Atomically replace v1 with v2 and reopen the gate.
+4. **RETIRE.** Retire v1.
 
-1. **Compile** — orchestrator loads new `.wasm` bytes, calls
-   `engine.compile_cached()`. Cost: ~8 ms cold, near-zero on cache hit.
-2. **Instantiate** — orchestrator calls `pre_instantiate_*()` then
-   `instantiate_async()`, producing a `SwapPayload` (new Store, bindings,
-   and `Arc<InstancePre>`). Cost: ~100 µs pre-instantiate + ~5 µs instantiate.
-3. **Signal** — orchestrator sends the payload via `watch_tx.send(Some(payload))`.
-   Cost: < 1 µs (atomic pointer swap inside the watch channel).
-4. **Ack** — node runner loop detects `watch.changed()` between messages,
-   flushes its retry buffer to DLQ with reason `hot_swap_drain`, replaces its
-   Store/bindings/cached InstancePre, calls `init()` on the new instance, and
-   resumes. Cost: ~5 µs + init.
-5. **Convergence** — the first output produced by v2 is observed at the
-   downstream sink. This is the end-to-end swap latency visible to the
-   evaluation harness (E-Swap-6).
-
-The old Store is dropped automatically when the replacement assignment runs
-(RAII). No rollback is attempted if v2 passes preparation; if v2 preparation
-fails (compile error, instantiation trap), the swap is aborted and v1
-continues unchanged.
-
-Implementation: `crates/wafer-core/src/orchestrator/hotswap.rs` provides
-`prepare_transform_swap_timed` (and `prepare_transform_swap_timed_with_fuel`),
-`prepare_filter_swap_timed`, and `prepare_router_swap_timed`.
-`crates/wafer-core/src/orchestrator/builder.rs` creates the
-`watch::Sender<Option<SwapPayload>>` per Wasm node (stored in
-`BuildOutput.watch_senders`) and threads `watch::Receiver` into each runner
-bundle's `swap_rx` field.
+Node states `Draining` and `Retired` track the phases.
 
 ## Consequences
 
-- **Supersedes drain-and-flip.** The 2026-02-14 ADR-0003 drain-and-flip mechanism
-  and its `RoutingController` are fully retired. No routing gate, no drain
-  timeout, no in-flight tracking.
+- The drain window delays every message that arrives during a swap.
+- The `RoutingController` is a shared component that must be able to stop a
+  node's input independently of the node's own task, which requires shared
+  ownership of nodes and locking on the message path.
 
-- **Zero drain window.** Because the watch is checked between messages and Wasm
-  calls are never in-flight at check time, "drain time" is structurally zero.
-  Effective swap latency equals the time to finish the current message plus
-  signal propagation and the replacement's `init()`; it does not depend on the
-  input rate, because the runner's input wait also wakes on the swap signal.
-  A message dequeued after the signal is held and processed by the replacement.
+## Why it was superseded
 
-- **Mutex-free hot path.** The node runner loop owns its instance directly.
-  No shared `Mutex<HashMap<…>>` or double-lock patterns. The only
-  synchronization on the critical path is the atomic `watch::Receiver::changed()`
-  poll inside the `select!` macro.
-
-- **Phase-decomposed benchmarking.** The five phases (compile / instantiate /
-  signal / ack / convergence) are individually timestamped by `SwapTimeline`
-  (in `hotswap.rs`). This allows Task 4.25 (E-Swap-6) to produce stacked-bar
-  latency breakdowns identifying which phase dominates.
-
-- **Retry buffer flushed on swap.** Pending retries are sent to the DLQ with
-  reason `HotSwapDrain` before the new instance takes over. This prevents stale
-  v1 payloads from being replayed against v2 logic.
-
-- **Forecloses state migration.** Guest instance state is dropped by design
-  when the old Store is replaced. There is no mechanism to serialise v1 state
-  and inject it into v2. Stateful hot-swap (snapshot/restore across versions)
-  remains explicitly out of scope.
-
-- **Forecloses gradual traffic shifting.** Because the watch flip is
-  all-or-nothing (one node, one active instance), canary percentages or
-  blue-green dual-instance routing are not supported.
-
-- **Config-only warm swap is trivial.** If only the node configuration changes
-  (same plugin binary), the orchestrator re-instantiates from the existing
-  `Arc<InstancePre>` (~5 µs) without recompiling — discriminated by a config
-  diff step (RFC-005 D9).
-
-- **Downstream requirement: DLQ envelope.** The flush-on-swap path requires a
-  structured `DlqEnvelope` carrying `HotSwapDrain` reason, enabling message
-  accounting in evaluation experiment E-Swap-2 (RFC-008).
-
-## See Also
-
-- [RFC-005 — Orchestrator & Runtime Simplification](../rfcs/RFC-005-orchestrator.md) — the parent RFC; Decision 6 defines this mechanism in full detail.
-- [ADR-0012 — Watch-Channel Hot-Swap (supplementary)](0012-watch-channel-hot-swap.md) — additional context on the watch-channel coordination pattern.
-- [RFC-002 — Host-Side Runtime Architecture](../rfcs/RFC-002-host-runtime.md) — defines the InstancePre lifecycle and persistent Store design that this ADR's swap flow manipulates.
-- [RFC-008 — Evaluation Harness](../rfcs/RFC-008-evaluation-harness.md) — defines E-Swap-6 which benchmarks the five-phase decomposition.
-- `crates/wafer-core/src/orchestrator/hotswap.rs` — swap preparation functions and `SwapTimeline`.
-- `crates/wafer-core/src/orchestrator/builder.rs` — `watch::Sender` creation and `swap_rx` threading.
-- `crates/wafer-core/src/runner/transform.rs` — runner loop consuming `swap_rx`.
+RFC-005 moved to a task-per-node model in which each node task owns its Wasm
+instance and processes one message at a time. With no call in flight between
+messages, the DRAIN phase and the `RoutingController` are unnecessary. RFC-005
+§D6 and ADR-0012 replace them with a watch-channel signal checked between
+messages.

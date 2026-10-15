@@ -8,7 +8,7 @@ The pages describe the `main` branch. If a page and the source disagree, trust t
 
 ## Before you read: run it once
 
-Reading is easier after you have seen a pipeline run. [Getting started](../operations/getting-started.md) is the hands-on tutorial: it builds the workspace and plugins, runs `examples/dag-uppercase.toml`, queries the control plane, and hot-swaps a plugin.
+Reading is easier after you have seen a pipeline run. [Getting started](../operations/getting-started.md) is the hands-on tutorial: it builds the runtime and two plugins, runs `examples/dag-uppercase.toml`, queries the control plane, and hot-swaps a plugin while the pipeline runs.
 
 ## First-read order
 

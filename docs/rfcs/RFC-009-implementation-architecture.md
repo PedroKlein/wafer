@@ -29,6 +29,10 @@
 >   over five files. Build tasks for plugins and `eval/` are mise tasks
 >   (`plugins/mise.toml`, `eval/mise.toml`), not Makefiles.
 > - `wafer-loadgen` is a library and binary crate.
+> - `wafer-plugin` is a member of the root workspace (D1 lists six members);
+>   plugins depend on it by path.
+> - `wafer-types` also depends on `serde_json` and `toml`, and `wafer-config`
+>   has no `tokio` dependency: it reads the config file synchronously.
 > - The other D12 targets (`node/joiner.rs`, `orchestrator/routing.rs`,
 >   `runner/result_handler.rs`, `runner/metrics_helper.rs`,
 >   `runner/dlq_handlers.rs`, `runner/sink_helpers.rs`, `runner/overflow.rs`,
@@ -141,7 +145,7 @@ When implementing a new piece: domain enums/config structs → `wafer-types`; pa
 - **RFC-004** — Specifies the config schema that lives in `wafer-types` and the validation logic in `wafer-config`.
 - **RFC-005** — Specifies the orchestrator, builder, and watch-channel hot-swap mapped to `orchestrator/`.
 - **RFC-006** — Specifies the guest SDK design for `wafer-plugin` and the plugin workspace layout.
-- **RFC-007** — Specifies the AOT cache, epoch ticker, and metering in `engine/cache.rs` and `engine/mod.rs`.
+- **RFC-007**: Specifies the AOT cache, epoch ticker, and metering, now in `engine/cache.rs` and `engine/loader.rs`.
 - **RFC-008** — Specifies the evaluation harness design mapped to `eval/`, `wafer-loadgen`, `BenchSource`, and `BenchSink`.
 
 ## Implementation Notes
@@ -151,7 +155,7 @@ The crate structure is implemented as specified; the module-level differences ar
 - `crates/wafer-types/` contains all config data structs and domain enums per D2.
 - `crates/wafer-config/` contains `loader.rs`, `validation.rs`, `dag.rs`, `error.rs` per D3.
 - `crates/wafer-core/src/` has the D4 areas as `engine/`, `node/`, `runner/`, `orchestrator/`, `queue/` (including `envelope.rs`), `metrics/`, `registry/`, `dlq/`, `bench/`, `testing/`, and `api/`, plus the small `config/` and `dag/` modules.
-- `crates/wafer-plugin/` is a standalone SDK crate targeting `wasm32-wasip2` per D5.
+- `crates/wafer-plugin/` is the guest SDK crate (D5); it is a root workspace member, and plugins depend on it by path.
 - `plugins/` holds standalone plugin crates built for `wasm32-wasip2` by `plugins/build-plugins.sh`; the root workspace excludes them.
 - `eval/` contains configs, scripts, and a UV-managed Python analysis package per D9.
 - `crates/wafer-loadgen/` provides the external MQTT load generator per D9.

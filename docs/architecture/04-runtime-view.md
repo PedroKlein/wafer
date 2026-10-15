@@ -132,8 +132,7 @@ sequenceDiagram
 - **Runner-local reporting.** The response separates `replacement_adopted` from `first_post_replacement_local_outcome`. A local forward, filter drop, or no-route outcome is not sink convergence, sequence continuity, loss, or throughput evidence.
 - **Rollback boundary.** Initialization rollback exists for every eligible Wasm role. Process-time canary rollback is implemented only for Transform; Filter and Router do not make that claim. `/metrics` has no rollback-total series ([A20](../status/implementation-gaps.md)).
 
-For the full design rationale, see [ADR-0003](../adr/0003-hot-swap-mechanism.md)
-and [ADR-0012](../adr/0012-watch-channel-hot-swap.md).
+For the full design rationale, see [ADR-0012](../adr/0012-watch-channel-hot-swap.md).
 
 ---
 

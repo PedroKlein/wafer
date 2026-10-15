@@ -1,6 +1,6 @@
 # Non-functional requirements
 
-This reference lists the current quantitative requirements. The narrative explanation is in `docs/architecture/07-quality-requirements.md`; the executable definitions are in `eval/canonical-matrix.json`. Its `verdict_rules` table declares every threshold below once. A criterion compared with a run-level statistic passes only when the one-sided 95% bootstrap bound on its favourable side meets the threshold, fails only when the bound on the other side misses it, and is otherwise inconclusive; zero-tolerance counts are exact. `eval/RESULT-CONTRACT.md` lists the rule for each criterion.
+This reference lists the current quantitative requirements. The architectural mechanisms behind each group are in [07. Quality requirements](../architecture/07-quality-requirements.md); the executable definitions are in `eval/canonical-matrix.json`. Its `verdict_rules` table declares every threshold below once. A criterion compared with a run-level statistic passes only when the one-sided 95% bootstrap bound on its favourable side meets the threshold, fails only when the bound on the other side misses it, and is otherwise inconclusive; zero-tolerance counts are exact. `eval/RESULT-CONTRACT.md` lists the rule for each criterion.
 
 ## RQ1: performance
 

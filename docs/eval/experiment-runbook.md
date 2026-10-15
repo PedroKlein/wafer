@@ -349,10 +349,20 @@ export WAFER_RESULTS_ROOT=<combined results root>
 mise run //eval:figures <batch-id>
 ```
 
-The task executes every notebook under `eval/analysis/notebooks/` and writes
-figures and tables to `eval/analysis/figures/`. Canonical analysis reads each
-host's entry in `eval/final-batches.json` and rejects a batch that is not the
-approved one, whose `batch.json` or `raw.sha256` differs from the entry, or
-that is incomplete, from the wrong host, dirty, mixed-SHA, throttled, failed
-or malformed. See [`eval/analysis/notebooks/README.md`](../../eval/analysis/notebooks/README.md)
-for running a single notebook.
+The task executes every notebook under `eval/analysis/notebooks/` in place
+and writes figures and tables to `eval/analysis/figures/`. To run one notebook
+without rewriting it:
+
+```sh
+cd eval/analysis
+uv sync
+export WAFER_EVAL_BATCH_ID=<batch-id>      # jetson-<batch-id> or x86-<batch-id> for those hosts
+export WAFER_ANALYSIS_OUTPUT_DIR=figures/final-<batch-id>
+uv run jupyter nbconvert --execute --to notebook --output-dir executed \
+  notebooks/09-saturation.ipynb
+```
+
+Canonical analysis accepts only the batch recorded for its host in
+`eval/final-batches.json`;
+[the notebooks README](../../eval/analysis/notebooks/README.md#canonical-batch-resolution)
+lists every check it makes.

@@ -50,7 +50,7 @@ watts.
 
 ## Running a batch
 
-Follow the [runbook](pi5-experiment-runbook.md) with `--host jetson` on every
+Follow the [runbook](experiment-runbook.md) with `--host jetson` on every
 runner and campaign command. Results land in `jetson-<batch-id>` directories
 and are checked against the `jetson` profile in the `hosts` map of
 `eval/canonical-matrix.json`. Before the host's first batch, check it against
@@ -61,8 +61,8 @@ python3 eval/scripts/validate-canonical.py host --host jetson --require-ekuiper
 ```
 
 The Jetson host needs its own
-[capacity scout](pi5-experiment-runbook.md#run-the-hosts-capacity-scout) and
-its own [results root](pi5-experiment-runbook.md#set-the-hosts-results-root).
+[capacity scout](experiment-runbook.md#run-the-hosts-capacity-scout) and
+its own [results root](experiment-runbook.md#set-the-hosts-results-root).
 Once its batch has finished and been copied to the analysis machine,
 `mise run approve-batch -- --host jetson --batch-id <batch-id>` records it as
 the Jetson entry of `eval/final-batches.json`.

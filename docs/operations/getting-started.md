@@ -1,181 +1,150 @@
-# Getting Started
+# Getting started
 
-A ten-minute walkthrough that takes you from a fresh clone to running your
-first WAFER pipeline. If any step fails, jump to
-[Troubleshooting](#troubleshooting) at the end.
+In this tutorial you build WAFER, run a pipeline that upper-cases text with a WebAssembly plugin, look at the running pipeline through its HTTP control plane, and replace the plugin while the pipeline keeps running. Most of the time goes into the first build.
 
-## Prerequisites
+## Before you start
 
-- **Rust via rustup**. Install from <https://rustup.rs/> before running
-  `mise install`; several mise-managed helper tools are installed through
-  Cargo and require `cargo` to already exist. `rust-toolchain.toml` pins Rust
-  `1.98.1` with `rustfmt`, `clippy`, and `wasm32-wasip2`; older compilers are
-  not tested.
-- **`mise`**: the tool manager and task runner configured by `mise.toml`.
-  Install it from <https://mise.jdx.dev/> or your package manager. Rust itself
-  stays controlled by `rust-toolchain.toml`.
-- **`wasm32-wasip2` target**: needed for building plugins. The toolchain file
-  and `mise run setup` add it; verify with `rustup target list --installed`.
-- **A C toolchain** — required by wasmtime's build. Any recent
-  `clang`/`gcc` works.
-- **Network access on the first build**, or a local ONNX Runtime. The build
-  downloads a pinned, hash-checked ONNX Runtime from `cdn.pyke.io` once. For
-  offline builds set `ORT_LIB_LOCATION`; see
-  [ONNX Runtime](dependencies.md#onnx-runtime).
-- **`curl`** to talk to the control plane, and optionally `jq`.
-- *(Optional)* **Docker**, for the Mosquitto broker the MQTT examples need.
-  See [`mqtt-setup.md`](mqtt-setup.md).
+You need:
 
-## 1 — Clone and inventory the workspace
+- Rust installed with [rustup](https://rustup.rs/);
+- a C toolchain such as `gcc` or `clang`;
+- `curl`;
+- network access for the first build, which downloads crates and a pinned ONNX Runtime;
+- two terminals, both opened in the repository after step 1.
+
+## 1. Get the code
 
 ```bash
 git clone https://github.com/PedroKlein/wafer.git
 cd wafer
-cargo --version     # if this fails, install Rust first from https://rustup.rs/
-mise trust          # one-time trust for this repo's mise.toml, if prompted
-mise run setup      # check Rust, add wasm32-wasip2, install the pinned helper tools
-mise tasks ls --all # list every available task
+cargo --version
 ```
 
-The workspace holds seven crates (see
-[`../architecture/03-building-blocks.md`](../architecture/03-building-blocks.md)),
-the first-party plugins under `plugins/`, and example pipeline configs under
-`examples/`.
+The last command prints the toolchain that the repository pins:
 
-## 2 — Build the runtime and the sample plugins
+```text
+cargo 1.98.1 (797e8a9bc 2026-08-05)
+```
+
+The first `cargo` command in the checkout makes rustup install that toolchain and the `wasm32-wasip2` target, so it can take a minute.
+
+## 2. Build the runtime and two plugins
 
 ```bash
-mise run build                          # entire workspace
-plugins/build-plugins.sh --no-record    # every Rust plugin, including attacks
+cargo build --locked -p wafer-runtime
+plugins/build-plugins.sh uppercase json-parse
 ```
 
-The plugin build compiles each plugin crate to `wasm32-wasip2`; the
-resulting `.wasm` artifacts land under
-`plugins/<name>/target/wasm32-wasip2/release/wafer_<name>.wasm`.
-`--no-record` leaves the tracked `plugins/ARTIFACTS.sha256` alone;
-`mise run //plugins:build-plugins` builds the same set and rewrites it with
-this machine's hashes.
+The first command builds the `wafer` binary; it compiles Wasmtime and takes several minutes. The second compiles two plugins to WebAssembly components and ends with:
 
-## 3 — Run your first pipeline (pass-through)
+```text
+Building plugin: json-parse
+    Finished `release` profile [optimized] target(s) in ...
+```
+
+## 3. Run your first pipeline
+
+`examples/dag-uppercase.toml` reads lines from standard input, passes each one through the `uppercase` plugin, and prints the result. Send it one line:
 
 ```bash
 echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
-# HELLO, WORLD!
 ```
 
-Both `examples/dag-passthrough.toml` and `examples/dag-uppercase.toml` read
-lines from `stdin` and write them to `stdout`, echoed or upper-cased. The
-pipeline exits with status `0` once its input ends. `mise run run [config]`
-runs the same command and defaults to `examples/dag-passthrough.toml`.
+Between the runtime's log lines you see the upper-cased text, and the process exits once its input ends:
 
-Pipe the input in rather than typing it: the stdin source reads with a
-blocking call, so lines typed into a running pipeline can stay queued until
-the input closes.
+```text
+... INFO wafer: Pipeline running tasks=3 wasm_nodes=1
+... INFO wafer: HTTP API server listening addr=127.0.0.1:9090 serve_metrics=true
+HELLO, WORLD!
+... INFO wafer: Pipeline completed
+... INFO wafer: WAFER Runtime stopped
+```
 
-Without `RUST_LOG` the runtime logs at `info`. To see WAFER's debug logs and
-keep everything else at `info`:
+## 4. Start a pipeline that keeps running
+
+In the first terminal, start the same pipeline with an input that stays open until you press Enter and then sends one JSON line:
 
 ```bash
-echo "Hello" | RUST_LOG=info,wafer=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+{ read -r; echo '{"temp": 21}'; } | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
 ```
 
-## 4 — Explore the control plane
+Wait for `HTTP API server listening`, and leave the pipeline running. Do not type input straight into a running pipeline: the stdin source may hold it until its input closes ([#235](https://github.com/PedroKlein/wafer/issues/235)).
 
-The runtime serves its HTTP control plane at `127.0.0.1:9090` unless the
-config turns it off. Start the uppercase pipeline with an input that stays
-open and sends nothing:
+## 5. Look at the running pipeline
 
-```bash
-sleep 3600 | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
-```
-
-In a second terminal:
+In the second terminal, ask the control plane about the pipeline:
 
 ```bash
 curl -s http://127.0.0.1:9090/health
-# {"status":"ok"}
-
-curl -s http://127.0.0.1:9090/ready
-# {"ready":true}
-
-curl -s http://127.0.0.1:9090/api/v1/nodes | jq
-# [{"id":"sink","state":"running","processed":0,"failed":0,"replacement_eligible":false}, ...]
-
-curl -s http://127.0.0.1:9090/metrics | grep processed_total
-# wafer_node_processed_total{node="uppercase"} 0
 ```
 
-For an interactive collection, import
-[`docs/api/bruno-collection/`](../api/bruno-collection/) into
-[Bruno](https://usebruno.com/). The full endpoint list is in
-[`../interfaces/http-api.md`](../interfaces/http-api.md).
-
-## 5 — Try a hot-swap
-
-With the pipeline still running, hot-swap the `json-parse` plugin (built in
-step 2) into the `uppercase` node:
+```text
+{"status":"ok"}
+```
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/nodes/uppercase/hot-swap \
-     -H 'content-type: application/json' \
-     -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
-# {"compile_cache":"compiled","first_post_replacement_local_outcome":null,"node_id":"uppercase","replacement_adopted":true,"timeline":{...}}
+curl -s http://127.0.0.1:9090/api/v1/nodes
 ```
 
-The endpoint answers HTTP 202: the `uppercase` node adopted `json-parse`
-between messages. No message arrived within five seconds, so
-`first_post_replacement_local_outcome` is null; when one does, the endpoint
-answers 200 and reports it. From now on the node pretty-prints valid JSON and
-sends anything else to `dlq.jsonl`. The `wasm_path` is resolved against the
-runtime's working directory, here the repository root.
+```text
+[{"id":"sink","state":"running","processed":0,"failed":0,"replacement_eligible":false},{"id":"source","state":"running","processed":0,"failed":0,"replacement_eligible":false},{"id":"uppercase","state":"running","processed":0,"failed":0,"replacement_eligible":true}]
+```
 
-## 6 — Shut down cleanly
+The pipeline has three nodes, and only `uppercase`, the WebAssembly node, can be replaced. The same counters are on the Prometheus endpoint, where the lines can come in any order:
 
-Press `Ctrl-C` in the pipeline's terminal. That also stops `sleep`, so the
-stdin source sees the end of its input, every node exits cleanly and the
-process exits with `0`. Cleanup is cooperative and bounded: sources close,
-processing loops flush retries, sinks drain their current receiver buffers,
-and tasks still running after the 5 s shutdown deadline are aborted. A second
-`Ctrl-C` exits at once with `130`, without flushing.
+```bash
+curl -s http://127.0.0.1:9090/metrics | grep processed_total
+```
 
-`POST /api/v1/pipeline/shutdown` starts the same cleanup, but it cannot
-interrupt a stdin source that is waiting for a line: that source is aborted
-at the deadline, the run exits with `3`, and the process only ends once its
-input closes. Use the endpoint with sources that are not stdin.
+```text
+wafer_node_processed_total{node="source"} 0
+wafer_node_processed_total{node="sink"} 0
+wafer_node_processed_total{node="uppercase"} 0
+```
 
-The process exit code says whether the run succeeded: `0` when every node
-exited cleanly, `2` for an invalid configuration (nothing is started), `3`
-when the pipeline failed after starting (a node panicked, a source or sink
-failed to initialise or to flush and close, a node had to be aborted at the
-shutdown deadline, or the DLQ sink failed; the log names the node), and
-`1` for any other startup failure. Under a supervisor such as systemd,
-`Restart=on-failure` therefore restarts only failed runs. The full table is
-in [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md#runtime-exit-status).
+## 6. Replace the plugin
 
-## What to read next
+Still in the second terminal, hot-swap the `json-parse` plugin into the `uppercase` node:
 
-- [`configuration.md`](configuration.md) — every section of the TOML
-  config with worked examples.
-- [`../interfaces/wit-contracts.md`](../interfaces/wit-contracts.md) —
-  the WIT contracts your plugins implement.
-- [`../interfaces/plugin-sdk.md`](../interfaces/plugin-sdk.md) — the
-  `wafer-plugin` guest SDK (macros, state pattern, error helpers).
-- [`mqtt-setup.md`](mqtt-setup.md), [`registry.md`](registry.md),
-  [`observability.md`](observability.md) — task-oriented how-tos.
+```bash
+curl -s -X POST http://127.0.0.1:9090/api/v1/nodes/uppercase/hot-swap \
+     -H 'content-type: application/json' \
+     -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
+```
+
+After about five seconds the answer arrives:
+
+```text
+{"compile_cache":"compiled","first_post_replacement_local_outcome":null,"node_id":"uppercase","replacement_adopted":true,"timeline":{...}}
+```
+
+`"replacement_adopted":true` means the running node now uses `json-parse`. No message has passed through it yet, so `first_post_replacement_local_outcome` is still `null`.
+
+## 7. See the new plugin at work
+
+Go back to the first terminal and press Enter. The pipeline receives `{"temp": 21}`, and the node that upper-cased text before now pretty-prints JSON. The input then ends, and the pipeline stops:
+
+```text
+{
+  "temp": 21
+}
+... INFO wafer: Pipeline completed
+... INFO wafer: WAFER Runtime stopped
+```
+
+You have built WAFER, run a pipeline, inspected it while it ran, and replaced one of its plugins without stopping it.
+
+## Next steps
+
+- [Learn WAFER from the source](../learn/README.md) explains what happened in each step, from the TOML file to the hot-swap.
+- [Configuration](configuration.md) describes every section of a pipeline file.
+- [HTTP API](../interfaces/http-api.md) lists every control-plane endpoint.
+- [Plugin SDK](../interfaces/plugin-sdk.md) and [WIT contracts](../interfaces/wit-contracts.md) show how to write your own plugin.
+- [MQTT setup](mqtt-setup.md) runs a pipeline against an MQTT broker.
 
 ## Troubleshooting
 
-- **`mise: command not found`** — install `mise` from <https://mise.jdx.dev/>
-  or your package manager.
-- **`error: linker 'cc' not found`** — install a C toolchain
-  (`build-essential` on Debian/Ubuntu, `xcode-select --install` on
-  macOS).
-- **Plugin build hangs or fails with `wasm32-wasip2` unknown target**
-  — run `rustup target add wasm32-wasip2` and retry.
-- **Port 9090 already in use** — set `[api].bind = "127.0.0.1:PORT"`
-  in the pipeline TOML, or pass `--api-bind 127.0.0.1:PORT` on the command
-  line (`cargo run -p wafer-runtime -- --config <path> --api-bind 127.0.0.1:PORT`).
-- **Hot-swap rejected with `node-not-swappable`** — make sure the target node
-  is a loaded Wasm node (Transform / Filter / Router). Native processing
-  baselines and native Source/Sink nodes report `replacement_eligible = false` on
-  `GET /api/v1/nodes/{id}`.
+- **`error: linker 'cc' not found`**: install a C toolchain (`build-essential` on Debian or Ubuntu, `xcode-select --install` on macOS).
+- **The ONNX Runtime download fails**: point the build at a local copy with `ORT_LIB_LOCATION`; see [ONNX Runtime](dependencies.md#onnx-runtime).
+- **The plugin build reports an unknown `wasm32-wasip2` target**: run `rustup target add wasm32-wasip2` and build again.
+- **Port 9090 is already in use**: add `--api-bind 127.0.0.1:PORT` after `--config <path>`, and use that port in the `curl` commands.

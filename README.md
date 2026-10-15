@@ -20,9 +20,9 @@ WebAssembly Component Model components. Native adapters handle ingress and
 egress; bounded Tokio queues connect stages; each Wasm stage owns an isolated
 Wasmtime Store and can be replaced between messages.
 
-WAFER is part of an ongoing undergraduate research project. The runtime is
-public now; the thesis and supporting research materials will be released
-publicly soon.
+WAFER is the software artefact of an undergraduate thesis at UFRGS. This
+repository holds the runtime, its plugins and the evaluation harness; the
+thesis text is not part of it (see `CITATION.cff` for how to cite it).
 
 > [!NOTE]
 > WAFER is a research prototype. Final empirical results come only from the

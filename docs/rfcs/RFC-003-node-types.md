@@ -6,9 +6,11 @@
 
 > **Current release amendment.** The config retains five node categories, while
 > the single WIT package exposes four worlds. `inference-node` is a
-> capability-gated Transform specialization, not a sixth category. Transform,
-> Filter, and Router can select Wasm or bounded native evaluation implementations; replacement
-> eligibility is based on the loaded Wasm implementation, not the category name.
+> capability-gated Transform specialization, not a sixth category. Transform
+> and Filter can select a Wasm or a native evaluation implementation; a native
+> Router (`NativeRouter`) exists only for benchmarks, and a router config with a
+> native plugin fails at launch. Replacement eligibility is based on the loaded
+> Wasm implementation, not the category name.
 > Fan-in shares one destination receiver and has no fairness or cross-producer
 > ordering guarantee. `NodeState` is `Starting`, `Running`, `Error` or
 > `Recovering`; the `Draining`/`Retired` states of Decision 5 were removed with
@@ -210,11 +212,13 @@ For router fan-out, clone for N-1 ports and move the original to the last port �
 
 ## Implementation Notes
 
-- `NodeKind` in `crates/wafer-core/src/node/kind.rs` is a plain discriminator (5 kinds, no Joiner) used where the kind matters, for example `WaferEngine::fuel_budget`. The same file defines a `Node` struct (id, state tracker, metrics, kind) that nothing constructs; its module doc still calls it an unwired replacement for `AnyNode`. Neither `Node` nor `AnyNode` is on the runtime path: each per-type runner loop takes a concrete node value: the `TransformNode` and `FilterNode` enums (`crates/wafer-core/src/node/mod.rs`), whose variants select the Wasm or native implementation, and `WasmRouterNode` for Wasm routers.
+- `NodeKind` in `crates/wafer-core/src/node/kind.rs` is a plain discriminator (5 kinds, no Joiner) used where the kind matters, for example `WaferEngine::fuel_budget`. The same file defines a `Node` struct (id, state tracker, metrics, kind) that nothing constructs; its doc comment still describes it as a replacement for `AnyNode`. Neither `Node` nor `AnyNode` is on the runtime path: each per-type runner loop takes a concrete node value: the `TransformNode` and `FilterNode` enums (`crates/wafer-core/src/node/mod.rs`), whose variants select the Wasm or native implementation, and `WasmRouterNode` for Wasm routers.
 - `WasmBindings` at `crates/wafer-core/src/engine/bindings.rs` implements Decision 6 with three variants (`Transform`, `Filter`, `Router`) — no Joiner variant.
 - Four `bindgen!` modules (`transform_node`, `filter_node`, `router_node`, `inference_node`) exist in `crates/wafer-core/src/engine/bindings.rs` with `with:` type sharing as specified; the names in the Decision 6 sketch above (`*_world`) are the original proposal.
 - RuntimeEnvelope with `Arc<EnvelopeHeader>` + `Bytes` + `Lineage` is implemented as decided in Amendment A3.
 - Merge is realized as multi-producer `mpsc` wiring in the orchestrator builder (`crates/wafer-core/src/orchestrator/builder.rs`); multiple upstream nodes receive `Sender` clones to the downstream node's single receiver.
 - `wit/worlds.wit` declares only `transform-node`, `filter-node`, `router-node`, and `inference-node` — no `joiner-node` world.
 - `inference-node` world was added post-RFC as a Transform variant for `wasi:nn` plugins; it is functionally a Transform with additional WASI imports and does not conflict with any decision here.
-- Beyond the notes above, code matches the decisions.
+- Decisions 7 and 8 differ: the traits in `crates/wafer-core/src/node/traits.rs` return boxed futures rather than native `async fn`, and `Router::route` takes the envelope by value. The Wasm runners call the concrete node types, not these traits.
+- Decision 10 differs: there are no per-type default fuel budgets. Fuel is unmetered unless `[engine.fuel]` or a node `fuel` value sets a budget.
+- Decisions 9, 11 and 12 match the code: Transform clones the envelope before `process()` for the DLQ (`runner/transform.rs`), and the router runner clones for N-1 ports and moves the original to the last (`runner/router.rs`).

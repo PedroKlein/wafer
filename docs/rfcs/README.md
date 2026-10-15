@@ -29,10 +29,8 @@ Status line carries the detail. Amendment relations are listed below.
 
 ## Amendments summary
 
-Amendments are cross-links between RFCs where a later decision revised an
-earlier one. The pattern is: the amending RFC lists the target on its
-`Amends:` header line, and the amended RFC carries an `Amended by:` banner
-that points back.
+Amendments are places where a later RFC revised an earlier one. Not every RFC
+header records them; this table is the complete list.
 
 | Amender | Target | Nature of amendment |
 |---------|--------|---------------------|
@@ -40,28 +38,27 @@ that points back.
 | RFC-003 §A2 | RFC-001 | Transform return simplified from `result<process-outcome, process-error>` to `result<output-message, process-error>` — strict 1:1, no variant wrapper. |
 | RFC-003 §A3 | RFC-002 | `RuntimeEnvelope` redesigned to `{ header: Arc<EnvelopeHeader>, payload: Bytes, lineage: Lineage }` so clone is near-free (refcount bumps) for borrow-only nodes. |
 | RFC-005 §D6 | RFC-002, [ADR-0003](../adr/0003-hot-swap-mechanism.md) | Drain-and-flip 4-phase hot-swap replaced with a watch-channel between-messages model (`watch::Sender<Option<SwapPayload>>` per Wasm node). Each runner polls `swap_rx.has_changed()` between messages and applies the payload before the next `select!` iteration. |
-| RFC-007 §W2 | RFC-002 | Adds `limits: StoreLimits` to `WaferState` for per-node memory containment (RQ2 scenario S4). |
-| RFC-007 §W4 | RFC-004 | Adds per-category `[engine.fuel]` budgets and makes fuel and epoch metering independently switchable for the four-way metering-overhead decomposition; each is off when its values are omitted (the proposed boolean toggles were not implemented). |
-| RFC-007 §W5 | RFC-005 | Epoch ticker moves from `tokio::spawn` to a dedicated `std::thread::spawn` OS thread — guarantees firing under runtime saturation. |
-| RFC-008 §W1 | RFC-005 | `ProcessNode` trait abstraction generalised so a native Rust baseline can share the orchestrator/channels code paths. |
-| RFC-008 §W2 | RFC-006 | `TestPipeline` generalised into a shared `PipelineBuilder` with pluggable I/O adapters (`MemorySource` / `BenchSource` / `MqttSource` × `CollectorSink` / `BenchSink` / `NullSink`). |
-| RFC-008 §W3 | RFC-007 | Benchmark harness scope expanded — the "4–8 hours" estimate becomes a fully specified ~28-hour harness with HdrHistogram + replacement, sink, and Python analysis artifacts. |
+| RFC-007 D9 | RFC-002 | Adds `limits: StoreLimits` to `WaferState` for per-node memory containment (RQ2 scenario S4). |
+| RFC-007 D6 | RFC-004 | Adds per-category `[engine.fuel]` budgets and makes fuel and epoch metering independently switchable for the four-way metering-overhead decomposition; each is off when its values are omitted (the proposed boolean toggles were not implemented). |
+| RFC-007 C1 | RFC-005 | Epoch ticker moves from `tokio::spawn` to a dedicated `std::thread::spawn` OS thread, which keeps firing under runtime saturation. |
+| RFC-008 D5 | RFC-005 | `ProcessNode` trait abstraction generalised so a native Rust baseline can share the orchestrator/channels code paths. |
+| RFC-008 D15 | RFC-006 | Proposed generalising `TestPipeline` into a shared `PipelineBuilder` with pluggable I/O adapters. Neither was built; tests use `PluginTestHarness` and the in-memory `ChannelSource` / `ChannelSink`. |
 
 ## Reading order for new contributors
 
-1. **RFC-001, RFC-002, RFC-003** — the WIT contracts, host runtime, and node
+1. **RFC-001, RFC-002, RFC-003**: the WIT contracts, host runtime, and node
    types together define the shape of a WAFER pipeline. Read RFC-001 first,
    then RFC-002, then RFC-003 (which amends both).
-2. **RFC-004** — the TOML config schema that operators actually write.
-3. **RFC-005** — how the orchestrator and hot-swap actually run.
-4. **RFC-006** — the guest-side plugin SDK and the plugin inventory.
-5. **RFC-007** — performance optimisations layered on top of the above.
-6. **RFC-008** — how we measure everything for the thesis evaluation.
-7. **RFC-009** — the implementation architecture that bundles the above into
+2. **RFC-004**: the TOML config schema that operators actually write.
+3. **RFC-005**: how the orchestrator and hot-swap actually run.
+4. **RFC-006**: the guest-side plugin SDK and the plugin inventory.
+5. **RFC-007**: performance optimisations layered on top of the above.
+6. **RFC-008**: how we measure everything for the thesis evaluation.
+7. **RFC-009**: the implementation architecture that bundles the above into
    the shipped crates.
-8. **RFC-010** — the I/O integration (MQTT / HTTP / file) that made
+8. **RFC-010**: the I/O integration (MQTT / HTTP / file) that made
    the runtime end-to-end usable.
-9. **RFC-012** — the Component Model direction: adopted async P2 host bindings,
+9. **RFC-012**: the Component Model direction: adopted async P2 host bindings,
    bounded outbound HTTP, and a possible P3 streaming PoC that has not been
    started.
 

@@ -45,7 +45,7 @@ E-Density-1 on this host uses the x86_64 container floor,
 `eval/container-floor/linux-amd64.json`. Measure it with
 `python3 eval/scripts/measure-container-floor.py --platform linux/amd64` and
 commit it before deploying, as described in the
-[runbook](pi5-experiment-runbook.md#verify-one-clean-commit).
+[runbook](experiment-runbook.md#verify-one-clean-commit).
 
 ## Telemetry
 
@@ -65,7 +65,7 @@ throttle verdict. `power-boundary.json` records `x86-rapl-package-energy` or
 
 ## Running a batch
 
-Follow the [runbook](pi5-experiment-runbook.md) with `--host x86` on every
+Follow the [runbook](experiment-runbook.md) with `--host x86` on every
 runner and campaign command. Results land in `x86-<batch-id>` directories
 and are checked against the `x86` profile in the `hosts` map of
 `eval/canonical-matrix.json`. Before the host's first batch, check it against
@@ -76,8 +76,8 @@ python3 eval/scripts/validate-canonical.py host --host x86 --require-ekuiper
 ```
 
 The x86 host needs its own
-[capacity scout](pi5-experiment-runbook.md#run-the-hosts-capacity-scout) and
-its own [results root](pi5-experiment-runbook.md#set-the-hosts-results-root).
+[capacity scout](experiment-runbook.md#run-the-hosts-capacity-scout) and
+its own [results root](experiment-runbook.md#set-the-hosts-results-root).
 Once its batch has finished and been copied to the analysis machine,
 `mise run approve-batch -- --host x86 --batch-id <batch-id>` records it as
 the x86 entry of `eval/final-batches.json`.
