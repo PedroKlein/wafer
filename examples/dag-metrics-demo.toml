@@ -1,4 +1,5 @@
 # File source -> pass-through -> file sink with API/metrics enabled.
+# Build first: mise run //plugins:build-plugin pass-through
 # For a separate metrics listener, pass --metrics-bind 127.0.0.1:9091.
 
 [pipeline]

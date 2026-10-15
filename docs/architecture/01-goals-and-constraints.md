@@ -42,7 +42,7 @@ The entire pipeline: sources, Wasm stages, sinks, control plane: runs in one OS 
 
 ### C2: DAG-only topology
 
-Pipelines are directed acyclic graphs. Cycles are rejected at config load time via topological sort (`petgraph`). Fan-out is supported via routers; fan-in is implicit (multiple upstream edges converge on a single node's `mpsc` receiver). There are no feedback loops, windowing operators, or cyclic stream primitives.
+Pipelines are directed acyclic graphs. Cycles are rejected at config load time via topological sort (`petgraph`). Fan-out is supported: sources, transforms and filters send to every downstream edge, and a router picks labeled ports. Fan-in is implicit (multiple upstream edges converge on a single node's `mpsc` receiver). There are no feedback loops, windowing operators, or cyclic stream primitives.
 
 ### C3: Bounded queues with backpressure
 

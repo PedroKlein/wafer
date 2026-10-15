@@ -10,17 +10,17 @@ plugins stay dependency-light and fast to build), no unsafe, and no
 
 ## What the SDK provides
 
-- **Output builder macros** — build `OutputMessage` values without
+- **Output builder macros**: build `OutputMessage` values without
   repeating envelope-header boilerplate.
-- **Error constructors** — one macro per `ProcessError` variant, so
+- **Error constructors**: one macro per `ProcessError` variant, so
   the plugin never types the enum path.
-- **State pattern** — `thread_local!` + `RefCell<Option<T>>` with a
+- **State pattern**: `thread_local!` + `RefCell<Option<T>>` with a
   three-macro trio (`define_state!`, `set_state!`, `with_state!`).
-- **Payload accessors** — `payload_bytes!` and `payload_as_str!` on
+- **Payload accessors**: `payload_bytes!` and `payload_as_str!` on
   the `borrow<buffer>` handle.
-- **Log helpers** — `log_info!`, `log_warn!`, `log_error!` that route
+- **Log helpers**: `log_info!`, `log_warn!`, `log_error!` that route
   to `wafer:pipeline/logging`.
-- **`parse_config`** — a plain function that deserialises the JSON
+- **`parse_config`**: a plain function that deserialises the JSON
   `node-config.config` string into a typed struct (feature-gated on
   `serde`).
 
@@ -89,12 +89,12 @@ with_state!(state => {
 `RefCell<Option<MyState>>` (initialised to `None`).
 `set_state!` writes `Some(value)`.
 `with_state!` panics if the state was never initialised
-(`"plugin not initialized: init() must be called first"`) — this is a
+(`"plugin not initialized: init() must be called first"`). This is a
 programmer error, not a runtime hazard, because `init` is guaranteed
 to run before any processing call.
 
 This pattern is safe because a wasmtime guest instance runs
-single-threaded on the host's runtime — there is exactly one
+single-threaded on the host's runtime: there is exactly one
 `thread_local` slot and no re-entrancy.
 
 ## Payload accessors

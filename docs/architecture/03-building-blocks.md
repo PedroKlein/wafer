@@ -125,7 +125,7 @@ The largest crate. Contains all runtime logic grouped into modules:
 | Module | Responsibility |
 |--------|---------------|
 | `engine` | Wasmtime lifecycle: component loading, compiled-component cache (blake3-keyed, memory-only in the runtime), asynchronous P2 bindings, `WaferBuffer` resources, WASI capability scoping, exact-destination outbound HTTP enforcement, `StoreLimits`, and host logging. |
-| `orchestrator` | Pipeline lifecycle: `Pipeline` handle, receiver-keyed mpsc wiring, loaded-Wasm replacement eligibility, per-node mutation guards, JoinSet startup, and replacement preparation. |
+| `orchestrator` | Pipeline lifecycle: `PipelineHandle` and `PipelineOrchestrator`, receiver-keyed mpsc wiring, loaded-Wasm replacement eligibility, per-node mutation guards, JoinSet startup, and replacement preparation. |
 | `runner` | Per-category async loops — one each for source, sink, transform, filter, router. Each loop owns its `Store`, receives from mpsc, sends to downstream mpsc, and integrates with the error policy executor. |
 | `dag` | Petgraph wrapper: `DagGraph`, topological sort, cycle rejection. |
 | `queue` | `bounded.rs` tracking wrappers and `envelope.rs` (`RuntimeEnvelope` with `Arc<EnvelopeHeader>`, `Bytes` payload, `Lineage`, and host retry count). |
@@ -159,7 +159,7 @@ Binary `wafer` (`main.rs`, plus `startup.rs` and `metadata.rs` for evaluation ar
 
 1. Parse CLI arguments (config path, optional overrides).
 2. Load and validate the pipeline TOML via `wafer-config`.
-3. Build and launch the pipeline via `wafer_core::orchestrator::Pipeline`.
+3. Build and launch the pipeline via `wafer_core::orchestrator::launch_pipeline_timed`.
 4. Start the axum control plane and block until the pipeline completes or a
    shutdown signal arrives (SIGINT, SIGTERM, or API-triggered cancel). A
    failed run exits non-zero.
@@ -234,7 +234,7 @@ flowchart LR
     API --> METRICS
     BUILDER --> DAG
     BUILDER --> QUEUE
-    BUILDER --> INST
+    LAUNCHER --> INST
     LAUNCHER --> SRC & TFM & FLT & RTR & SNK
     HOTSWAP --> TFM & FLT & RTR
     TFM --> EPOL
@@ -250,8 +250,8 @@ flowchart LR
 
 | Concern | Where it lives |
 |---------|---------------|
-| Observability | `metrics` module (counters), `api::metrics` (scrape), `tracing` spans emitted from every runner loop and host function. |
-| Error handling | Stratified: `thiserror` in library boundaries, five-category WIT `process-error` at the guest–host edge, `anyhow` only in binaries. |
+| Observability | Per-node counters and hot-swap histograms, rendered by the `api` scrape handler; `tracing` events from the runner loops and host functions (no per-message spans). |
+| Error handling | Stratified: `thiserror` in library boundaries, five-category WIT `process-error` at the guest–host edge, `anyhow` only in binaries and tests. |
 | Backpressure | Bounded `tokio::mpsc` channels on every edge; overflow policy configurable per-edge (slow / drop / dead-letter). |
 | Isolation | One `wasmtime::Store` per Wasm node, per-node `StoreLimits` (linear memory and tables; host-side WASI resources are not bounded), optional fuel/epoch bounds on Wasm CPU time (not on time blocked in a host import), and deny-by-default WASI capability scoping. Only a granted Wasm Transform receives the inference linker and ONNX backend; Wasm processing nodes receive network authority only through exact-destination `outbound_http` grants. |
 | Hot-swap | Watch-channel signal from orchestrator → runner; between-messages replacement of `Store` + `Instance`. See [ADR-0012](../adr/0012-watch-channel-hot-swap.md). |

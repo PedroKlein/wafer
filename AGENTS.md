@@ -34,14 +34,14 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 - **Five node categories** — `Source`, `Sink`, `Transform`, `Filter`, `Router`. Sources and Sinks are native Rust; Transform / Filter / Router are Wasm components.
 - **WIT-typed boundaries** — Project interfaces live in one `wafer:pipeline@0.1.0` package with four worlds: `transform-node`, `filter-node`, `router-node`, and the capability-gated `inference-node`. The last also imports the pinned `wasi:nn` package.
 - **Inference is default deny** — Only a Wasm Transform with `allow_inference = true` receives the wasi-nn linker and ONNX backend. The immutable grant survives recovery, reconfigure, hot-swap, and rollback; a requested GPU target alone is not provider-selection evidence.
-- **Bounded queues** — Every edge is a bounded tokio `mpsc` channel with a configurable capacity and an overflow policy (`slow`/backpressure, `drop`, `dead-letter`). Backpressure propagates end-to-end.
-- **Fan-out / fan-in** — Fan-out is expressed by Router nodes (1→N) that return output port names. Fan-in (N→1) is an **implicit host topology**: multiple upstream nodes are wired as multi-producer senders on the downstream node's single `mpsc` receiver. There is no first-class Joiner node type; fan-in requires no Wasm.
+- **Bounded queues** — Every destination node has one bounded tokio `mpsc` receiver, sized by the largest `capacity` among its incoming edges (or the engine default); each edge sets its own overflow policy (`slow`/backpressure, `drop`, `dead-letter`). Backpressure propagates end-to-end.
+- **Fan-out / fan-in** — Sources, Transforms and Filters send to every downstream edge; a Router (1→N) returns the output port names to use. Fan-in (N→1) is an **implicit host topology**: multiple upstream nodes are wired as multi-producer senders on the downstream node's single `mpsc` receiver. There is no first-class Joiner node type; fan-in requires no Wasm.
 - **Hot-swap (watch-channel, between messages)** — Each Wasm node's task holds a `watch::Receiver<Option<SwapPayload>>`. At the top of every runner loop iteration the task polls `swap_rx.has_changed()` — if a swap payload is available it drops the old instance and installs the pre-instantiated replacement, then enters its usual `select!` between cancellation, the swap signal and the input channel (so an idle node wakes for a swap). State inside the guest instance is lost by design (see Invariant 7).
 - **Zero-copy envelope** — Messages cross the boundary as an `Arc<EnvelopeHeader>` plus `Bytes` payload plus lineage trail. Guests read the payload via a `borrow<buffer>` resource handle exposed by `pipeline:types`.
 - **Error policy** — Every host-observed guest error maps to one of five categories (`bad-input`, `dependency-failed`, `processing-failed`, `timed-out`, `unrecoverable`) which the policy engine dispatches to `retry` / `dead-letter` / `skip` / `teardown`.
 - **Multiple I/O** — Native sources and sinks support stdin/stdout, files, MQTT pub/sub, and HTTP webhooks.
 - **Control plane**: axum HTTP REST API, with Prometheus metrics on the same port by default (`--metrics-bind` moves them to their own listener).
-- **OCI registry** — Wasm components can be pulled from container registries (ghcr.io, Docker Hub) via the same `plugin` field used for local paths, with content-addressable local caching.
+- **OCI registry** — Wasm components can be pulled from container registries (ghcr.io, Docker Hub) via the same `plugin` field used for local paths, with a tag-keyed local cache (24 h TTL).
 - **Fuel + epoch metering** — When a config enables them (both default to off), guests are bounded in both computation (fuel) and wall-clock time (epoch interruption on a dedicated OS thread).
 
 ### Tech Stack
@@ -52,7 +52,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 - **petgraph** — DAG topology management (toposort + cycle detection)
 - **tokio** — Async runtime (`mpsc`, `watch`, `select!`)
 - **axum** — HTTP control plane server
-- **prometheus-client** — Metrics exposition
+- **prometheus-client** — Declared under the `http-api` feature but unused; `/metrics` text is written directly from per-node counters
 
 ### Workspace Crates
 
@@ -91,7 +91,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 | Document | Summary |
 |----------|---------|
 | `docs/status/implementation-status.md` | Current implementation state — what's built, what's tested, per-plugin coverage. |
-| `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID. Only A20 is open; closed entries are archived. Every RFC/ADR/architecture chapter with an aspirational banner points here. **Consult before assuming code matches docs.** |
+| `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID. Only A20 is open; closed entries are archived. **Consult before assuming code matches docs.** |
 | `docs/benchmarks/README.md` | Current benchmark reference pages. The shakedown pages are archived under `docs/history/benchmarks/`. |
 | `docs/benchmarks/hot-swap.md` | Hot-swap phases and the E-Swap experiment definitions. |
 | `docs/benchmarks/ekuiper-comparator.md` | Native eKuiper 2.1.5 comparator: install, Pipeline A, run procedure and the E-Swap-3 rule changes. |
@@ -245,7 +245,7 @@ For detailed Rust idioms, patterns, and style guidance, load the relevant skill 
 | `dag-orchestration` | Working with pipeline topology, petgraph, or fan-in/fan-out wiring |
 | `rust-testing` | Adding integration/unit tests, benchmark setup, test harness design, mocking wasmtime state |
 | `observability` | Working with `tracing` spans, Prometheus metrics, log-level policy, span attributes, or the `/metrics` endpoint |
-| `oci-distribution` | Working with OCI registry pulls, `wkg` tooling, plugin publishing, or the content-addressable AOT cache |
+| `oci-distribution` | Working with OCI registry pulls, `wkg` tooling, plugin publishing, or the plugin cache |
 | `mqtt-iot` | Working with MQTT sources/sinks, mosquitto setup, or QoS/topic patterns |
 | `cli-design` | Working on `waferctl` or `wafer-runtime` CLI ergonomics, clap argument shapes, output formatting |
 

@@ -59,8 +59,8 @@ taskset -pc "$(systemctl show -p MainPID --value kuiper)"
 
 ## Files
 
-- `install-native.sh` — pinned package download, checksum verification, installation, and systemd affinity.
-- `mqtt-source-default.yaml` — canonical MQTT source settings installed on the Pi.
-- `gctrace-drop-in.conf` — systemd drop-in that the profiled tail-profiling runs install under `/run` to set `GODEBUG=gctrace=1`.
-- `seed-pipeline-a.sh` — idempotent REST registration.
-- `smoke-test.sh` — native pass/drop behavior check.
+- `install-native.sh`: pinned package download, checksum verification, installation, and systemd affinity.
+- `mqtt-source-default.yaml`: canonical MQTT source settings installed on the Pi.
+- `gctrace-drop-in.conf`: systemd drop-in that the profiled tail-profiling runs install under `/run` to set `GODEBUG=gctrace=1`.
+- `seed-pipeline-a.sh`: idempotent REST registration.
+- `smoke-test.sh`: native pass/drop behavior check.

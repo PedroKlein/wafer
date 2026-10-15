@@ -213,7 +213,7 @@ experiment:
 | File | Producer | Description |
 | --- | --- | --- |
 | `config.toml` | `run-experiment.sh` copies the input file | Verbatim copy of the pipeline config used for this run. |
-| `metadata.json` | `run-experiment.sh` + wafer-runtime provenance merge | Run-provenance JSON — see [metadata.json schema](#metadatajson-schema). |
+| `metadata.json` | `run-experiment.sh` + wafer-runtime provenance merge | Run-provenance JSON; see [metadata.json schema](#metadatajson-schema). |
 | `runtime-provenance.json` | `wafer-runtime` (F2) | Runtime-owned provenance sidecar (wasmtime, plugin hashes, config sha256, rustc, kernel, runtime sha). Merged into `metadata.json` by `_write_metadata`. |
 | `stdout.log` | `run-experiment.sh` tees runtime output | Complete stdout+stderr of `wafer-runtime` including trap traces and hot-swap events. |
 

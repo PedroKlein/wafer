@@ -107,10 +107,6 @@ A generated export call returns two layers of `Result`. For `call_process` the t
 
 `Trap::Interrupt` and `Trap::OutOfFuel` count as budget exhaustion: outside a hot-swap canary window, the runner applies the node's `timed_out` error-policy action and, unless that action is `teardown`, replaces the Store. Any other trap condemns the Store. A memory-limit trap carries no `Trap` code, so `trap_kind` recognizes it by its message text. [Shutdown and failure behavior](shutdown-and-failure.md) follows these branches.
 
-## A limit to keep in mind
-
-The doc comment on `HostBuffer::drop` in `crates/wafer-core/src/engine/bindings.rs` says it runs when a `borrow<buffer>` goes out of scope. Wasmtime runs the destructor only for owned handles, so the explicit `delete_buffer` is what frees each payload entry.
-
 ## Check yourself
 
 **1. Two Transform nodes load the same `.wasm` file. Which Wasmtime objects do they share, and which does each node get for itself?**

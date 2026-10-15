@@ -1,6 +1,6 @@
 # Operations
 
-How-to guides for running WAFER — installing, configuring, wiring to external
+How-to guides for running WAFER: installing, configuring, wiring to external
 systems, and observing the runtime.
 
 - `getting-started.md`: install, build, and run your first pipeline.
