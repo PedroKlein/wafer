@@ -2,6 +2,11 @@
 
 ## Engine Configuration for Edge Hardware (Raspberry Pi 5, Jetson Orin)
 
+These are options, not WAFER's current configuration. WAFER's engine
+(`crates/wafer-core/src/engine/loader.rs`) sets only the Component Model, fuel
+and epoch interruption, and keeps Wasmtime's defaults for the rest. The pooling
+allocator was deferred (RFC-007 Decision 2).
+
 ```rust
 let mut config = Config::new();
 config.wasm_component_model(true);

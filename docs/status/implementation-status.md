@@ -38,7 +38,7 @@ lineage and retry count remain separate runtime fields.
 
 ## Component Model host path and outbound HTTP
 
-Production keeps the `wafer:pipeline@0.1.0` WASI 0.2 ABI and uses Wasmtime's asynchronous P2 host linker, instantiation, lifecycle, and call APIs. Wasm runners execute as ordinary Tokio tasks; there is no production `spawn_blocking`, nested `block_on`, `block_in_place`, sync P2 fallback, or P3 linker path. Each node still owns one Store and runs one guest call at a time, outside cancellation races.
+Production keeps the `wafer:pipeline@0.1.0` WASI 0.2 ABI and uses Wasmtime's asynchronous P2 host linker, instantiation, lifecycle, and call APIs. Wasm runners execute as ordinary Tokio tasks; guest calls never go through `spawn_blocking`, nested `block_on`, `block_in_place`, a sync P2 fallback, or a P3 linker path. Only hot-swap compilation runs on the blocking pool. Each node still owns one Store and runs one guest call at a time, outside cancellation races.
 
 Wasm Transform, Filter, and Router nodes may opt into outbound `wasi:http` for exact `(scheme, canonical-host, effective-port)` destinations. Omission is deny-all. Each request is checked at the send boundary, DNS is resolved once and filtered before direct connection, redirects are not followed, and `CONNECT` is denied. Grants are immutable until pipeline restart and are retained across recovery, reconfigure, hot-swap, and process-time rollback. Native Sources and Sinks remain the preferred transport and credential boundary.
 
@@ -118,9 +118,9 @@ rest of the run; it does not recover the node.
 
 By default bad input and exhausted retries go to the DLQ, so the validator
 requires a `[dead_letter]` section whenever a processing node's effective
-policy has a `dlq` action. Every pipeline config under `eval/configs/` and
-`examples/` has a file DLQ (`dlq.jsonl`, placed in the result directory by the
-harness), so a message removed by the error policy or by a trap leaves a
+policy has a `dlq` action. Every pipeline config with processing nodes under
+`eval/configs/` and `examples/` has a file DLQ (for evaluation runs,
+`dlq.jsonl` in the result directory), so a message removed by the error policy or by a trap leaves a
 record there and is counted as `dlq_sent`; `dlq_lost` is left for a full or
 closed DLQ. Retries survive a failed hot-swap and are served after upstream
 EOF; `retry_count` is reset on a node's output. The file sink writes each

@@ -114,7 +114,6 @@ Atomics replace locks where one value is enough. [Rust in context](rust-in-conte
 ## Limits to keep in mind
 
 - `StdinSource::poll` (`crates/wafer-core/src/node/source/stdin.rs`) calls the blocking `read_line` from `std::io` inside its future. While it waits for a line it holds a worker thread, and its loop cannot see cancellation until a line or end of input arrives ([#235](https://github.com/PedroKlein/wafer/issues/235)).
-- The release-profile comment in the root `Cargo.toml` says node failures are contained with `catch_unwind`. No production code calls it; Tokio's task harness catches panics and the `JoinSet` reports them.
 
 ## Check yourself
 

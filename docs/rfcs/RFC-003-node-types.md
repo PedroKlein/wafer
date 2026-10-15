@@ -205,8 +205,8 @@ For router fan-out, clone for N-1 ports and move the original to the last port �
 
 ## Related RFCs
 
-- **RFC-001** — Defines the WIT contracts that this RFC's type system realizes. This RFC amends RFC-001 §A1 (removes Joiner world) and §A2 (Transform strict 1:1 return).
-- **RFC-002** — Defines the host runtime architecture (RuntimeEnvelope, error policy, InstancePre, Store lifecycle). This RFC amends RFC-002 §A3 (envelope redesigned with Arc header + Bytes + Lineage).
+- **RFC-001** — Defines the WIT contracts that this RFC's type system realizes. Amendments §A1 (removes Joiner world) and §A2 (Transform strict 1:1 return) of this RFC change RFC-001.
+- **RFC-002** — Defines the host runtime architecture (RuntimeEnvelope, error policy, InstancePre, Store lifecycle). Amendment §A3 of this RFC changes RFC-002 (envelope redesigned with Arc header + Bytes + Lineage).
 - **RFC-005** — Later simplifies the orchestrator; builds on the node type set established here.
 - **RFC-006** — Guest SDK design for the trait interfaces defined here.
 

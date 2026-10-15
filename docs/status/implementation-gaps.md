@@ -2,8 +2,7 @@
 
 This document lists every case where an RFC, ADR, or architecture chapter
 describes behavior that the current runtime does **not** implement. Each entry
-has a stable ID (A1, A2, …) that the "Status: Aspirational" banners in the
-referring docs cite. Do not renumber.
+has a stable ID (A1, A2, …) that other docs cite. Do not renumber.
 
 The closed entries (A1–A19, A17-B and A21), as filed and with their closure
 notes, are archived in

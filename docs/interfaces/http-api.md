@@ -106,8 +106,9 @@ Successful local adoption response:
 
 `compile_cache` says what `compile_ns` measured: `compiled` for a Cranelift
 compile, `memory_hit` when this process already compiled the same bytes (a
-previous swap, or the component loaded at launch), or `disk_hit` when an
-on-disk cache is configured and holds the component. Compilation and linking
+previous swap, or the component loaded at launch). The schema also lists
+`disk_hit`, but the runtime keeps its component cache in memory only, so a
+response never carries it. Compilation and linking
 run on tokio's blocking pool, not on the workers that drive pipeline nodes.
 
 The disposition is one of `forwarded/enqueued`, `filter-dropped`, or
@@ -142,9 +143,12 @@ Other errors are plain-text bodies:
 
 - 400: replacement file cannot be read, or the node's capability grant
   cannot be rebuilt;
-- 404: unknown node or node is not replacement-eligible;
-- 409: mutation already in progress or replacement initialization failed;
-- 500: preparation failed or the runner exited before reporting adoption;
+- 409: replacement initialization failed;
+- 500: preparation failed, the runner exited before reporting adoption, or
+  the per-node guard refused the request because the node is unknown, not
+  replacement-eligible, or already being mutated. These guard refusals are
+  meant to be 404 and 409
+  ([#236](https://github.com/PedroKlein/wafer/issues/236));
 - 504: the runner did not take the replacement within five seconds. The
   request is withdrawn before the response is sent, so it never applies later
   and the node keeps its current plugin.
@@ -176,7 +180,8 @@ through the hot-swap preparation path, so `compile_ns`, `instantiate_ns`, and
 only `timeline.rollback_ns`.
 
 A non-empty `expected_plugin_hash` is compared with the SHA-256 (hex) of the
-plugin currently loaded on the node and a mismatch returns HTTP 409. The
+plugin currently loaded on the node and a mismatch is rejected (HTTP 500
+today, meant to be 409, like the guard errors above). The
 launcher records that hash for every Wasm node it loads, and each successful
 hot-swap replaces it, so the guard applies from process start.
 

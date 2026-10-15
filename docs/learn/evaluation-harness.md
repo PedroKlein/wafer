@@ -19,7 +19,7 @@ flowchart TD
     F --> H[analysis notebooks: figures and tables]
     H --> I{evidence classification}
     I -->|diagnostic batches| J[diagnostic and non-poolable]
-    I -->|approved final batches| K[final campaign: matrix repetitions]
+    I -->|approved final batches| K[thesis evidence: matrix repetitions]
 ```
 
 1. `eval/canonical-matrix.json` defines experiment IDs, condition grids, repetitions, sample units, required outputs, ordering, metering, evidence class, and admission flags. Each experiment in the `enhanced_candidate` block is N=5 candidate or diagnostic work and sets `thesis_evidence=false` and `n30_admitted=false`.
@@ -44,13 +44,13 @@ Counts need type-like discipline even though Python tables are dynamic. A comple
 
 ## Evidence classes
 
-Evidence classification is part of the data contract, not a caption added later. The completed expanded N=5 rehearsal is diagnostic, descriptive, and non-poolable with final or earlier campaigns. Its records remain `thesis_evidence=false` and outside N=30 admission.
+Evidence classification is part of the data contract, not a caption added later: every leaf's `metadata.json` carries it. Diagnostic batches, such as the N=5 candidate experiments or a batch run with `--repetitions`, set `thesis_evidence=false`. They support descriptive patterns only and are never pooled with the final batches.
 
-The final batches for the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts are approved in `eval/final-batches.json`. Each experiment uses the repetitions set in `eval/canonical-matrix.json`, 30 for most. Diagnostic batches support descriptive patterns only. PMIC readings remain an internal-rail proxy, not total input power.
+The final batches for the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts are approved in `eval/final-batches.json`. Each experiment uses the repetitions set in `eval/canonical-matrix.json`, 30 for most. PMIC readings remain an internal-rail proxy, not total input power.
 
 Capacity classification is support-aware. When the MQTT loopback support cell is delivery-bad, affected SUT cells at that rate and above are support-confounded. These cells set neither bound of a delivery ceiling, even if a SUT leaf contains measurements. A nested interval, bucket, message, or event cannot remove that censoring.
 
-Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final evidence. Historical layouts remain readable for provenance, not promotion.
+Do not quote old desktop or Raspberry Pi 4 shakedown values as evidence.
 
 ## Limits to keep in mind
 

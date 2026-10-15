@@ -110,6 +110,9 @@ let component = unsafe { Component::deserialize(&engine, &cached_bytes)? };
 // ONLY use with files YOU wrote to disk. NEVER with user-provided bytes.
 ```
 
+WAFER's runtime does not do this today: its compiled-component cache is
+memory-only and every plugin is compiled at launch (ADR-0013).
+
 **When to pre-compile**: Always in production. Compilation is 50-200ms per plugin on a Pi-class ARM core.
 Pre-compilation reduces node init to <5ms (just instantiation, no compilation).
 
@@ -331,14 +334,16 @@ without a grant gets a WASI trap — immediately, not a silent failure.
 
 ## Edge Configuration & Production Hardening
 
-Key tuning decisions for Pi 5/Jetson (details in reference file):
+Tuning options for Pi 5/Jetson (details in reference file). WAFER's engine sets only the
+Component Model, fuel and epoch interruption and otherwise keeps Wasmtime's defaults
+(`engine/loader.rs`); the pooling allocator was deferred (RFC-007 Decision 2).
 
 | Setting | Value | Why |
 |---------|-------|-----|
 | `async_stack_size` | 512 KiB (not 2 MiB default) | Saves 1.5MB per node |
 | `memory_reservation` | 16 MiB (not 4 GiB default) | Enables pooling on edge |
 | Pooling allocator | `total_instances = max_DAG_nodes` | Syscall-free instantiation |
-| ResourceLimiter | 16 MiB/node + `trap_on_grow_failure` | OOM contained to single node (RQ2) |
+| ResourceLimiter | `StoreLimits` per node (WAFER: 64 MiB Transform, 16 MiB Filter/Router) + `trap_on_grow_failure` | OOM contained to single node (RQ2) |
 | WIT validation | `wit_parser::decoding::decode(bytes)` before instantiate | Clear errors on interface mismatch |
 | Epoch ticker | `std::thread::spawn` (NOT tokio::spawn) | Fires even under Tokio saturation |
 

@@ -21,7 +21,7 @@ Orin Nano and x86 hosts are approved in
 Items flagged in RFCs and ADRs as "future work", not required for the
 thesis but on the credible-next-step list. [RFC-012](docs/rfcs/RFC-012-wasi-0.3-evaluation.md)
 records the Component Model boundary: async P2 and bounded outbound HTTP are
-implemented, while P3 remains an isolated pre-release PoC with explicit
+implemented, while a P3 proof of concept has not started and has explicit
 adoption gates.
 
 - **Host state store** — a small key-value store exposed via a WIT
@@ -32,15 +32,15 @@ adoption gates.
 - **Dynamic topology** — add / remove nodes at runtime through a
   new `POST /api/v1/pipeline/topology` endpoint. Today only in-place
   hot-swap of an existing node is supported.
-- **Cosign signature verification** — `[registry].verify_cosign = true`
-  enforces signature policy at plugin load. Requires `cosign` on
-  `PATH`. See `docs/operations/registry.md` § Supply-chain notes.
+- **Cosign signature verification** — verify plugin signatures at load
+  time. Not implemented: `[registry]` accepts only `cache_dir`. See
+  `docs/operations/registry.md` § Supply-chain notes.
 - **Inference hardening** — isolate the intermittent CUDA teardown corruption
   observed after successful Jetson inference, then extend validation beyond the
   current MNIST architecture check. CPU inference and actual CUDA-provider
   execution are implemented; performance, energy, and production-readiness
   claims remain out of scope.
-- **P3 migration** — complete the isolated P3 PoC, then adopt a new
+- **P3 migration** — build an isolated P3 PoC, then adopt a new
   versioned WIT package only if Rust and Go toolchains, payload ownership,
   cancellation, hot-swap, per-message semantics, and matched performance all
   pass. The evaluation results stay P2 results.
@@ -77,11 +77,11 @@ here so contributors know they are on the plausible-follow-on list.
 
 Items considered and explicitly deferred (see the relevant RFCs):
 
-- **Pooling allocator** — RFC-007 §D2 rejected this because the
+- **Pooling allocator** — RFC-007 §D2 deferred this because the
   persistent `Store` per node makes pooling irrelevant.
-- **Filter chain fusion** — RFC-007 §D5 rejected this because it
+- **Filter chain fusion** — RFC-007 §D4 rejected this because it
   contradicts the per-node isolation contribution.
-- **Host-native expression filters** — RFC-007 §D6 rejected this
+- **Host-native expression filters** — RFC-007 §D5 rejected this
   because it undermines the "Wasm plugins are viable" argument.
 - **Custom queue implementation** — rejected while bounded Tokio mpsc plus
   `Sender::reserve` satisfies the current cancel-safe slow path.

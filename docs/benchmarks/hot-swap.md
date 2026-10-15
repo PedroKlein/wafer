@@ -34,7 +34,7 @@ E-Swap-4 uses 30 independent runs. The source emits 1,000 msg/s before measured 
 
 ### Failed replacement
 
-E-Swap-5 has 10 independent process runs of 50 failed replacements each. Every run records its requests, rollback evidence, sequence accounting, and `post-rollback-continuity.json`, and rollback durations are summarised per run before they are summarised over runs. A failed replacement must not contain a successful-v2 `swap_timeline.json`. Process-time canary rollback is implemented only for Transform, and the continuity artifact—not the API's local rollback response—owns the post-rollback delivery claim.
+E-Swap-5 has 10 independent process runs of 50 failed replacements each. Every run records its requests, rollback evidence, sequence accounting, and `post-rollback-continuity.json`, and rollback durations are summarised per run before they are summarised over runs. A failed replacement must not contain a successful-v2 `swap_timeline.json`. Process-time canary rollback is implemented only for Transform, and the continuity artifact, not the API's local rollback response, owns the post-rollback delivery claim.
 
 ## Cache boundary
 

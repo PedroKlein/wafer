@@ -230,7 +230,8 @@ components:
       description: >-
         Hot-swap only; reconfigure responses do not carry it. Whether `compile_ns` covers a Cranelift compile or a
         reuse of a component already compiled by this process (including the
-        one loaded at launch) or read from the on-disk cache.
+        one loaded at launch). `disk_hit` is reserved for an on-disk cache,
+        which the runtime does not enable.
     ReplacementTimeline:
       type: object
       required: [compile_ns, instantiate_ns, signal_ns, replacement_adopted_ns, first_post_replacement_local_outcome_ns]

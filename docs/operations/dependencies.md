@@ -6,7 +6,7 @@ dependencies. Sourced from `Cargo.toml`, `rust-toolchain.toml`, and
 
 ## Language and toolchain
 
-- **Rust via rustup** — exact toolchain `1.98.1`, Edition 2024. The workspace
+- **Rust via rustup**: exact toolchain `1.98.1`, Edition 2024. The workspace
   `rust-version` is `1.98`; older compilers are not tested.
   Install from <https://rustup.rs/> before running `mise install`; cargo-based
   mise tools require `cargo` to exist. `rust-toolchain.toml` pins the compiler
@@ -19,7 +19,7 @@ dependencies. Sourced from `Cargo.toml`, `rust-toolchain.toml`, and
 
 ## Development tool manager and command runner
 
-- **`mise`** — primary development tool manager and command runner via
+- **`mise`**: primary development tool manager and command runner via
   `mise.toml` at the repo root. Install via <https://mise.jdx.dev/> or your
   package manager, then run:
 
@@ -84,11 +84,11 @@ longer matches `Cargo.lock`.
 
 Features of `wafer-runtime` (forwarded to `wafer-core`):
 
-- `http-api` (default) — enables the axum control plane. Disable for
+- `http-api` (default): enables the axum control plane. Disable for
   minimal-binary embedded builds.
-- `ort-download` (default) — lets the build download the prebuilt ONNX
+- `ort-download` (default): lets the build download the prebuilt ONNX
   Runtime. See [ONNX Runtime](#onnx-runtime).
-- `cuda` — enables `wasmtime-wasi-nn/onnx-cuda` for host builds with a
+- `cuda`: enables `wasmtime-wasi-nn/onnx-cuda` for host builds with a
   compatible CUDA-enabled ONNX Runtime. The feature enables the provider but
   does not prove selection; provider registration, graph placement, and device
   telemetry are required runtime evidence. CUDA execution works on the Jetson,
@@ -139,9 +139,10 @@ strip = "debuginfo"
 panic = "unwind"
 ```
 
-`panic = "unwind"` is required: a panicking node task is contained through
-`catch_unwind` and `JoinSet` panic handling, which `abort` would turn into a
-process exit.
+`panic = "unwind"` is required: the orchestrator's `JoinSet` reports a
+panicking node task as a failed task, cancels the rest of the pipeline, and
+the runtime writes its artifacts before exiting with status 3. With `abort`
+the process would exit at once.
 
 Each plugin has its own release profile in `plugins/<name>/Cargo.toml`,
 tuned for size:
@@ -178,8 +179,9 @@ whose `wafer_plugin_hashes` differ.
 ## Upgrading
 
 - **Wasmtime bump**: update the four Wasmtime crates together from their exact shared revision, rerun Component Model and attack evidence, and re-audit the coupled `ort` pin.
-- **Rust edition bump** — pinned via `rust-toolchain.toml`. Do not
-  bump without ensuring `wasm32-wasip2` remains supported on the
+- **Rust toolchain or edition bump**: the toolchain is pinned in
+  `rust-toolchain.toml` and the edition in the root `Cargo.toml`. Do not
+  bump either without ensuring `wasm32-wasip2` remains supported on the
   target release.
-- **Tokio 2 / axum 1** — no plan today. Both are stable enough that
+- **Tokio 2 / axum 1**: no plan today. Both are stable enough that
   we tolerate the current pins.

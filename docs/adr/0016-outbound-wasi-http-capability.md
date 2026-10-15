@@ -175,8 +175,8 @@ The fixture-backed tests drive a real P2 component (`crates/wafer-core/tests/fix
 | H14 | fixture: `real_p2_component_rejects_dns_loopback_and_connect`; host: `connect_method_is_denied_before_loopback_connect` |
 | H15 | fixture: `real_p2_component_redacts_request_data_from_host_logs` |
 | H16, H17 | fixture: `real_p2_component_preserves_grant_through_recovery_and_reconfigure` |
-| H18 | fixture: `real_p2_component_hot_swap_retains_original_grant`; `node::wasm::tests::accepted_hot_swap_preserves_outbound_http_grant`, `hot_swap_rejects_outbound_http_expansion` |
-| H19 | accepted hot-swap half only: the H18 tests |
+| H18 | fixture: `real_p2_component_hot_swap_retains_original_grant` (denied request); `node::wasm::tests::hot_swap_rejects_outbound_http_expansion` |
+| H19 | accepted hot-swap half only: fixture `real_p2_component_hot_swap_retains_original_grant` (allowed request); `node::wasm::tests::accepted_hot_swap_preserves_outbound_http_grant` |
 | H20 | `node::wasm::tests::inference_and_outbound_http_survive_recovery_together` |
 
 Two halves have no test:

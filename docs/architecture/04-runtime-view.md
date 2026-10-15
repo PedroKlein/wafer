@@ -122,13 +122,13 @@ sequenceDiagram
   mid-execution. It observes the swap signal only at the top of the next
   loop iteration — after the current message completes (if any) and before
   the next one is dequeued from the `select!` branch.
-- **Preparation off the message path.** Compilation and linking run on a blocking thread through the engine's component cache (the response reports `compile_cache` as `memory_hit`, `disk_hit`, or `compiled`), and typed instantiation happens before signalling. The runner installs the prepared values and runs guest validation/initialization before marking replacement adoption.
+- **Preparation off the message path.** Compilation and linking run on a blocking thread through the engine's component cache (the response reports `compile_cache` as `compiled`, or `memory_hit` when the component is already cached; the runtime never enables the disk tier, so `disk_hit` does not occur), and typed instantiation happens before signalling. The runner installs the prepared values and runs guest validation/initialization before marking replacement adoption.
 - **Stateless replacement.** The replacement starts from a fresh Store and its own `init`; guest state in the old instance is discarded, and the old guest's `close` export is not called.
 - **Retry buffer flush.** Outstanding retry entries are sent to the DLQ
   with `DlqReason::HotSwapDrain` because the new plugin version may have
   incompatible semantics. No retries survive a successful swap; a failed
   swap keeps the old instance and its retries.
-- **Serialized mutation.** Hot-swap and reconfigure share one per-node guard. Concurrent requests cannot overwrite a pending watch value: one proceeds and the other receives a conflict.
+- **Serialized mutation.** Hot-swap and reconfigure share one per-node guard. Concurrent requests cannot overwrite a pending watch value: one proceeds and the other is rejected with a `swap-in-progress` error (a 500 status rather than 409, see [#236](https://github.com/PedroKlein/wafer/issues/236)).
 - **Runner-local reporting.** The response separates `replacement_adopted` from `first_post_replacement_local_outcome`. A local forward, filter drop, or no-route outcome is not sink convergence, sequence continuity, loss, or throughput evidence.
 - **Rollback boundary.** Initialization rollback exists for every eligible Wasm role. Process-time canary rollback is implemented only for Transform; Filter and Router do not make that claim. `/metrics` has no rollback-total series ([A20](../status/implementation-gaps.md)).
 
