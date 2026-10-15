@@ -118,10 +118,6 @@ struct Args {
     #[arg(long, value_name = "ADDR")]
     metrics_bind: Option<SocketAddr>,
 
-    /// Skip OCI registry cache for remote plugins
-    #[arg(long)]
-    no_cache: bool,
-
     /// Log output format
     #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
     log_format: LogFormat,

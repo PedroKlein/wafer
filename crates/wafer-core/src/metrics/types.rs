@@ -77,8 +77,7 @@ impl SinkMetrics {
 
 /// Hot-swap metrics (aggregated across all swaps).
 ///
-/// The runtime fills only `phase_histogram` and `recovery_duration`, which
-/// `GET /metrics` renders. The scalar counters are written only by
+/// The runtime fills only `phase_histogram`, which `GET /metrics` renders. The scalar counters are written only by
 /// `MetricsRegistry`, which the runtime does not use; the `drain_*`, `flip_*` and `messages_drained_total` fields describe
 /// the retired drain-and-flip swap and stay at zero.
 #[derive(Debug)]
@@ -100,12 +99,6 @@ pub struct HotSwapMetrics {
     /// touched inside record/emit paths, not on the message hot path.
     pub phase_histogram:
         std::sync::RwLock<std::collections::HashMap<(String, String), PhaseHistogram>>,
-    /// Per-node recovery-duration histogram in
-    /// nanoseconds, populated on every Recovering → Running transition.
-    /// Rendered as `wafer_node_recovery_duration_ms` at scrape time
-    /// (buckets in ms; nanosecond samples are divided by 1_000_000 for
-    /// display, source of truth remains ns).
-    pub recovery_duration: std::sync::RwLock<std::collections::HashMap<String, PhaseHistogram>>,
 }
 
 /// Fixed-bucket histogram tuned for hot-swap phase durations.
@@ -179,7 +172,6 @@ impl Default for HotSwapMetrics {
             retire_time_ns: AtomicU64::new(0),
             messages_drained_total: AtomicU64::new(0),
             phase_histogram: std::sync::RwLock::new(std::collections::HashMap::new()),
-            recovery_duration: std::sync::RwLock::new(std::collections::HashMap::new()),
         }
     }
 }

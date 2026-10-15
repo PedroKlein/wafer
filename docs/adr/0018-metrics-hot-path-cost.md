@@ -55,7 +55,7 @@ configuration: the node id, a fixed set of six trap kinds, five guest error
 categories, and hot-swap phase names. There is no separate registry to keep
 in sync and no per-message cost for exposition.
 
-The `prometheus-client` `MetricsRegistry`, its snapshot builder, and the
+The `MetricsRegistry`, its snapshot builder, and the
 `counters` types in `crates/wafer-core/src/metrics/` are not wired into the
 runtime; nothing the binary runs records into them.
 

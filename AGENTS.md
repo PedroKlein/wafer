@@ -52,7 +52,6 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 - **petgraph** — DAG topology management (toposort + cycle detection)
 - **tokio** — Async runtime (`mpsc`, `watch`, `select!`)
 - **axum** — HTTP control plane server
-- **prometheus-client** — Declared under the `http-api` feature but unused; `/metrics` text is written directly from per-node counters
 
 ### Workspace Crates
 

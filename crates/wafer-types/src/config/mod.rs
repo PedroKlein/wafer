@@ -140,9 +140,8 @@ pub enum PluginSpecStructured {
     /// from `wafer_core::node::native::functions`.
     Native {
         /// Name of the native function: `passthrough`, `uppercase`,
-        /// `json-parse` (transform); `threshold` (filter, uses
-        /// `config.threshold`); `content-router` (router, uses
-        /// `config.threshold` and `config.high_port`/`low_port`).
+        /// `json-parse` (transform) or `threshold` (filter). Routers are
+        /// always Wasm.
         function: String,
     },
 }

@@ -57,6 +57,17 @@ pub enum WaferError {
 
     #[error("runtime error: {0}")]
     Runtime(String),
+
+    #[error("node-not-swappable: {0}")]
+    NodeNotSwappable(String),
+
+    #[error("swap-in-progress: {0}")]
+    SwapInProgress(String),
+
+    #[error(
+        "plugin-hash-mismatch: node '{node_id}' has hash {cached} but caller supplied {expected}"
+    )]
+    PluginHashMismatch { node_id: String, cached: String, expected: String },
 }
 
 /// Configuration-specific errors.

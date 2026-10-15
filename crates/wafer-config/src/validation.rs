@@ -26,6 +26,7 @@ pub fn validate(config: &Config) -> Result<(), Vec<ValidationError>> {
     check_filter_single_inbound(config, &mut errors);
     check_router_single_inbound(config, &mut errors);
     check_router_edges_have_port(config, &mut errors);
+    check_router_is_wasm(config, &mut errors);
     check_port_only_on_router_edges(config, &mut errors);
     check_duplicate_edges(config, &mut errors);
     check_processing_nodes_have_input_and_output(config, &mut errors);
@@ -345,6 +346,18 @@ fn check_outbound_http(config: &Config, errors: &mut Vec<ValidationError>) {
                     "nodes.{node_id}.capabilities.outbound_http[{index}]: {error}"
                 ))),
             }
+        }
+    }
+}
+
+fn check_router_is_wasm(config: &Config, errors: &mut Vec<ValidationError>) {
+    for (node_id, node) in &config.nodes {
+        if let NodeDef::Router(wasm) = node
+            && wasm.plugin.is_native()
+        {
+            errors.push(ValidationError::new(format!(
+                "nodes.{node_id}: routers must use a Wasm plugin; native routers are not supported"
+            )));
         }
     }
 }
@@ -861,6 +874,27 @@ outbound_http = [{ scheme = "https", host = "*.example.com" }]
 
         let errors = validate(&config).expect_err("duplicate normalized destination must fail");
         assert!(errors.iter().any(|error| error.message.contains("duplicate normalized")));
+    }
+
+    #[test]
+    fn native_router_is_rejected() {
+        let config = simple_config(
+            vec![(
+                "router",
+                NodeDef::Router(WasmNodeDef {
+                    plugin: PluginSpec::Structured(PluginSpecStructured::Native {
+                        function: "content-router".to_string(),
+                    }),
+                    ..Default::default()
+                }),
+            )],
+            vec![],
+        );
+
+        let errors = validate(&config).expect_err("native router must fail validation");
+        assert!(
+            errors.iter().any(|error| error.message.contains("routers must use a Wasm plugin"))
+        );
     }
 
     #[test]

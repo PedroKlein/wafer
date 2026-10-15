@@ -165,11 +165,13 @@ hot-swap) live in `non-functional.md`.
 - **FR-SWAP-2 · Hot-swap only on Wasm nodes.**
   *Statement:* `POST /api/v1/nodes/{id}/hot-swap` shall reject
   requests targeting native Source / Sink nodes with 404 (id not in
-  the Wasm-node set). Known issue: the request is rejected, but with
-  500 (see #236).
-  *Verify:* `replacement_eligibility_uses_loaded_wasm_roles` in
-  `crates/wafer-core/src/orchestrator/pipeline.rs` checks the
-  rejection; no test checks the status code.
+  the Wasm-node set).
+  *Verify:* `source_replacement_is_not_found` and
+  `unknown_node_replacement_is_not_found` in
+  `crates/wafer-core/src/api/handlers.rs` check the status code;
+  `replacement_eligibility_uses_loaded_wasm_roles` in
+  `crates/wafer-core/src/orchestrator/pipeline.rs` checks which nodes
+  are eligible.
 
 - **FR-SWAP-3 · Report local replacement progress.**
   *Statement:* A successful replacement response shall report `replacement_adopted` and `first_post_replacement_local_outcome` separately from preparation timing. These fields are runner-local and shall not be described as sink convergence or sequence evidence.

@@ -201,7 +201,7 @@ async fn hotswap_process_time_rollback() {
                 "rollback reason should mention the trap origin, got: {reason}"
             );
         }
-        other => panic!("B1: expected RolledBack outcome, got {other:?}"),
+        other => panic!("expected RolledBack outcome, got {other:?}"),
     }
 
     let rollbacks = handle.node_metrics("transform").map_or(0, |m| m.rollbacks());

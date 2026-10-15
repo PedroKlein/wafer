@@ -49,7 +49,8 @@ The handler in `crates/wafer-core/src/api/handlers.rs` emits:
 | `wafer_node_dropped_on_recovery_total` | `node` | Messages discarded while a trapped (or `unrecoverable`) instance was rebuilt. |
 | `wafer_node_dropped_on_teardown_total` | `node` | Messages whose error-policy action was `teardown`; the node stopped after it. |
 | `hot_swap_phase_ns` histogram family | `phase`, `node_id` | Compile, instantiate, signal, replacement adoption, first runner-local outcome, and Transform rollback timing. |
-| `wafer_node_recovery_duration_ms` summary/buckets | `node_id` | Error-to-running recovery duration when samples exist. |
+| `wafer_node_recovery_duration_ms` summary | `node_id` | Error-to-running recovery time (`_sum`, `_count`) once a node has recovered. |
+| `wafer_node_recovery_duration_max_ms` gauge | `node_id` | Longest recovery so far. |
 
 The hot-swap phases are runner-local. They do not prove sink convergence,
 sequence continuity, loss, or throughput; evaluation artifacts own those

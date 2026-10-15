@@ -143,12 +143,10 @@ Other errors are plain-text bodies:
 
 - 400: replacement file cannot be read, or the node's capability grant
   cannot be rebuilt;
-- 409: replacement initialization failed;
-- 500: preparation failed, the runner exited before reporting adoption, or
-  the per-node guard refused the request because the node is unknown, not
-  replacement-eligible, or already being mutated. These guard refusals are
-  meant to be 404 and 409
-  ([#236](https://github.com/PedroKlein/wafer/issues/236));
+- 404: the node does not exist or is not a Wasm node;
+- 409: replacement initialization failed, or another hot-swap or reconfigure
+  of the same node is still in progress;
+- 500: preparation failed, or the runner exited before reporting adoption;
 - 504: the runner did not take the replacement within five seconds. The
   request is withdrawn before the response is sent, so it never applies later
   and the node keeps its current plugin.
@@ -180,8 +178,7 @@ through the hot-swap preparation path, so `compile_ns`, `instantiate_ns`, and
 only `timeline.rollback_ns`.
 
 A non-empty `expected_plugin_hash` is compared with the SHA-256 (hex) of the
-plugin currently loaded on the node and a mismatch is rejected (HTTP 500
-today, meant to be 409, like the guard errors above). The
+plugin currently loaded on the node and a mismatch is rejected with HTTP 409. The
 launcher records that hash for every Wasm node it loads, and each successful
 hot-swap replaces it, so the guard applies from process start.
 
