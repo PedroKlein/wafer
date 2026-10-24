@@ -98,7 +98,7 @@ The root manifest depends on `wafer-core` with `default-features = false`, so ea
 
 | Feature | Declared in | Effect |
 |---|---|---|
-| `http-api` | `wafer-core`; on by default in `wafer-runtime` | Compiles the `api` module and pulls in `axum`, `tower-http`, `prometheus-client`, and `sysinfo` |
+| `http-api` | `wafer-core`; on by default in `wafer-runtime` | Compiles the `api` module and pulls in `axum`, `tower-http`, and `sysinfo` |
 | `test-support` | `wafer-core` | Compiles the `testing` module for other crates; enabled through dev-dependencies |
 | `ort-download` | `wafer-core` and `wafer-runtime`; on by default in both | Downloads the pinned ONNX Runtime at build time; `ORT_LIB_LOCATION` points the build at a local copy instead |
 | `cuda` | `wafer-core` and `wafer-runtime` | Builds `wasmtime-wasi-nn` with CUDA support |

@@ -148,8 +148,7 @@ impl Drop for SwapGuard {
 
 impl PipelineHandle {
     /// Attempt to acquire the swap slot for `node_id`. Returns `Ok(guard)`
-    /// on success. Returns `Err(WaferError::Runtime("swap-in-progress"))`
-    /// when another swap request is already in flight for the same node.
+    /// on success.
     ///
     /// The guard MUST be held for the lifetime of the swap (from
     /// preparation through to completion or timeout). Dropping the guard
@@ -157,17 +156,17 @@ impl PipelineHandle {
     ///
     /// # Errors
     ///
-    /// - `WaferError::Runtime("node-not-swappable")` when the node id does
-    ///   not correspond to a Wasm node (Source/Sink cannot swap).
-    /// - `WaferError::Runtime("swap-in-progress")` when a concurrent swap
-    ///   is already in flight for this node.
+    /// - `WaferError::NodeNotSwappable` when the node id does not name a
+    ///   Wasm node (unknown ids, sources and sinks).
+    /// - `WaferError::SwapInProgress` when a concurrent swap is already in
+    ///   flight for this node.
     pub fn try_begin_swap(&self, node_id: &str) -> Result<SwapGuard> {
         let flag = self
             .swap_in_progress
             .get(node_id)
-            .ok_or_else(|| WaferError::Runtime(format!("node-not-swappable: {node_id}")))?;
+            .ok_or_else(|| WaferError::NodeNotSwappable(node_id.to_owned()))?;
         flag.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .map_err(|_was_true| WaferError::Runtime(format!("swap-in-progress: {node_id}")))?;
+            .map_err(|_was_true| WaferError::SwapInProgress(node_id.to_owned()))?;
         Ok(SwapGuard { flag: Arc::clone(flag) })
     }
 
@@ -183,22 +182,6 @@ impl PipelineHandle {
             return;
         }
         if let Ok(mut guard) = self.hotswap_metrics.phase_histogram.write() {
-            let h = guard.entry(key).or_insert_with(crate::metrics::types::PhaseHistogram::new);
-            h.record(ns);
-        }
-    }
-
-    /// Record a single Recovering → Running duration
-    /// (nanoseconds) on the shared per-node recovery histogram.
-    pub fn record_recovery_duration(&self, node_id: &str, ns: u64) {
-        let key = node_id.to_owned();
-        if let Ok(guard) = self.hotswap_metrics.recovery_duration.read()
-            && let Some(h) = guard.get(&key)
-        {
-            h.record(ns);
-            return;
-        }
-        if let Ok(mut guard) = self.hotswap_metrics.recovery_duration.write() {
             let h = guard.entry(key).or_insert_with(crate::metrics::types::PhaseHistogram::new);
             h.record(ns);
         }
@@ -244,10 +227,7 @@ impl PipelineHandle {
     ///   every Wasm plugin it loads, so this only applies to nodes without
     ///   a Wasm plugin.
     /// - `Ok(())` when the expected hash exactly matches the cached one.
-    /// - `Err(WaferError::Runtime("plugin-hash-mismatch…"))` otherwise.
-    ///
-    /// The API handler maps the `"plugin-hash-mismatch"` prefix to HTTP
-    /// 409 CONFLICT.
+    /// - `Err(WaferError::PluginHashMismatch)` otherwise.
     ///
     /// # Errors
     ///
@@ -259,9 +239,11 @@ impl PipelineHandle {
             .map_err(|e| WaferError::Runtime(format!("plugin_hashes lock poisoned: {e}")))?;
         match guard.get(node_id) {
             Some(cached) if cached.eq_ignore_ascii_case(expected_hex) => Ok(()),
-            Some(cached) => Err(WaferError::Runtime(format!(
-                "plugin-hash-mismatch: node '{node_id}' has hash {cached} but caller supplied {expected_hex}"
-            ))),
+            Some(cached) => Err(WaferError::PluginHashMismatch {
+                node_id: node_id.to_owned(),
+                cached: cached.clone(),
+                expected: expected_hex.to_owned(),
+            }),
             None => Ok(()),
         }
     }
@@ -278,7 +260,7 @@ impl PipelineHandle {
     /// swap guards and replacement set for `swappable_ids`; everything else
     /// is defaulted.
     #[cfg(test)]
-    pub(crate) fn for_p0_10_test(swappable_ids: &[&str]) -> Self {
+    pub(crate) fn for_test(swappable_ids: &[&str]) -> Self {
         let swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>> = swappable_ids
             .iter()
             .map(|id| ((*id).into(), Arc::new(AtomicBool::new(false))))
@@ -307,7 +289,8 @@ impl PipelineHandle {
         node_id: &str,
         sender: watch::Sender<Option<SwapPayload>>,
     ) -> Result<Self> {
-        let mut handle = Self::for_p0_10_test(&[node_id]);
+        let mut handle = Self::for_test(&[node_id]);
+        handle.metrics.insert(node_id.into(), Arc::new(NodeMetrics::default()));
         handle.engine = Arc::new(WaferEngine::from_engine_config(&config.engine)?);
         handle.config = config;
         handle.watch_senders.insert(node_id.into(), sender);
@@ -321,7 +304,7 @@ impl PipelineHandle {
     /// Returns error if the node doesn't exist or doesn't support hot-swap.
     pub fn send_swap(&self, node_id: &str, payload: SwapPayload) -> Result<()> {
         if !self.replacement_eligible.contains(node_id) {
-            return Err(WaferError::Runtime(format!("node-not-swappable: {node_id}")));
+            return Err(WaferError::NodeNotSwappable(node_id.to_owned()));
         }
         let sender = self.watch_senders.get(node_id).ok_or_else(|| {
             WaferError::Runtime(format!(
@@ -1784,7 +1767,7 @@ mod tests {
     /// serialised requests succeed one after another.
     #[test]
     fn swap_guard_prevents_overlapping_swap() {
-        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+        let handle = PipelineHandle::for_test(&["transform"]);
 
         let first = handle.try_begin_swap("transform").expect("first must acquire");
         let err =
@@ -1803,7 +1786,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replacement_guard_serializes_swap_and_reconfigure() {
-        let handle = Arc::new(PipelineHandle::for_p0_10_test(&["transform"]));
+        let handle = Arc::new(PipelineHandle::for_test(&["transform"]));
         let start = Arc::new(Barrier::new(3));
         let release = Arc::new(Barrier::new(3));
         let (result_tx, mut result_rx) = mpsc::channel(2);
@@ -1854,7 +1837,7 @@ mod tests {
     /// instead of 409.
     #[test]
     fn swap_guard_reports_unknown_node() {
-        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+        let handle = PipelineHandle::for_test(&["transform"]);
         let err = handle.try_begin_swap("does-not-exist").expect_err("unknown node id must fail");
         assert!(
             err.to_string().contains("node-not-swappable"),
@@ -1870,7 +1853,7 @@ mod tests {
         reason = "RwLockReadGuard held for assertions across the for loop — intentional"
     )]
     fn phase_histogram_records_local_replacement_phases() {
-        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+        let handle = PipelineHandle::for_test(&["transform"]);
 
         for (phase, ns) in [
             ("compile", 50_000_000_u64),
@@ -1917,7 +1900,7 @@ mod tests {
     /// 409 CONFLICT. A matching hash yields `Ok(())`.
     #[test]
     fn plugin_hash_guard_rejects_mismatch() {
-        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+        let handle = PipelineHandle::for_test(&["transform"]);
 
         // No hash cached yet — pass-through so the initial-launcher path
         // stays backward compatible.

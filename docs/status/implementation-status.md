@@ -134,7 +134,7 @@ node's dequeued messages equal the sum of their fates.
 `GET /metrics` is rendered in `crates/wafer-core/src/api/handlers.rs` from
 these per-node counters (`wafer_node_*_total`, traps by kind, guest errors by
 category), the `hot_swap_phase_ns` histogram, and the
-`wafer_node_recovery_duration_ms` summary. The `MetricsRegistry` and snapshot
+`wafer_node_recovery_duration_ms` summary with its `_max_ms` gauge. The `MetricsRegistry` and snapshot
 builder in `wafer-core`'s `metrics` module are not wired into the runtime, and
 their families (for example `wafer_queue_depth`) are not served.
 

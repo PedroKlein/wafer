@@ -67,7 +67,7 @@ impl From<SwapError> for WaferError {
 /// See docs/rfcs/RFC-008-evaluation-harness.md — D7A.
 #[derive(Debug, Clone)]
 pub struct SwapTimeline {
-    /// When the swap request was received (API handler or file-watch trigger).
+    /// When the API handler received the swap request.
     pub request_time: std::time::Instant,
     /// When Wasm compilation completed (from `engine.compile_cached()`).
     pub compile_done: Option<std::time::Instant>,

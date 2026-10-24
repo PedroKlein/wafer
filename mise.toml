@@ -205,10 +205,6 @@ run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/da
 description = "Run sample pipeline with remote plugins"
 run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/dag-remote.toml'
 
-[tasks.run-remote-nocache]
-description = "Run sample pipeline with remote plugins, bypassing cache"
-run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/dag-remote.toml --no-cache'
-
 # =============================================================================
 # Release builds per target (aarch64-linux for Pi / Jetson, native x86_64)
 # =============================================================================

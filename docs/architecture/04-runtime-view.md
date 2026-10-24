@@ -128,7 +128,7 @@ sequenceDiagram
   with `DlqReason::HotSwapDrain` because the new plugin version may have
   incompatible semantics. No retries survive a successful swap; a failed
   swap keeps the old instance and its retries.
-- **Serialized mutation.** Hot-swap and reconfigure share one per-node guard. Concurrent requests cannot overwrite a pending watch value: one proceeds and the other is rejected with a `swap-in-progress` error (a 500 status rather than 409, see [#236](https://github.com/PedroKlein/wafer/issues/236)).
+- **Serialized mutation.** Hot-swap and reconfigure share one per-node guard. Concurrent requests cannot overwrite a pending watch value: one proceeds and the other is rejected with HTTP 409.
 - **Runner-local reporting.** The response separates `replacement_adopted` from `first_post_replacement_local_outcome`. A local forward, filter drop, or no-route outcome is not sink convergence, sequence continuity, loss, or throughput evidence.
 - **Rollback boundary.** Initialization rollback exists for every eligible Wasm role. Process-time canary rollback is implemented only for Transform; Filter and Router do not make that claim. `/metrics` has no rollback-total series ([A20](../status/implementation-gaps.md)).
 

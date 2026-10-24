@@ -29,7 +29,7 @@ const TOTAL_MESSAGES: u64 = 10_000;
 #[expect(
     clippy::panic_in_result_fn,
     clippy::too_many_lines,
-    reason = "integration test uses assert_eq! for AC3 verification; failing an assertion should terminate the test even though it returns Result"
+    reason = "integration test uses assert_eq!; failing an assertion should terminate the test even though it returns Result"
 )]
 async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyhow::Result<()> {
     let _init = tracing_subscriber::fmt()

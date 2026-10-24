@@ -144,6 +144,7 @@ impl Sink for StdoutSink {
                 })?;
                 writer.write_all(&envelope.payload)?;
                 writer.write_all(b"\n")?;
+                writer.flush()?;
             }
             Ok(())
         })

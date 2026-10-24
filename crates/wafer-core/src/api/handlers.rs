@@ -114,16 +114,16 @@ pub async fn get_node(
     Ok(Json(NodeInfoResponse { id, state, processed, failed, replacement_eligible: swappable }))
 }
 
-fn replacement_guard_error(error: &crate::error::WaferError) -> (StatusCode, String) {
-    let message = error.to_string();
-    let status = if message.starts_with("swap-in-progress") {
-        StatusCode::CONFLICT
-    } else if message.starts_with("node-not-swappable") {
-        StatusCode::NOT_FOUND
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
+fn replacement_error(error: &crate::error::WaferError) -> (StatusCode, String) {
+    use crate::error::WaferError;
+    let status = match error {
+        WaferError::NodeNotSwappable(_) => StatusCode::NOT_FOUND,
+        WaferError::SwapInProgress(_) | WaferError::PluginHashMismatch { .. } => {
+            StatusCode::CONFLICT
+        }
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    (status, message)
+    (status, error.to_string())
 }
 
 /// POST /api/v1/nodes/:id/hot-swap — trigger hot-swap with new Wasm binary
@@ -155,9 +155,6 @@ pub async fn hot_swap(
     let engine = orch.engine();
     let engine_config = orch.config();
 
-    let _replacement_guard =
-        orch.try_begin_swap(&id).map_err(|error| replacement_guard_error(&error))?;
-
     let (kind, node_kind, wasm, memory_limit) = match engine_config.nodes.get(&id) {
         Some(NodeDef::Transform(wasm)) => {
             (SwapKind::Transform, NodeKind::Transform, wasm, engine_config.engine.memory.transform)
@@ -173,6 +170,8 @@ pub async fn hot_swap(
         }
         None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
     };
+
+    let _replacement_guard = orch.try_begin_swap(&id).map_err(|error| replacement_error(&error))?;
     let capabilities = capabilities_from_config(&wasm.capabilities)
         .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
     let memory_limit = wasm.memory_limit.unwrap_or(memory_limit);
@@ -405,9 +404,6 @@ pub async fn reconfigure(
     use crate::config::NodeDef;
     use crate::runner::{HotSwapProgress, SwapPayload};
 
-    let _replacement_guard =
-        orch.try_begin_swap(&id).map_err(|error| replacement_guard_error(&error))?;
-
     match orch.config().nodes.get(&id) {
         Some(NodeDef::Transform(_) | NodeDef::Filter(_) | NodeDef::Router(_)) => {}
         Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
@@ -419,16 +415,10 @@ pub async fn reconfigure(
         None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
     }
 
-    if let Some(expected) = body.expected_plugin_hash.as_deref().filter(|s| !s.is_empty())
-        && let Err(e) = orch.verify_plugin_hash(&id, expected)
-    {
-        let msg = e.to_string();
-        let status = if msg.starts_with("plugin-hash-mismatch") {
-            StatusCode::CONFLICT
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        return Err((status, msg));
+    let _replacement_guard = orch.try_begin_swap(&id).map_err(|error| replacement_error(&error))?;
+
+    if let Some(expected) = body.expected_plugin_hash.as_deref().filter(|s| !s.is_empty()) {
+        orch.verify_plugin_hash(&id, expected).map_err(|error| replacement_error(&error))?;
     }
 
     let new_config_json = serde_json::to_string(&body.config)
@@ -599,65 +589,37 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
         }
     }
 
-    output.push_str(
-        "# HELP wafer_node_recovery_duration_ms Node Error → Recovering → Running duration (P0.11).\n",
-    );
-    output.push_str("# TYPE wafer_node_recovery_duration_ms summary\n");
-    for node_id in orch.config().nodes.keys() {
-        if let Some(m) = orch.node_metrics(node_id) {
-            let count = m.recovery_count();
-            if count > 0 {
-                let sum_ms = m.recovery_ns_total() / 1_000_000;
-                let max_ms = m.recovery_max_ns() / 1_000_000;
-                writeln!(
-                    output,
-                    "wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {count}"
-                )
-                .expect("String write is infallible");
-                writeln!(
-                    output,
-                    "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}"
-                )
-                .expect("String write is infallible");
-                writeln!(
-                    output,
-                    "wafer_node_recovery_duration_ms{{node_id=\"{node_id}\",quantile=\"max\"}} {max_ms}"
-                )
-                .expect("String write is infallible");
-            }
+    let recoveries: Vec<_> = orch
+        .config()
+        .nodes
+        .keys()
+        .filter_map(|node_id| orch.node_metrics(node_id).map(|m| (node_id, m)))
+        .filter(|(_, m)| m.recovery_count() > 0)
+        .collect();
+    if !recoveries.is_empty() {
+        output.push_str(
+            "# HELP wafer_node_recovery_duration_ms Node Error → Recovering → Running duration.\n",
+        );
+        output.push_str("# TYPE wafer_node_recovery_duration_ms summary\n");
+        for (node_id, m) in &recoveries {
+            let sum_ms = m.recovery_ns_total() / 1_000_000;
+            writeln!(
+                output,
+                "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}\n\
+                 wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {}",
+                m.recovery_count()
+            )
+            .expect("String write is infallible");
         }
-    }
-    if let Ok(guard) = hotswap.recovery_duration.read()
-        && !guard.is_empty()
-    {
-        output.push_str("# TYPE wafer_node_recovery_duration_ms_bucket histogram\n");
-        for (node_id, hist) in guard.iter() {
-            for (i, upper_ns) in
-                crate::metrics::types::PhaseHistogram::BUCKETS_NS.iter().enumerate()
-            {
-                let count = hist.buckets[i].load(std::sync::atomic::Ordering::Relaxed);
-                let upper_ms = upper_ns / 1_000_000;
-                writeln!(
-                    output,
-                    "wafer_node_recovery_duration_ms_bucket{{node_id=\"{node_id}\",le=\"{upper_ms}\"}} {count}"
-                )
-                .expect("String write is infallible");
-            }
-            let total = hist.count.load(std::sync::atomic::Ordering::Relaxed);
-            let sum_ms = hist.sum_ns.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000;
+        output.push_str(
+            "# HELP wafer_node_recovery_duration_max_ms Longest Error → Running recovery.\n",
+        );
+        output.push_str("# TYPE wafer_node_recovery_duration_max_ms gauge\n");
+        for (node_id, m) in &recoveries {
             writeln!(
                 output,
-                "wafer_node_recovery_duration_ms_bucket{{node_id=\"{node_id}\",le=\"+Inf\"}} {total}"
-            )
-            .expect("String write is infallible");
-            writeln!(
-                output,
-                "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}"
-            )
-            .expect("String write is infallible");
-            writeln!(
-                output,
-                "wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {total}"
+                "wafer_node_recovery_duration_max_ms{{node_id=\"{node_id}\"}} {}",
+                m.recovery_max_ns() / 1_000_000
             )
             .expect("String write is infallible");
         }
@@ -921,16 +883,124 @@ allow_inference = {allow_inference}
         assert!(swaps.borrow().is_none(), "denied swap reached the runner");
     }
 
+    fn reconfigure_request(expected_plugin_hash: Option<&str>) -> Json<ReconfigureRequest> {
+        Json(ReconfigureRequest {
+            config: serde_json::json!({}),
+            expected_plugin_hash: expected_plugin_hash.map(str::to_owned),
+        })
+    }
+
+    #[tokio::test]
+    async fn unknown_node_replacement_is_not_found() {
+        let (handle, _swaps) = replacement_handle(true);
+        let request = HotSwapRequest { wasm_path: MNIST_COMPONENT.to_string() };
+
+        let swap = hot_swap(State(Arc::clone(&handle)), Path("ghost".to_string()), Json(request))
+            .await
+            .map(IntoResponse::into_response)
+            .expect_err("unknown node must be rejected");
+        let reconfig =
+            reconfigure(State(handle), Path("ghost".to_string()), reconfigure_request(None))
+                .await
+                .map(IntoResponse::into_response)
+                .expect_err("unknown node must be rejected");
+
+        assert_eq!(swap.0, StatusCode::NOT_FOUND, "{}", swap.1);
+        assert_eq!(reconfig.0, StatusCode::NOT_FOUND, "{}", reconfig.1);
+    }
+
+    #[tokio::test]
+    async fn source_replacement_is_not_found() {
+        let config: crate::config::Config =
+            toml::from_str("[nodes.source]\ntype = \"source\"\nkind = \"stdin\"\n")
+                .expect("source config");
+        let (sender, swaps) = watch::channel(None);
+        let handle = Arc::new(
+            PipelineHandle::for_replacement_test(config, "mnist", sender).expect("test handle"),
+        );
+        let request = HotSwapRequest { wasm_path: MNIST_COMPONENT.to_string() };
+
+        let error = hot_swap(State(handle), Path("source".to_string()), Json(request))
+            .await
+            .map(IntoResponse::into_response)
+            .expect_err("a source cannot be replaced");
+
+        assert_eq!(error.0, StatusCode::NOT_FOUND, "{}", error.1);
+        assert!(swaps.borrow().is_none(), "rejected request reached the runner");
+    }
+
+    #[tokio::test]
+    async fn concurrent_replacement_is_conflict() {
+        let (handle, swaps) = replacement_handle(true);
+        let _in_flight = handle.try_begin_swap("mnist").expect("first claim");
+        let request = HotSwapRequest { wasm_path: MNIST_COMPONENT.to_string() };
+
+        let swap = hot_swap(State(Arc::clone(&handle)), Path("mnist".to_string()), Json(request))
+            .await
+            .map(IntoResponse::into_response)
+            .expect_err("second swap must be rejected");
+        let reconfig =
+            reconfigure(State(handle), Path("mnist".to_string()), reconfigure_request(None))
+                .await
+                .map(IntoResponse::into_response)
+                .expect_err("reconfigure during a swap must be rejected");
+
+        assert_eq!(swap.0, StatusCode::CONFLICT, "{}", swap.1);
+        assert_eq!(reconfig.0, StatusCode::CONFLICT, "{}", reconfig.1);
+        assert!(swaps.borrow().is_none(), "rejected request reached the runner");
+    }
+
+    #[tokio::test]
+    async fn reconfigure_with_stale_plugin_hash_is_conflict() {
+        let (handle, swaps) = replacement_handle(true);
+        handle.record_plugin_hash("mnist", "a".repeat(64));
+
+        let error = reconfigure(
+            State(handle),
+            Path("mnist".to_string()),
+            reconfigure_request(Some("deadbeef")),
+        )
+        .await
+        .map(IntoResponse::into_response)
+        .expect_err("stale hash must be rejected");
+
+        assert_eq!(error.0, StatusCode::CONFLICT, "{}", error.1);
+        assert!(swaps.borrow().is_none(), "rejected request reached the runner");
+    }
+
+    #[tokio::test]
+    async fn metrics_declare_one_type_per_recovery_family() {
+        let (handle, _swaps) = replacement_handle(true);
+        handle.node_metrics("mnist").expect("node metrics").record_recovery(3_000_000);
+
+        let response = metrics(State(handle)).await.into_response();
+        let body =
+            axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("metrics body");
+        let text = std::str::from_utf8(&body).expect("metrics utf8");
+
+        let types: Vec<&str> =
+            text.lines().filter(|line| line.starts_with("# TYPE wafer_node_recovery")).collect();
+        assert_eq!(
+            types,
+            [
+                "# TYPE wafer_node_recovery_duration_ms summary",
+                "# TYPE wafer_node_recovery_duration_max_ms gauge",
+            ]
+        );
+        assert!(text.contains("wafer_node_recovery_duration_ms_count{node_id=\"mnist\"} 1"));
+        assert!(text.contains("wafer_node_recovery_duration_max_ms{node_id=\"mnist\"} 3"));
+    }
+
     #[tokio::test]
     async fn metrics_omit_deferred_rollback_counter() {
-        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+        let handle = PipelineHandle::for_test(&["transform"]);
         let response = metrics(State(Arc::new(handle))).await.into_response();
         let body =
             axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("metrics body");
         let text = std::str::from_utf8(&body).expect("metrics utf8");
         assert!(
             !text.contains("wafer_hot_swap_rollbacks_total"),
-            "A20 is deferred and must not be exposed through Prometheus"
+            "the rollback counter is not recorded and must not be exposed"
         );
     }
 }

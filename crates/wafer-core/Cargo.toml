@@ -10,7 +10,7 @@ rust-version.workspace = true
 
 [features]
 default = ["ort-download"]
-http-api = ["axum", "tower-http", "prometheus-client", "sysinfo"]
+http-api = ["axum", "tower-http", "sysinfo"]
 # Enable CUDA for GPU acceleration on NVIDIA devices (e.g., Jetson)
 # Requires CUDA toolkit installed on the target system
 cuda = ["wasmtime-wasi-nn/onnx-cuda"]
@@ -56,7 +56,6 @@ tracing = { workspace = true }
 # HTTP (feature-gated)
 axum = { workspace = true, optional = true }
 tower-http = { workspace = true, optional = true }
-prometheus-client = { workspace = true, optional = true }
 sysinfo = { workspace = true, optional = true }
 
 # Misc

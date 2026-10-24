@@ -52,7 +52,6 @@ order. A plugin that needs cross-branch order must impose it itself.
 - Unused types remain in `wafer-core`: `AnyNode`, the `Node` wrapper in
   `node/kind.rs`, and the `BoundedQueue` wrapper, which only the throughput
   benchmark uses.
-- The stdin source blocks a Tokio worker while it waits for a line (see #235).
 
 Current implementation state is in
 [implementation status](../status/implementation-status.md).
