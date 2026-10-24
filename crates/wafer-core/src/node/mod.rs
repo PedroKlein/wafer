@@ -3,15 +3,15 @@
 mod kind;
 mod metrics;
 pub mod native;
-mod router;
 mod sink;
 mod source;
 mod state;
 mod traits;
 pub mod wasm;
 
+pub use kind::NodeKind;
+pub use metrics::{NodeMetrics, QueueMetrics};
 pub use native::{NativeFilter, NativeRouter, NativeTransform, ProcessNode};
-pub use router::{RouterInstance, WasmRouter};
 pub use sink::{
     BatchStats, BenchSink, BenchSinkConfig, FileSink, HotSwapRecorder, HttpSink,
     HttpSinkBatchConfig, MqttSink, SequenceTracker, Sink, StdoutSink, SwapTransition,
@@ -21,10 +21,6 @@ pub use source::{
     BenchBurstSchedule, BenchSource, BenchSourceConfig, FileSource, HttpSource, MqttSource, Source,
     StdinSource,
 };
-// Re-export the runner-side TransformNode enum near the top.
-// (Full definition below in this module.)
-pub use kind::{Node, NodeKind};
-pub use metrics::{NodeMetrics, QueueMetrics};
 pub use state::NodeStateTracker;
 pub use traits::{
     ConfigParseError, Filter, FilterOutcome, Lifecycle, NodeConfig, ProcessError, ProcessResult,
@@ -36,172 +32,6 @@ pub use traits::{
 pub(crate) const MQTT_MAX_PACKET_BYTES: usize = 1024 * 1024;
 
 use crate::error::Result;
-use std::fmt;
-use std::sync::Arc;
-use wafer_types::NodeState;
-
-/// A boxed node of any role paired with its [`NodeStateTracker`].
-///
-/// The orchestrator does not use it: it spawns a typed runner task for
-/// each role instead.
-pub enum AnyNode {
-    Transform(Box<dyn Transform>, Arc<NodeStateTracker>),
-    Source(Box<dyn Source>, Arc<NodeStateTracker>),
-    Sink(Box<dyn Sink>, Arc<NodeStateTracker>),
-    Router(Box<dyn Router>, Arc<NodeStateTracker>),
-}
-
-impl fmt::Debug for AnyNode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Transform(t, tracker) => f
-                .debug_struct("AnyNode::Transform")
-                .field("id", &t.id())
-                .field("node_type", &t.node_type())
-                .field("state", &tracker.state())
-                .finish(),
-            Self::Source(s, tracker) => f
-                .debug_struct("AnyNode::Source")
-                .field("id", &s.id())
-                .field("node_type", &s.node_type())
-                .field("state", &tracker.state())
-                .finish(),
-            Self::Sink(s, tracker) => f
-                .debug_struct("AnyNode::Sink")
-                .field("id", &s.id())
-                .field("node_type", &s.node_type())
-                .field("state", &tracker.state())
-                .finish(),
-            Self::Router(r, tracker) => f
-                .debug_struct("AnyNode::Router")
-                .field("id", &r.id())
-                .field("node_type", &r.node_type())
-                .field("state", &tracker.state())
-                .finish(),
-        }
-    }
-}
-
-impl AnyNode {
-    #[must_use]
-    pub fn from_transform(t: impl Transform + 'static) -> Self {
-        Self::Transform(Box::new(t), Arc::new(NodeStateTracker::new()))
-    }
-
-    #[must_use]
-    pub fn from_transform_with_tracker(
-        t: impl Transform + 'static,
-        tracker: Arc<NodeStateTracker>,
-    ) -> Self {
-        Self::Transform(Box::new(t), tracker)
-    }
-
-    /// Wrap a source node in the `AnyNode` enum.
-    #[must_use]
-    pub fn from_source(s: impl Source + 'static) -> Self {
-        Self::Source(Box::new(s), Arc::new(NodeStateTracker::new()))
-    }
-
-    #[must_use]
-    pub fn from_sink(s: impl Sink + 'static) -> Self {
-        Self::Sink(Box::new(s), Arc::new(NodeStateTracker::new()))
-    }
-
-    #[must_use]
-    pub fn from_router(r: impl Router + 'static) -> Self {
-        Self::Router(Box::new(r), Arc::new(NodeStateTracker::new()))
-    }
-
-    #[must_use]
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Transform(t, _) => t.id(),
-            Self::Source(s, _) => s.id(),
-            Self::Sink(s, _) => s.id(),
-            Self::Router(r, _) => r.id(),
-        }
-    }
-
-    /// Get the current node state.
-    #[must_use]
-    pub fn state(&self) -> NodeState {
-        self.state_tracker().state()
-    }
-
-    #[must_use]
-    pub const fn state_tracker(&self) -> &Arc<NodeStateTracker> {
-        match self {
-            Self::Transform(_, tracker)
-            | Self::Source(_, tracker)
-            | Self::Sink(_, tracker)
-            | Self::Router(_, tracker) => tracker,
-        }
-    }
-
-    /// Get a clone of the state tracker Arc for sharing.
-    #[must_use]
-    pub fn state_tracker_clone(&self) -> Arc<NodeStateTracker> {
-        Arc::clone(self.state_tracker())
-    }
-
-    #[must_use]
-    pub const fn is_swappable(&self) -> bool {
-        matches!(self, Self::Transform(_, _) | Self::Router(_, _))
-    }
-
-    /// Validate the node's configuration.
-    pub fn validate(&self) -> Result<()> {
-        match self {
-            Self::Transform(t, _) => t.validate(),
-            Self::Source(s, _) => s.validate(),
-            Self::Sink(s, _) => s.validate(),
-            Self::Router(r, _) => r.validate(),
-        }
-    }
-
-    /// Initialize the node. Transitions state to `Running` on success, `Error` on failure.
-    pub async fn init(&mut self) -> Result<()> {
-        let result = match self {
-            Self::Transform(t, _) => t.init().await,
-            Self::Source(s, _) => s.init().await,
-            Self::Sink(s, _) => s.init().await,
-            Self::Router(r, _) => r.init().await,
-        };
-
-        match &result {
-            Ok(()) => {
-                self.state_tracker().transition_to_running();
-            }
-            Err(_) => {
-                self.state_tracker().transition_to_error();
-            }
-        }
-
-        result
-    }
-
-    /// Gracefully close the node and release resources.
-    pub async fn close(&mut self) -> Result<()> {
-        match self {
-            Self::Transform(t, _) => t.close().await,
-            Self::Source(s, _) => s.close().await,
-            Self::Sink(s, _) => s.close().await,
-            Self::Router(r, _) => r.close().await,
-        }
-    }
-}
-
-impl fmt::Display for AnyNode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Self::Source(s, _) => s.node_type(),
-            Self::Transform(t, _) => t.node_type(),
-            Self::Sink(s, _) => s.node_type(),
-            Self::Router(r, _) => r.node_type(),
-        };
-        write!(f, "{name}")
-    }
-}
 
 // =============================================================================
 // TransformNode — unified runner-side type covering both Wasm and native.

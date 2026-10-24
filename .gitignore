@@ -4,9 +4,6 @@
 /target/
 /build/
 /dist/
-examples/rust/*/target/
-examples/rust/*/pkg/
-examples/rust/*/Cargo.lock
 target/docker-aarch64-linux/
 
 # WebAssembly artifacts (built plugins)
@@ -25,15 +22,6 @@ target/docker-aarch64-linux/
 coverage.*
 *.coverprofile
 profile.cov
-
-# Node.js (future JS/TS examples)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.npm
-*.tgz
-.yarn-integrity
 
 # Python
 __pycache__/
@@ -80,6 +68,7 @@ Thumbs.db
 # Logs / temporary files
 *.log
 logs/
+dlq.jsonl
 *.tmp
 *.temp
 .tmp/
@@ -107,13 +96,6 @@ debug
 *.key
 *.crt
 *.p12
-
-# MQTT broker runtime state
-mqtt/data/
-mqtt/log/
-
-# Local docker-compose overrides
-docker-compose.override.yml
 
 # Agent / plan scratch (any local agent runner state)
 /.pi

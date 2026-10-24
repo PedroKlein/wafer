@@ -42,4 +42,4 @@ The WIT interface (`pipeline:node/filter@0.1.0`) exposes `evaluate: func(input: 
 - [RFC-001](../rfcs/RFC-001-wit-contracts.md) — original WIT contracts defining the `filter` interface and `filter-node` world.
 - [RFC-002](../rfcs/RFC-002-host-runtime.md) — host runtime architecture, including the RuntimeEnvelope design (amended by RFC-003 §A3 to use `Arc<EnvelopeHeader>` + `Bytes`).
 - `wit/pipeline-node.wit` — the `filter` interface and `filter-node` world definition.
-- `crates/wafer-core/src/engine/bindings.rs` — `filter_node` bindgen module and `WasmBindings::Filter` variant.
+- `crates/wafer-core/src/engine/bindings.rs` — `filter_node` bindgen module.

@@ -43,6 +43,3 @@ pub mod api;
 
 pub use error::{RegistryError, Result, WaferError};
 pub use wafer_types::*;
-
-#[cfg(feature = "http-api")]
-pub use metrics::{MetricsHandle, MetricsRegistry};

@@ -212,8 +212,7 @@ For router fan-out, clone for N-1 ports and move the original to the last port â
 
 ## Implementation Notes
 
-- `NodeKind` in `crates/wafer-core/src/node/kind.rs` is a plain discriminator (5 kinds, no Joiner) used where the kind matters, for example `WaferEngine::fuel_budget`. The same file defines a `Node` struct (id, state tracker, metrics, kind) that nothing constructs; its doc comment still describes it as a replacement for `AnyNode`. Neither `Node` nor `AnyNode` is on the runtime path: each per-type runner loop takes a concrete node value: the `TransformNode` and `FilterNode` enums (`crates/wafer-core/src/node/mod.rs`), whose variants select the Wasm or native implementation, and `WasmRouterNode` for Wasm routers.
-- `WasmBindings` at `crates/wafer-core/src/engine/bindings.rs` implements Decision 6 with three variants (`Transform`, `Filter`, `Router`) â€” no Joiner variant.
+- `NodeKind` in `crates/wafer-core/src/node/kind.rs` is a plain discriminator (5 kinds, no Joiner) used where the kind matters, for example `WaferEngine::fuel_budget`. Each per-type runner loop takes a concrete node value: the `TransformNode` and `FilterNode` enums (`crates/wafer-core/src/node/mod.rs`), whose variants select the Wasm or native implementation, and `WasmRouterNode` for Wasm routers.
 - Four `bindgen!` modules (`transform_node`, `filter_node`, `router_node`, `inference_node`) exist in `crates/wafer-core/src/engine/bindings.rs` with `with:` type sharing as specified; the names in the Decision 6 sketch above (`*_world`) are the original proposal.
 - RuntimeEnvelope with `Arc<EnvelopeHeader>` + `Bytes` + `Lineage` is implemented as decided in Amendment A3.
 - Merge is realized as multi-producer `mpsc` wiring in the orchestrator builder (`crates/wafer-core/src/orchestrator/builder.rs`); multiple upstream nodes receive `Sender` clones to the downstream node's single receiver.

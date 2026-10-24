@@ -60,7 +60,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 | `wafer-core` | Library | Core runtime: DAG orchestrator, engine, node runners, queue wiring, hot-swap, error policy, metrics, HTTP API surface |
 | `wafer-runtime` | Binary | CLI runtime that loads TOML configs and runs pipelines; wires the API server into `wafer-core` |
 | `wafer-types` | Library | Shared types: config schema (`NodeDef`, `WasmNodeDef`, `EdgeDef`, `EngineConfig`, `ErrorPolicyConfig`), control messages, event types, metrics types |
-| `wafer-config` | Library | TOML loading, DAG construction, semantic validation on top of `wafer-types` |
+| `wafer-config` | Library | TOML loading and semantic validation on top of `wafer-types` |
 | `wafer-plugin` | Library | Guest-side SDK (macros, `thread_local!` state pattern, error helpers) that plugin crates depend on |
 | `wafer-loadgen` | Library + Binary | Load generator used by the evaluation harness (open-loop, HdrHistogram); the library exposes the publisher, subscriber, and recorder to tests |
 | `waferctl` | Binary | CLI tool for interacting with running pipelines (status, nodes, hot-swap, shutdown) |
@@ -183,12 +183,10 @@ See `docs/eval/cross-compile.md` for what the container build does and the glibc
 
 ```bash
 mise run //eval:notebooks                          # Open all 13 analysis notebooks in JupyterLab (browser)
-mise run //eval:notebooks-view 05-hotswap-timeline # Render one notebook to HTML + open in browser (read-only)
-mise run //eval:notebooks-execute                  # Re-execute all notebooks against current eval/results/ data
 mise run //eval:figures                            # Re-execute notebooks + list regenerated PDFs under eval/analysis/figures/
 ```
 
-Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) declares numpy, matplotlib, seaborn, pandas and Jupyter. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. Notebooks are committed without cell outputs: `mise run setup` registers the pinned `nbstripout` Git filter, `mise run //eval:notebooks-format` normalizes them, and `mise run //eval:notebooks-check` (also run by CI and `mise run test-eval`) fails on un-normalized notebooks. See `eval/analysis/notebooks/README.md` for the notebook-to-experiment mapping.
+Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) declares numpy, matplotlib, seaborn, pandas and Jupyter. Notebooks are committed without cell outputs: `mise run setup` registers the pinned `nbstripout` Git filter, `mise run //eval:notebooks-format` normalizes them, and `mise run //eval:notebooks-check` (also run by CI and `mise run test-eval`) fails on un-normalized notebooks. See `eval/analysis/notebooks/README.md` for the notebook-to-experiment mapping.
 
 ### Reproducing the Evaluation
 
@@ -207,7 +205,6 @@ mise run //eval:figures ID                           # Regenerate the figures an
 ```bash
 mise run run                                # Run default passthrough pipeline
 mise run run examples/dag-uppercase.toml    # Run a specific pipeline config
-mise run run-remote                         # Run with OCI-hosted plugins
 ```
 
 ### Testing

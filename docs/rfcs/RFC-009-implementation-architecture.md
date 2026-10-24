@@ -10,15 +10,12 @@
 >
 > - `RuntimeEnvelope`, `EnvelopeHeader`, and `Lineage` live in
 >   `crates/wafer-core/src/queue/envelope.rs`, not a top-level `envelope.rs`.
->   The `queue/` module was kept as their home. It also still holds the
->   `BoundedQueue` / `QueueSender` / `QueueReceiver` wrapper
->   (`queue/bounded.rs`), which only the throughput benchmark uses.
-> - `crates/wafer-core/src/dlq/mod.rs` still exists and defines `DlqReason`
->   and the DLQ envelope types.
+>   The `queue/` module was kept as their home.
+> - `crates/wafer-core/src/dlq/mod.rs` still exists and defines
+>   `SerializableEnvelope`, the JSON form of a dead-lettered message.
 > - `wafer-core` keeps small `config/` (re-exports `wafer_types::config` plus
->   runtime constants) and `dag/` (the `DagGraph` the builder uses) modules;
->   `wafer-config` has its own `dag.rs` for standalone validation. There is no
->   config `diff` module in `wafer-config`.
+>   runtime constants) and `dag/` (the `DagGraph` the builder uses) modules.
+>   There is no config `diff` module in `wafer-config`.
 > - `metrics` and `registry` are directories (`metrics/`, `registry/`), and
 >   `engine/bindings.rs` has four bindgen modules (`transform_node`,
 >   `filter_node`, `router_node`, `inference_node`).
@@ -153,11 +150,11 @@ When implementing a new piece: domain enums/config structs → `wafer-types`; pa
 The crate structure is implemented as specified; the module-level differences are listed in the banner at the top of this RFC.
 
 - `crates/wafer-types/` contains all config data structs and domain enums per D2.
-- `crates/wafer-config/` contains `loader.rs`, `validation.rs`, `dag.rs`, `error.rs` per D3.
+- `crates/wafer-config/` contains `loader.rs`, `validation.rs` and `error.rs`; cycle detection lives in `validation.rs`.
 - `crates/wafer-core/src/` has the D4 areas as `engine/`, `node/`, `runner/`, `orchestrator/`, `queue/` (including `envelope.rs`), `metrics/`, `registry/`, `dlq/`, `bench/`, `testing/`, and `api/`, plus the small `config/` and `dag/` modules.
 - `crates/wafer-plugin/` is the guest SDK crate (D5); it is a root workspace member, and plugins depend on it by path.
 - `plugins/` holds standalone plugin crates built for `wasm32-wasip2` by `plugins/build-plugins.sh`; the root workspace excludes them.
 - `eval/` contains configs, scripts, and a UV-managed Python analysis package per D9.
 - `crates/wafer-loadgen/` provides the external MQTT load generator per D9.
 - Per-type runner loops are separate files (`runner/transform.rs`, `runner/filter.rs`, `runner/router.rs`, `runner/source.rs`, `runner/sink.rs`) per D6.
-- Of the D12 deletion list, `queue/bounded.rs`, the `queue/` module, and `dlq/mod.rs` still exist (see the banner); the remaining files are gone, and `config/` and `dag/` were reduced rather than removed.
+- Of the D12 deletion list, the `queue/` module and `dlq/mod.rs` still exist (see the banner); the remaining files are gone, and `config/` and `dag/` were reduced rather than removed.

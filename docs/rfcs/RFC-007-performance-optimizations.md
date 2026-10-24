@@ -12,8 +12,7 @@
 > Hot-swap compile and link run on tokio's blocking pool. Fuel and epoch
 > metering have no boolean flags (see the Decision 6 note below), and the
 > default `slow` overflow path now sends through `Sender::reserve` (see the
-> Decision 7 note). The `BoundedQueue` wrapper of Decision 3 still exists but
-> only the throughput benchmark uses it. The epoch OS-thread
+> Decision 7 note). The epoch OS-thread
 > ticker and code-quality optimizations are live. `[engine.fuel]` and
 > `[engine.memory]` per-node-kind budgets are honored by the launcher.
 > `benches/throughput.rs` and `benches/hot_swap.rs` exercise the
@@ -37,7 +36,7 @@ When this RFC was written (July 2026), the RQ1 targets were <50µs per WIT bound
 
 ### Decision 1: AOT Compilation Cache — Implement Now
 
-Implement a blake3-keyed disk cache for pre-compiled `.cwasm` component artifacts. Cache key: `{blake3_hex(wasm_bytes)}-{os}-{arch}-wt{wasmtime_major_version}.cwasm`. Two-tier architecture: in-memory `HashMap<[u8; 32], Arc<Component>>` plus disk `{cache_dir}/components/{cache_key}.cwasm`. Load path: in-memory → disk (`unsafe { Component::deserialize() }`) → compile + save to both tiers. Stale files removed on deserialization failure (wasmtime version mismatch). Pattern validated by Flow-Like (244K/sec production, blake3+platform key) and Torvyn (SHA-256 variant).
+Implement a blake3-keyed disk cache for pre-compiled `.cwasm` component artifacts. Cache key: `{blake3_hex(wasm_bytes)}-{os}-{arch}.cwasm`. Two-tier architecture: in-memory `HashMap<[u8; 32], Arc<Component>>` plus disk `{cache_dir}/components/{cache_key}.cwasm`. Load path: in-memory → disk (`unsafe { Component::deserialize() }`) → compile + save to both tiers. Stale files removed on deserialization failure (wasmtime version mismatch). Pattern validated by Flow-Like (244K/sec production, blake3+platform key) and Torvyn (SHA-256 variant).
 
 ### Decision 2: Wasmtime Pooling Allocator — Defer to Future Work
 
@@ -122,7 +121,7 @@ Replace manual `set_processing(true)` / `set_processing(false)` with a Drop guar
 - **Decision C2 (Box<str>):** Applied to `EnvelopeHeader` fields and `node_id` in `WaferState`.
 - **Decision C3 (foldhash):** Applied to cold-path internal maps.
 - **Decision C4 (RAII guard):** Not implemented. `NodeState` has no `Processing` variant (Starting, Running, Error, Recovering), so there is no processing flag to guard.
-- **Decision 3 (BoundedQueue):** Edge wiring in `orchestrator/builder.rs` calls `mpsc::channel` directly. The wrapper types are still defined in `crates/wafer-core/src/queue/bounded.rs` and exported, and `benches/throughput.rs` still uses `BoundedQueue`; nothing on the runtime path does.
+- **Decision 3 (BoundedQueue):** Edge wiring in `orchestrator/builder.rs` calls `mpsc::channel` directly. The wrapper types were deleted.
 - **Decision 7 (`Sender::reserve`):** Reversed in code. `send_one` in `crates/wafer-core/src/runner/mod.rs` uses `sender.reserve().await` for the default `slow` overflow policy, so an enqueue is counted only after a permit is held and a closed destination is counted separately. The send still runs after the Wasm call returns and outside any `select!`, so the cancel-safety argument above is unchanged.
 - **Decision 10 (parallel compilation):** Not implemented. `launch_pipeline` loads and compiles Wasm nodes one after another.
 - **Decisions 2, 4, 5 (deferred/skipped):** Not implemented; documented as future work.

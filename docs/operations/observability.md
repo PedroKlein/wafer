@@ -19,6 +19,7 @@ only targets logs nothing else, so add a base level to raise some targets and
 keep the rest, as in the second example. A target matches by prefix, so
 `wafer` covers the runtime binary and every `wafer_*` crate. Pass
 `--log-format json` for JSON lines instead of the default pretty format.
+Logs go to stderr, so a `stdout` sink's output stays separate.
 
 The host re-emits guest calls to `wafer:pipeline/logging.log` as `tracing`
 events with target `wafer_core::node::wasm` and a `node` field naming the

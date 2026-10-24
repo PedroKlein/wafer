@@ -7,9 +7,7 @@ pub mod config;
 mod control;
 mod events;
 pub mod latency;
-mod metrics;
 pub mod sequence;
 
 pub use control::*;
 pub use events::*;
-pub use metrics::*;

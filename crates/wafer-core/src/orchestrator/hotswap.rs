@@ -24,38 +24,6 @@ use crate::runner::{HotSwapProgress, SwapPayload};
 // ready to send via watch channel.
 
 // =============================================================================
-// SwapError: exported, but the runtime's own swap path does not raise it
-// =============================================================================
-
-/// Error types for hot-swap operations.
-#[derive(Debug)]
-pub enum SwapError {
-    NodeNotFound(String),
-    NotSwappable(String),
-    WatchSendFailed(String),
-}
-
-impl std::fmt::Display for SwapError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NodeNotFound(id) => write!(f, "node '{id}' not found"),
-            Self::NotSwappable(id) => write!(f, "node '{id}' does not support hot-swap"),
-            Self::WatchSendFailed(id) => {
-                write!(f, "watch channel send failed for node '{id}' (task dead?)")
-            }
-        }
-    }
-}
-
-impl std::error::Error for SwapError {}
-
-impl From<SwapError> for WaferError {
-    fn from(e: SwapError) -> Self {
-        Self::Runtime(e.to_string())
-    }
-}
-
-// =============================================================================
 // SwapTimeline — phase decomposition for E-Swap-6
 // =============================================================================
 
@@ -435,27 +403,6 @@ pub async fn prepare_router_swap_timed(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_swap_error_display() {
-        let err = SwapError::NodeNotFound("foo".to_string());
-        assert_eq!(err.to_string(), "node 'foo' not found");
-
-        let err = SwapError::NotSwappable("bar".to_string());
-        assert_eq!(err.to_string(), "node 'bar' does not support hot-swap");
-
-        let err = SwapError::WatchSendFailed("baz".to_string());
-        assert_eq!(err.to_string(), "watch channel send failed for node 'baz' (task dead?)");
-    }
-
-    #[test]
-    fn test_swap_error_into_wafer_error() {
-        let err: WaferError = SwapError::NodeNotFound("test".to_string()).into();
-        match err {
-            WaferError::Runtime(msg) => assert!(msg.contains("not found")),
-            _ => panic!("expected Runtime error"),
-        }
-    }
 
     #[test]
     fn swap_timeline_phase_durations() {

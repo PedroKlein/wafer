@@ -82,24 +82,6 @@ pub(crate) mod router_node {
     });
 }
 
-/// Discriminator for which world a compiled component targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WasmBindings {
-    Transform,
-    Filter,
-    Router,
-}
-
-impl std::fmt::Display for WasmBindings {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Transform => write!(f, "transform-node"),
-            Self::Filter => write!(f, "filter-node"),
-            Self::Router => write!(f, "router-node"),
-        }
-    }
-}
-
 // =============================================================================
 // Host trait implementations for WaferState
 //
