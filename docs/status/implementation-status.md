@@ -10,8 +10,8 @@ The workspace contains seven members:
 
 | Crate | Current responsibility |
 |---|---|
-| `wafer-types` | Shared configuration, control, event, and metric types. |
-| `wafer-config` | TOML loading, semantic validation, and standalone DAG validation. |
+| `wafer-types` | Shared configuration, control, and event types. |
+| `wafer-config` | TOML loading and semantic validation. |
 | `wafer-core` | Wasmtime engine, nodes, receiver-keyed queues, runners, DLQ, registry, metrics, and HTTP API. |
 | `wafer-plugin` | Rust guest-side macros and optional JSON config parsing. |
 | `wafer-runtime` | Binary startup, validation, pipeline launch, control plane, signals, and evaluation hooks. |
@@ -134,9 +134,7 @@ node's dequeued messages equal the sum of their fates.
 `GET /metrics` is rendered in `crates/wafer-core/src/api/handlers.rs` from
 these per-node counters (`wafer_node_*_total`, traps by kind, guest errors by
 category), the `hot_swap_phase_ns` histogram, and the
-`wafer_node_recovery_duration_ms` summary with its `_max_ms` gauge. The `MetricsRegistry` and snapshot
-builder in `wafer-core`'s `metrics` module are not wired into the runtime, and
-their families (for example `wafer_queue_depth`) are not served.
+`wafer_node_recovery_duration_ms` summary with its `_max_ms` gauge.
 
 Containment limits: the per-node memory limit bounds guest linear memory and
 tables, not host-side WASI resources a guest creates. Epochs and fuel bound

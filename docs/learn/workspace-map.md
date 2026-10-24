@@ -35,8 +35,8 @@ The arrows show compile-time or operational use, not a complete Cargo dependency
 
 | Crate | Target | Owns | Start reading |
 |---|---|---|---|
-| `wafer-types` | library | Shared configuration, control-plane, event, and metric data types | [`crates/wafer-types/src/lib.rs`](../../crates/wafer-types/src/lib.rs), then [`config/mod.rs`](../../crates/wafer-types/src/config/mod.rs) |
-| `wafer-config` | library | TOML loading, semantic validation, and standalone DAG construction | [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) |
+| `wafer-types` | library | Shared configuration, control-plane, and event data types | [`crates/wafer-types/src/lib.rs`](../../crates/wafer-types/src/lib.rs), then [`config/mod.rs`](../../crates/wafer-types/src/config/mod.rs) |
+| `wafer-config` | library | TOML loading and semantic validation | [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) |
 | `wafer-core` | library | Engine, native adapters, queue wiring, runners, orchestration, metrics, registry, and feature-gated HTTP API | [`crates/wafer-core/src/lib.rs`](../../crates/wafer-core/src/lib.rs) |
 | `wafer-runtime` | binary named `wafer` | Process startup: CLI arguments, configuration, pipeline launch, control plane, signals, and evaluation hooks | [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) |
 | `wafer-plugin` | library | Guest-side helper macros and optional JSON config parsing | [`crates/wafer-plugin/src/lib.rs`](../../crates/wafer-plugin/src/lib.rs) |
@@ -76,8 +76,6 @@ The main seam runs between data, interpretation, and execution. `wafer-types` de
 | `testing` | Channel-backed source and sink, the plugin test harness, and `artifact_available`; compiled for tests or with `test-support` | `ChannelSource`, `ChannelSink`, `PluginTestHarness` |
 | `util` | Saturating time conversions and the monotonic clock behind timestamps | `duration_ns_saturating` |
 
-Some public items are not on the runtime path. `queue::BoundedQueue` is used only by `crates/wafer-core/benches/throughput.rs`. The runtime's dead-letter types are `DlqEnvelope` and `DlqReason` in `crates/wafer-core/src/runner/error_policy.rs`, not the same-named types or `wrap_for_dlq` in `dlq`. `node::AnyNode`, `node::WasmRouter`, and `engine::WasmBindings` have no caller outside their own files, `metrics::MetricsRegistry` is used only by `crates/wafer-core/benches/metrics.rs`, and `wafer_config::DagGraph` is called only by its own tests.
-
 ## Repository layout
 
 | Path | What it holds |
@@ -98,7 +96,7 @@ The root manifest depends on `wafer-core` with `default-features = false`, so ea
 
 | Feature | Declared in | Effect |
 |---|---|---|
-| `http-api` | `wafer-core`; on by default in `wafer-runtime` | Compiles the `api` module and pulls in `axum`, `tower-http`, and `sysinfo` |
+| `http-api` | `wafer-core`; on by default in `wafer-runtime` | Compiles the `api` module and pulls in `axum` and `tower-http` |
 | `test-support` | `wafer-core` | Compiles the `testing` module for other crates; enabled through dev-dependencies |
 | `ort-download` | `wafer-core` and `wafer-runtime`; on by default in both | Downloads the pinned ONNX Runtime at build time; `ORT_LIB_LOCATION` points the build at a local copy instead |
 | `cuda` | `wafer-core` and `wafer-runtime` | Builds `wasmtime-wasi-nn` with CUDA support |

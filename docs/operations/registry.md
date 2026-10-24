@@ -142,7 +142,6 @@ at an empty directory.
 | `mise run //plugins:pull-plugin <name> <version>` | Download one plugin to `downloads/` (not the runtime cache). |
 | `mise run //plugins:pull-plugin-auth <user> <token> <name> <version>` | Pull with inline credentials. |
 | `mise run run-local` | Run the sample pipeline with only local plugins. |
-| `mise run run-remote` | Run `examples/dag-remote.toml`, whose plugin reference points at a placeholder registry; edit it to name a component you published. |
 
 ## Environment variables
 

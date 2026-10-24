@@ -8,7 +8,6 @@ mod http;
 mod loader;
 pub(crate) mod state;
 
-pub use bindings::WasmBindings;
 pub use buffer::WaferBuffer;
 pub use cache::{CacheOutcome, ComponentCache};
 pub use capabilities::Capabilities;

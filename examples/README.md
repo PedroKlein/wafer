@@ -21,7 +21,6 @@ Relative plugin paths resolve against the file's directory. For every key, see
 | `dag-overflow-dlq-demo.toml` | file source, delayed transform behind a capacity-1 edge that overflows to the dead-letter queue, file sink |
 | `dag-metrics-demo.toml` | file pipeline with the control plane and metrics enabled |
 | `dag-mnist-inference.toml` | MNIST inference on CPU (see below) |
-| `dag-remote.toml` | plugin pulled from an OCI registry; validates locally, runs only if the referenced artifact exists |
 | `dag-passthrough-with-api.toml` | pass-through pipeline with the control plane enabled |
 
 The comment at the top of each file names the plugins to build first and, where the input is simple, the command that runs it.

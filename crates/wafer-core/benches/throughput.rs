@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use tokio::runtime::Runtime;
 
-use wafer_core::queue::{BoundedQueue, RuntimeEnvelope};
+use wafer_core::queue::RuntimeEnvelope;
 use wafer_core::testing::{PluginTestHarness, TransformHarness, artifact_available};
 
 /// Compile-time snapshots of the module files that used to expose the retired
@@ -114,39 +114,6 @@ fn warmed_transform(rt: &Runtime, harness: &PluginTestHarness, path: &PathBuf) -
         }
     });
     transform
-}
-
-/// Baseline: raw queue throughput (no Wasm on the hot path). The envelope
-/// only moves a `Bytes` refcount, so the unit is elements, not bytes.
-fn bench_queue_throughput(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-
-    let mut group = c.benchmark_group("queue_throughput");
-    group.measurement_time(Duration::from_secs(10));
-    group.throughput(Throughput::Elements(1));
-
-    let sizes = [64, 256, 1024, 4096, 16384];
-
-    for size in sizes {
-        group.bench_with_input(BenchmarkId::new("send_recv", size), &size, |b, &size| {
-            b.iter_custom(|iters| {
-                rt.block_on(async {
-                    let mut queue = BoundedQueue::new(1024);
-                    let envelope = create_test_envelope(size);
-
-                    let start = Instant::now();
-                    for _ in 0..iters {
-                        queue.send(envelope.clone()).await.unwrap();
-                        let received = queue.recv().await.unwrap();
-                        black_box(received);
-                    }
-                    start.elapsed()
-                })
-            });
-        });
-    }
-
-    group.finish();
 }
 
 /// Production Wasm transform throughput via `WasmTransformNode::process`.
@@ -303,7 +270,6 @@ fn bench_transform_latency(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_queue_throughput,
     bench_transform_throughput,
     bench_transform_message_sizes,
     bench_transform_latency,

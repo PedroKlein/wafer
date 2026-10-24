@@ -1,3 +1,0 @@
-# Malformed TOML for testing config parse errors
-[transform
-name = "broken"

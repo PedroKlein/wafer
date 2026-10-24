@@ -27,7 +27,7 @@ fn one_message_startup_records_non_overlapping_phases_and_plugin_identity() {
         .arg(&config)
         .arg("--no-api")
         .args(["--log-format", "json"])
-        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .env("WAFER_BENCH_OUTPUT_DIR", output.path())
         .env("WAFER_STARTUP_OUTPUT", &startup_path)
         .env("WAFER_STARTUP_CACHE_STATE", "warm")
@@ -102,15 +102,15 @@ fn one_message_startup_records_non_overlapping_phases_and_plugin_identity() {
     // Provenance (binary hash, kernel lookup, file write) must not run
     // inside the first_process window, so the probe writes it only at
     // shutdown.
-    let mut stdout = String::new();
-    std::io::Read::read_to_string(&mut child.stdout.take().expect("stdout"), &mut stdout)
+    let mut log = String::new();
+    std::io::Read::read_to_string(&mut child.stderr.take().expect("stderr"), &mut log)
         .expect("read runtime log");
-    let provenance_writes: Vec<Value> = stdout
+    let provenance_writes: Vec<Value> = log
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|event| event["fields"]["message"] == "Runtime provenance written")
         .collect();
-    assert_eq!(provenance_writes.len(), 1, "expected one provenance write:\n{stdout}");
+    assert_eq!(provenance_writes.len(), 1, "expected one provenance write:\n{log}");
     assert_eq!(provenance_writes[0]["fields"]["written_at"], "Shutdown");
     let provenance: Value = serde_json::from_slice(
         &std::fs::read(output.path().join("runtime-provenance.json")).expect("read provenance"),

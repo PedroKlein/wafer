@@ -63,7 +63,7 @@ The builder does not compile plugins. That split lets tests supply `ChannelSourc
 
 `build_pipeline_inner` (`crates/wafer-core/src/orchestrator/builder.rs`) first calls `DagGraph::from_config` from `crates/wafer-core/src/dag/graph.rs`, which again rejects an empty graph, unknown endpoints, and cycles. `validate_channel_capacities` then rejects a queue capacity of zero, which would make Tokio panic.
 
-The graph is only a check. The builder stores it in `BuildOutput::dag_graph`, but nothing reads that field and nothing calls `topo_order`. Bundles are built, and tasks later spawned, in the iteration order of `config.nodes`, which is a `HashMap`. The separate `wafer_config::DagGraph` (`crates/wafer-config/src/dag.rs`) is not on this path at all: only its own tests call it.
+The graph is only a check. The builder stores it in `BuildOutput::dag_graph`, but nothing reads that field and nothing calls `topo_order`. Bundles are built, and tasks later spawned, in the iteration order of `config.nodes`, which is a `HashMap`.
 
 `wire_queues` groups edges by destination and creates one bounded channel per destination node. Every inbound edge gets a clone of that node's sender, which is how fan-in works: several producers, one receiver. The capacity is the largest one any inbound edge declares, or the engine default:
 

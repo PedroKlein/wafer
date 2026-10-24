@@ -72,7 +72,7 @@ clap = { version = "4", features = ["derive"] }
 
 # HTTP (feature-gated in wafer-core)
 axum = "0.8"
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+tower-http = { version = "0.6", features = ["trace"] }
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",
@@ -81,8 +81,6 @@ rustls = "0.23"
 tokio-rustls = "0.26"
 webpki-roots = "1"
 
-# System metrics
-sysinfo = "0.34"
 # statm reads kernel counters in constant time. The default sums
 # /proc/self/smaps, whose cost grows with the number of mappings and pushed the
 # 1 Hz sampler past its overhead budget once many Wasm instances were loaded.
@@ -96,11 +94,9 @@ uuid = { version = "1", features = ["v4"] }
 bytes = "1"
 tempfile = "3"
 oci-client = "0.16"
-semver = "1"
 sha2 = "0.10"
 hex = "0.4"
 dirs = "6"
-futures-util = "0.3"
 blake3 = "1"
 foldhash = "0.1"
 

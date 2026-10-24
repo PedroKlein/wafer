@@ -33,7 +33,7 @@
 
 use std::str::FromStr;
 
-/// Canonical timestamp used for build-time SHA-256 fingerprinting.
+/// Canonical timestamp used for the test-pinned SHA-256 fingerprint.
 ///
 /// Chosen to be a realistic wall-clock ns value with 19 digits (2027-01-15).
 /// Using a stable canonical value makes the fingerprint reproducible across
@@ -113,8 +113,7 @@ impl PayloadTemplate {
     ///
     /// Hard-coded per template. If the render logic changes, the
     /// `payload_size_exact` unit test will fail and the developer must
-    /// intentionally update this value — that manual step is the "build-time
-    /// checksum".
+    /// intentionally update this value.
     #[must_use]
     pub const fn fingerprint_hex(self) -> &'static str {
         match self {

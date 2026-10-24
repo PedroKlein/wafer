@@ -1,28 +1,8 @@
-//! Dead Letter Queue (DLQ) types and utilities.
+//! Serializable envelope written to the dead-letter queue.
 
 use crate::queue::{BenchStamps, RuntimeEnvelope};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-/// Reason why a message was routed to the Dead Letter Queue.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum DlqReason {
-    QueueFull,
-    ProcessError { code: String, message: String },
-    SinkError { message: String },
-}
-
-impl DlqReason {
-    pub fn process_error(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::ProcessError { code: code.into(), message: message.into() }
-    }
-
-    pub fn sink_error(message: impl Into<String>) -> Self {
-        Self::SinkError { message: message.into() }
-    }
-}
 
 /// Serializable representation of a `RuntimeEnvelope`.
 ///
@@ -91,62 +71,6 @@ impl From<SerializableEnvelope> for RuntimeEnvelope {
             retry_count: env.retry_count,
         }
     }
-}
-
-/// Dead Letter Queue envelope wrapping a failed message with error context.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DlqEnvelope {
-    pub original: SerializableEnvelope,
-    pub failed_edge: String,
-    pub reason: DlqReason,
-    pub failed_at: DateTime<Utc>,
-}
-
-impl DlqEnvelope {
-    pub fn new(
-        original: RuntimeEnvelope,
-        failed_edge: impl Into<String>,
-        reason: DlqReason,
-    ) -> Self {
-        Self {
-            original: original.into(),
-            failed_edge: failed_edge.into(),
-            reason,
-            failed_at: Utc::now(),
-        }
-    }
-
-    /// Extract the original envelope for potential replay.
-    pub fn into_original(self) -> RuntimeEnvelope {
-        self.original.into()
-    }
-
-    /// Serialize this envelope to JSON bytes for routing to the DLQ sink.
-    pub fn to_json_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
-        serde_json::to_vec(self)
-    }
-}
-
-/// Wrap an envelope in DLQ metadata for dead-letter routing.
-///
-/// # Panics
-///
-/// Panics if JSON serialization of the DLQ envelope fails (unreachable: all fields are serde-infallible).
-#[expect(
-    clippy::expect_used,
-    reason = "DlqEnvelope fields are all serde-infallible types (String, u64, HashMap, Vec<u8>)"
-)]
-pub fn wrap_for_dlq(
-    envelope: RuntimeEnvelope,
-    failed_edge: impl Into<String>,
-    reason: DlqReason,
-) -> RuntimeEnvelope {
-    let dlq_envelope = DlqEnvelope::new(envelope, failed_edge, reason);
-    // SAFETY: DlqEnvelope contains only String, u64, HashMap<String,String>, Vec<u8> -- all infallible to serialize
-    let payload = dlq_envelope.to_json_bytes().expect("infallible serialization");
-
-    RuntimeEnvelope::new("dlq", bytes::Bytes::from(payload))
-        .with_metadata("content_type", "application/json")
 }
 
 /// Custom serde module for base64 encoding/decoding of binary data.

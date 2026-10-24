@@ -49,9 +49,6 @@ order. A plugin that needs cross-branch order must impose it itself.
   memory-only cache, and plugins compile one at a time at launch
   ([RFC-007](../rfcs/RFC-007-performance-optimizations.md) Decisions 1 and 10).
 - `/metrics` has no rollback counter ([A20](../status/implementation-gaps.md)).
-- Unused types remain in `wafer-core`: `AnyNode`, the `Node` wrapper in
-  `node/kind.rs`, and the `BoundedQueue` wrapper, which only the throughput
-  benchmark uses.
 
 Current implementation state is in
 [implementation status](../status/implementation-status.md).

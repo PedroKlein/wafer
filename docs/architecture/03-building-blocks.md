@@ -17,7 +17,7 @@ C4Container
     System_Boundary(wafer, "WAFER Runtime Process") {
         Container(runtime, "wafer-runtime", "Rust binary", "Entry point: CLI arg parse, config load, pipeline boot, shutdown")
         Container(core, "wafer-core", "Rust library", "Orchestrator, DAG engine, Wasm engine, runners, API server, metrics, DLQ")
-        Container(config, "wafer-config", "Rust library", "TOML loader, semantic validation, DagGraph construction")
+        Container(config, "wafer-config", "Rust library", "TOML loader, semantic validation")
         Container(types, "wafer-types", "Rust library", "Shared domain types: Config, NodeDef, control DTOs, metrics DTOs")
     }
 
@@ -128,10 +128,10 @@ The largest crate. Contains all runtime logic grouped into modules:
 | `orchestrator` | Pipeline lifecycle: `PipelineHandle` and `PipelineOrchestrator`, receiver-keyed mpsc wiring, loaded-Wasm replacement eligibility, per-node mutation guards, JoinSet startup, and replacement preparation. |
 | `runner` | Per-category async loops — one each for source, sink, transform, filter, router. Each loop owns its `Store`, receives from mpsc, sends to downstream mpsc, and integrates with the error policy executor. |
 | `dag` | Petgraph wrapper: `DagGraph`, topological sort, cycle rejection. |
-| `queue` | `bounded.rs` tracking wrappers and `envelope.rs` (`RuntimeEnvelope` with `Arc<EnvelopeHeader>`, `Bytes` payload, `Lineage`, and host retry count). |
+| `queue` | `envelope.rs` (`RuntimeEnvelope` with `Arc<EnvelopeHeader>`, `Bytes` payload, `Lineage`, and host retry count). |
 | `node` | Abstractions: `ProcessNode` trait, `NodeState` FSM, native source/sink adapters, native Transform and Filter baselines, Wasm node wrappers (each owns its `Store`, bindings and cached `InstancePre`), per-node metrics. |
-| `dlq` | Dead-letter queue writer — routes `DlqEnvelope` to the configured MQTT topic or file. |
-| `metrics` | Hot-swap phase and recovery histograms (`HotSwapMetrics`). `GET /metrics` is rendered in `api` from per-node `NodeMetrics` counters and those histograms. `MetricsRegistry` and its snapshot builder are not wired into the runtime, so families such as `wafer_queue_depth` do not appear on the live endpoint. |
+| `dlq` | `SerializableEnvelope`, the JSON form of a dead-lettered message. |
+| `metrics` | Hot-swap phase and recovery histograms (`HotSwapMetrics`). `GET /metrics` is rendered in `api` from per-node `NodeMetrics` counters and those histograms. |
 | `bench` | Measurement helpers: `MemoryRecorder` (RSS from `/proc/self/statm`) and `QueueDepthRecorder`, which writes `queue-depth.csv` when `WAFER_QUEUE_DEPTH_OUTPUT` is set. |
 | `config` | Re-exports the shared `wafer-types` configuration surface for core consumers. |
 | `testing` | In-memory `ChannelSource` / `ChannelSink` I/O and `PluginTestHarness` / `TransformHarness` for direct component calls; compiled for tests and benches or with the `test-support` feature. |

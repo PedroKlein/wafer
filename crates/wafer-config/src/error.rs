@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-/// Top-level error returned by config loading and DAG construction.
+/// Top-level error returned by config loading.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read config file: {0}")]
@@ -10,18 +10,6 @@ pub enum ConfigError {
 
     #[error("failed to parse TOML: {0}")]
     Parse(#[from] toml::de::Error),
-
-    #[error("cycle detected in pipeline DAG")]
-    CycleDetected,
-
-    #[error("unknown node '{id}' referenced in edge")]
-    UnknownNode { id: String },
-
-    #[error("pipeline has no nodes")]
-    EmptyPipeline,
-
-    #[error("validation failed with {0} error(s)")]
-    ValidationFailed(usize),
 }
 
 /// A single semantic validation failure.

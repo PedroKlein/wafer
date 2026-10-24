@@ -1,6 +1,6 @@
 //! Two-tier AOT compilation cache for Wasm components.
 //!
-//! Cache key: `{blake3_hex(wasm_bytes)}-{os}-{arch}-wt{wasmtime_major}.cwasm`
+//! Cache key: `{blake3_hex(wasm_bytes)}-{os}-{arch}.cwasm`
 //!
 //! Tier 1 (memory): `HashMap<[u8; 32], Arc<Component>>` — instant lookup.
 //! Tier 2 (disk): serialized `.cwasm` files — survives process restarts.
@@ -14,12 +14,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use wasmtime::{Engine, component::Component};
 
 use crate::error::{Result, WaferError};
-
-/// Wasmtime major version embedded in cache keys.
-/// Prevents loading serialized modules from incompatible engine versions.
-const fn wasmtime_version_major() -> &'static str {
-    env!("CARGO_PKG_VERSION_MAJOR")
-}
 
 /// Where a component returned by [`ComponentCache::get_or_compile`] came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,15 +169,10 @@ impl ComponentCache {
 
     /// Compute the disk artifact path for a given hash.
     ///
-    /// Format: `{dir}/{hash_hex}-{os}-{arch}-wt{major}.cwasm`
+    /// Format: `{dir}/{hash_hex}-{os}-{arch}.cwasm`
     fn artifact_path(dir: &Path, hash: &blake3::Hash) -> PathBuf {
-        let filename = format!(
-            "{}-{}-{}-wt{}.cwasm",
-            hash.to_hex(),
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            wasmtime_version_major(),
-        );
+        let filename =
+            format!("{}-{}-{}.cwasm", hash.to_hex(), std::env::consts::OS, std::env::consts::ARCH);
         dir.join(filename)
     }
 }

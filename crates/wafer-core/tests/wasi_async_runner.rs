@@ -12,8 +12,6 @@
 //! This test drives the real runner (not the harness) end-to-end with the
 //! delay-injector plugin. Passes iff (a) the pipeline completes without
 //! panicking and (b) the recorded median preserves the injected delay.
-//!
-//! See docs/history/status/implementation-gaps-closed.md §A16.
 
 use std::num::NonZeroU64;
 use std::path::Path;

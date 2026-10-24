@@ -66,7 +66,7 @@ Sources and sinks are an open adapter set, so orchestration stores them as trait
 
 Processing nodes use enum dispatch instead. `TransformNode` and `FilterNode` in `crates/wafer-core/src/node/mod.rs` each have a `Wasm` and a `Native` variant, and each method is a `match` that forwards to the variant's own type. `run_transform_loop` takes a `TransformNode` and `run_filter_loop` takes a `FilterNode`. Routers have only a Wasm form, so `run_router_loop` takes the concrete `WasmRouterNode`. An enum suits this set because it is closed and some operations exist for only one variant: `try_reconfigure` returns an error for `Native`, and `as_wasm_mut` returns `None`.
 
-`traits.rs` also defines `Transform`, `Filter`, and `Router` traits. Only the native baseline types in `crates/wafer-core/src/node/native/mod.rs` and the `WasmRouter` stub in `crates/wafer-core/src/node/router.rs` implement them. No runner calls them; the `native_vs_wasm` bench and the native baseline tests do. `NodeBundleKind` in `crates/wafer-core/src/orchestrator/builder.rs` shows the real split: its Transform and Filter variants carry the enums, Router carries `WasmRouterNode`, and Source and Sink carry boxed trait objects.
+`traits.rs` also defines `Transform`, `Filter`, and `Router` traits. Only the native baseline types in `crates/wafer-core/src/node/native/mod.rs` implement them. No runner calls them; the `native_vs_wasm` bench and the native baseline tests do. `NodeBundleKind` in `crates/wafer-core/src/orchestrator/builder.rs` shows the real split: its Transform and Filter variants carry the enums, Router carries `WasmRouterNode`, and Source and Sink carry boxed trait objects.
 
 ## Async trait methods as boxed futures
 

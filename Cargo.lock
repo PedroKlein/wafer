@@ -2316,15 +2316,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ntapi"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
-dependencies = [
- "winapi",
-]
-
-[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2409,15 +2400,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "objc2-core-foundation"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
-dependencies = [
- "bitflags",
 ]
 
 [[package]]
@@ -3803,19 +3785,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sysinfo"
-version = "0.34.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4b93974b3d3aeaa036504b8eefd4c039dced109171c1ae973f1dc63b2c7e4b2"
-dependencies = [
- "libc",
- "memchr",
- "ntapi",
- "objc2-core-foundation",
- "windows 0.57.0",
-]
-
-[[package]]
 name = "tabled"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4506,12 +4475,10 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
- "chrono",
  "criterion",
  "dirs",
  "docker_credential",
  "foldhash 0.1.5",
- "futures-util",
  "hdrhistogram",
  "hex",
  "http-body-util",
@@ -4524,11 +4491,9 @@ dependencies = [
  "reqwest 0.12.28",
  "rumqttc",
  "rustls",
- "semver",
  "serde",
  "serde_json",
  "sha2",
- "sysinfo",
  "tempfile",
  "testcontainers",
  "testcontainers-modules",
@@ -4537,7 +4502,6 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "toml 0.8.23",
- "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -4596,13 +4560,11 @@ dependencies = [
  "clap",
  "hex",
  "reqwest 0.12.28",
- "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "tokio",
  "tokio-util",
- "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
  "wafer-config",
@@ -4631,7 +4593,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tabled",
- "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
  "wafer-types",
@@ -5161,7 +5122,7 @@ dependencies = [
  "walkdir",
  "wasmtime",
  "wiggle",
- "windows 0.52.0",
+ "windows",
 ]
 
 [[package]]
@@ -5310,16 +5271,6 @@ dependencies = [
  "windows-core 0.52.0",
  "windows-implement 0.52.0",
  "windows-interface 0.52.0",
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows"
-version = "0.57.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12342cb4d8e3b046f3d80effd474a7a02447231330ef77d71daa6fbc40681143"
-dependencies = [
- "windows-core 0.57.0",
  "windows-targets 0.52.6",
 ]
 

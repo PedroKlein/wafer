@@ -6,8 +6,8 @@
 
 > **Current amendment.** The workspace-with-crates decision stands, but the
 > shape below is the 2026-02-28 layout. The root `Cargo.toml` now has seven
-> members: `wafer-types`, `wafer-config` (TOML loading, semantic validation,
-> standalone DAG construction), `wafer-core`, `wafer-runtime`, `wafer-plugin`
+> members: `wafer-types`, `wafer-config` (TOML loading and semantic
+> validation), `wafer-core`, `wafer-runtime`, `wafer-plugin`
 > (guest SDK), `wafer-loadgen` (library and binary for evaluation traffic),
 > and `waferctl`. Plugins under `plugins/` are excluded from the workspace.
 > [`docs/learn/workspace-map.md`](../learn/workspace-map.md) is the current

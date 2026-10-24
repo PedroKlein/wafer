@@ -186,10 +186,16 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     let env_filter = log_filter(&std::env::var(EnvFilter::DEFAULT_ENV).unwrap_or_default());
     match args.log_format {
         LogFormat::Pretty => {
-            tracing_subscriber::registry().with(fmt::layer()).with(env_filter).init();
+            tracing_subscriber::registry()
+                .with(fmt::layer().with_writer(std::io::stderr))
+                .with(env_filter)
+                .init();
         }
         LogFormat::Json => {
-            tracing_subscriber::registry().with(fmt::layer().json()).with(env_filter).init();
+            tracing_subscriber::registry()
+                .with(fmt::layer().json().with_writer(std::io::stderr))
+                .with(env_filter)
+                .init();
         }
     }
 

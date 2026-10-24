@@ -81,10 +81,6 @@ if command -v jq >/dev/null 2>&1; then jq --version; fi
 description = "List available project tasks"
 run = "mise tasks ls --all"
 
-[tasks.tasks]
-description = "List available project tasks (every config_root)"
-run = "mise tasks ls --all"
-
 # =============================================================================
 # Core Workspace Commands
 # =============================================================================
@@ -200,10 +196,6 @@ cargo run -p waferctl -- "$@"
 [tasks.run-local]
 description = "Run sample pipeline with local plugins"
 run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml'
-
-[tasks.run-remote]
-description = "Run sample pipeline with remote plugins"
-run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/dag-remote.toml'
 
 # =============================================================================
 # Release builds per target (aarch64-linux for Pi / Jetson, native x86_64)

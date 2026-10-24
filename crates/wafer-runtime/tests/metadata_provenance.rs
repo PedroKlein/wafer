@@ -211,9 +211,9 @@ fn swap_run_provenance_records_replacement_hash() {
         .env("WAFER_BENCH_OUTPUT_DIR", tmp.path())
         .output()
         .expect("run wafer binary");
-    assert!(output.status.success(), "runtime failed: {}", String::from_utf8_lossy(&output.stderr));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Hot-swap dispatched"), "swap never dispatched:\n{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "runtime failed: {stderr}");
+    assert!(stderr.contains("Hot-swap dispatched"), "swap never dispatched:\n{stderr}");
 
     let json: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&provenance_path).expect("read provenance"))
@@ -290,14 +290,14 @@ path = "{}"
         .spawn()
         .expect("run wafer binary");
     let mut stdin = child.stdin.take().expect("piped stdin");
-    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("piped stdout"));
+    let mut stderr = std::io::BufReader::new(child.stderr.take().expect("piped stderr"));
     stdin.write_all(b"before the swap\n").unwrap();
     stdin.flush().unwrap();
 
     let mut log = String::new();
     loop {
         let mut line = String::new();
-        assert_ne!(stdout.read_line(&mut line).unwrap(), 0, "runtime exited early:\n{log}");
+        assert_ne!(stderr.read_line(&mut line).unwrap(), 0, "runtime exited early:\n{log}");
         log.push_str(&line);
         if line.contains("Hot-swap dispatched") {
             break;
@@ -404,17 +404,17 @@ path = "{}"
         .arg(&v2_path)
         .env("WAFER_METADATA_OUTPUT", &provenance_path)
         .env("WAFER_BENCH_OUTPUT_DIR", tmp.path())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("run wafer binary");
-    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
     let (dispatched_tx, dispatched_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         use std::io::BufRead;
-        let mut stdout = std::io::BufReader::new(stdout);
+        let mut stderr = std::io::BufReader::new(stderr);
         let mut line = String::new();
-        while stdout.read_line(&mut line).unwrap() != 0 {
+        while stderr.read_line(&mut line).unwrap() != 0 {
             if line.contains("Hot-swap dispatched") {
                 let _ = dispatched_tx.send(());
             }

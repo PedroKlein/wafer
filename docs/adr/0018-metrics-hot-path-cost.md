@@ -55,10 +55,6 @@ configuration: the node id, a fixed set of six trap kinds, five guest error
 categories, and hot-swap phase names. There is no separate registry to keep
 in sync and no per-message cost for exposition.
 
-The `MetricsRegistry`, its snapshot builder, and the
-`counters` types in `crates/wafer-core/src/metrics/` are not wired into the
-runtime; nothing the binary runs records into them.
-
 ### Evaluation samplers run beside the pipeline, not in it
 
 - **Memory.** When `WAFER_BENCH_OUTPUT_DIR` is set, `wafer-runtime` spawns a
@@ -98,8 +94,6 @@ node.
 - `Relaxed` loads give a scrape a snapshot that is not atomic across
   counters, so identities hold only once the node is quiescent (for example
   at shutdown export).
-- The unused `MetricsRegistry` code remains in the crate and can mislead
-  readers; its benchmark does not measure the live endpoint.
 
 ### Neutral
 
