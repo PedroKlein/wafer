@@ -271,7 +271,7 @@ std::thread::spawn(move || {
 ## Hot-Swap Coordination (Thesis RQ3: Disruption Cost)
 
 RQ3 asks: "What is the disruption cost of replacing a stage at runtime?"
-Criteria (see `tcc-doc/research/analysis/thesis-statement-v3.md`): E-Swap-4 across-run p95 sink gap
+Criteria (see `verdict_rules` in `eval/canonical-matrix.json`): E-Swap-4 across-run p95 sink gap
 below 100 ms and E-Swap-3 median dip below 5% (upper CI), both with zero loss and duplication.
 
 WAFER uses a **watch-channel model**: the node task `select!`s between its input queue

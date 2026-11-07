@@ -9,7 +9,7 @@ to the documentation.
 ## Before you open an issue or PR
 
 Read enough of `docs/architecture/` to know whether your change fits
-the design that the thesis defends. In particular:
+the design. In particular:
 
 - The runtime targets edge gateways, not cloud servers. Proposals that
   trade footprint for peak throughput will usually be declined.

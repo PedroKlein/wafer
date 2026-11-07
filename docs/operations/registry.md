@@ -20,7 +20,7 @@ plugin = "./plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm"
 # OCI reference (registry/namespace/name:tag)
 [nodes.upper-remote]
 type   = "transform"
-plugin = "ghcr.io/pedroklein/wafer-uppercase:1.0.0"
+plugin = "ghcr.io/computernetworks-ufrgs/wafer-uppercase:1.0.0"
 ```
 
 A value of the form `<registry>/<repository>:<tag>` (a non-empty part
@@ -69,7 +69,7 @@ Package naming convention: `<registry>/wafer-<plugin_name>:<version>`.
 The tasks replace hyphens in the plugin name with underscores
 (`json-parse` becomes `wafer-json_parse`).
 
-The default registry is `ghcr.io/pedroklein`; override via the
+The default registry is `ghcr.io/computernetworks-ufrgs`; override via the
 `WAFER_REGISTRY` environment variable:
 
 ```bash
@@ -94,12 +94,12 @@ below.
 ```toml
 [nodes.upper]
 type   = "transform"
-plugin = "ghcr.io/pedroklein/wafer-uppercase:1.0.0"
+plugin = "ghcr.io/computernetworks-ufrgs/wafer-uppercase:1.0.0"
 
 # Pin to an immutable digest to defeat tag mutation:
 [nodes.parse]
 type   = "transform"
-plugin = "ghcr.io/pedroklein/wafer-json_parse@sha256:abc123..."
+plugin = "ghcr.io/computernetworks-ufrgs/wafer-json_parse@sha256:abc123..."
 ```
 
 Local and remote plugins mix freely in the same pipeline; every node
@@ -147,7 +147,7 @@ at an empty directory.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `WAFER_REGISTRY` | Registry namespace used by the `//plugins:publish-*` and `//plugins:pull-*` tasks. | `ghcr.io/pedroklein` |
+| `WAFER_REGISTRY` | Registry namespace used by the `//plugins:publish-*` and `//plugins:pull-*` tasks. | `ghcr.io/computernetworks-ufrgs` |
 
 The runtime itself reads no registry environment variable; the cache
 directory comes from `[registry].cache_dir`.

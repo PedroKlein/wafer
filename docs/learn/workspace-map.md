@@ -87,7 +87,7 @@ The main seam runs between data, interpretation, and execution. `wafer-types` de
 | `tests/fixtures/` | Shared configuration and data fixtures, such as the MNIST digit used by inference tests. |
 | `eval/` | The evaluation harness: experiment configs in `eval/configs/`, run scripts in `eval/scripts/`, analysis in `eval/analysis/`, and the result-directory contract in `eval/RESULT-CONTRACT.md`. [From experiment definition to evidence](evaluation-harness.md) walks through it. |
 | `scripts/` | Repository checks: `check-docs.sh` checks `crates/` paths and relative links in the docs, and `scripts/README.md` lists the rest. |
-| `docs/` | Architecture views, interface references, operations guides, decision records (`adr/`, `rfcs/`), status pages, evaluation runbooks, this guide, and an archive in `history/`. [docs/README.md](../README.md) is the index. |
+| `docs/` | Architecture views, interface references, operations guides, decision records (`adr/`, `rfcs/`), status pages, evaluation runbooks, and this guide. [docs/README.md](../README.md) is the index. |
 | `models/` | The ONNX model used by the MNIST inference plugin. |
 
 ## Features and toolchain

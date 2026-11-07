@@ -56,8 +56,7 @@ registry-login, setup, tool-versions) that were never mirrored back.
 `justfile` was removed. `mise` is now the sole command-runner surface.
 
 Documentation swept: `.agents/AGENTS.md`, `.agents/skills/wafer-project/SKILL.md`,
-`docs/operations/dependencies.md`, `mise.toml` intro comment, and
-`docs/history/plans/canonical-runs.md` all had their "justfile remains temporarily"
+`docs/operations/dependencies.md` and the `mise.toml` intro comment all had their "justfile remains temporarily"
 language removed or updated.
 
 Historical references to `justfile` in

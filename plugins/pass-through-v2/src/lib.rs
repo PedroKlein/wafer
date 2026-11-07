@@ -6,8 +6,8 @@
 //!   - `swapped = "true"` (extra sentinel so downstream assertions can spot
 //!     v2 output without parsing version strings)
 //!
-//! State handling: v2 does NOT preserve state from v1 (per thesis-statement-v3
-//! scope qualifier #3). Fresh init, fresh instance.
+//! State handling: v2 does NOT preserve state from v1, because a hot swap
+//! replaces a stateless stage. Fresh init, fresh instance.
 
 wit_bindgen::generate!({
     path: "../../wit",

@@ -7,8 +7,7 @@
 #     resolves for the workspace. A documented `0.8` matches 0.8.x; a
 #     40-hex git revision in the row must be the locked source revision.
 #  2. A crates/wafer*/... path cited anywhere in docs/ that does not exist.
-#     Historical records under docs/history/ are skipped.
-#  3. A relative Markdown link, in any tracked .md file outside docs/history/,
+#  3. A relative Markdown link, in any tracked .md file,
 #     whose target file does not exist. Anchors are not checked.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -88,7 +87,7 @@ while IFS= read -r file; do
             failed=1
         fi
     done < <(grep -noE '\]\([^)#[:space:]][^)[:space:]]*\)' "$file" || true)
-done < <(git ls-files '*.md' ':!docs/history/')
+done < <(git ls-files '*.md')
 
 if ((failed)); then
     exit 1

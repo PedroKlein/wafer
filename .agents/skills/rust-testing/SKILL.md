@@ -120,7 +120,7 @@ system resources) then exceeding with latency histograms:
 | Hardware spec documentation | Standard | Exact model, kernel version, governor (performance) |
 | Matrix repetitions (30 for most experiments) | Thesis stats requirement | Bootstrap CI95 |
 
-The RQ1 criteria (matched-load p95 ratio, delivery-ceiling ratio, the 50 µs per-hop reference) are defined in `tcc-doc/research/analysis/thesis-statement-v3.md`; do not restate them from memory.
+The RQ1 criteria (matched-load p95 ratio, delivery-ceiling ratio, the 50 µs per-hop reference) are defined in `verdict_rules` in `eval/canonical-matrix.json`; do not restate them from memory.
 
 ### The Setup/Measurement Separation Problem
 

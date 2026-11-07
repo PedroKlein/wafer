@@ -1,147 +1,172 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
   <title id="title">WAFER runtime overview</title>
-  <desc id="desc">Native inputs enter a single WAFER process, pass through isolated WebAssembly Transform, Filter, and Router stages connected by bounded queues, and leave through native outputs. A control plane manages the pipeline.</desc>
+  <desc id="desc">Native source adapters feed a pipeline inside one WAFER process. Each stage (decode, threshold, route) runs in its own WebAssembly sandbox and reads from a bounded queue owned by the host. A failed stage is rebuilt alone while the others keep running, and a stage can be hot swapped to a new version between two records. The router sends records to native sink adapters. A control plane exposes hot swap, reconfiguration, node status, metrics and health.</desc>
   <defs>
-    <linearGradient id="accentFlow" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#ecb392"/>
-      <stop offset="0.45" stop-color="#d9703f"/>
-      <stop offset="1" stop-color="#c2410c"/>
-    </linearGradient>
     <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
       <circle cx="2" cy="2" r="1.4" fill="#e2d9c9"/>
     </pattern>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
-      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#1a1613" flood-opacity="0.10"/>
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#1a1613" flood-opacity="0.08"/>
     </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c2410c"/>
-    </marker>
+    <g id="queue">
+      <rect width="34" height="40" rx="6" fill="#ffffff" stroke="#a89c8d" stroke-width="1.5"/>
+      <rect x="6" y="7" width="6" height="26" rx="2" fill="#ecb392"/>
+      <rect x="14" y="7" width="6" height="26" rx="2" fill="#ecb392"/>
+      <rect x="22" y="7" width="6" height="26" rx="2" fill="#f3e9dc"/>
+    </g>
   </defs>
 
-  <rect width="1200" height="560" rx="32" fill="#faf7f2"/>
-  <rect width="1200" height="560" rx="32" fill="url(#grid)" opacity="0.7"/>
+  <rect width="1200" height="640" rx="32" fill="#faf7f2"/>
+  <rect width="1200" height="640" rx="32" fill="url(#grid)" opacity="0.7"/>
 
-  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
-    <text x="64" y="70" fill="#c2410c" font-size="14" font-weight="700" letter-spacing="3">HOW WAFER RUNS A PIPELINE</text>
-    <text x="64" y="112" fill="#1a1613" font-size="31" font-weight="750">One process. Isolated stages. Live evolution.</text>
-    <text x="64" y="143" fill="#6b6156" font-size="16">Native adapters own transport. Wasm components own processing logic.</text>
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="48" y="62" fill="#c2410c" font-size="14" font-weight="700" letter-spacing="3">HOW WAFER RUNS A PIPELINE</text>
+    <text x="48" y="104" fill="#1a1613" font-size="32" font-weight="750">The stage is the unit of failure and update.</text>
+    <text x="48" y="136" fill="#6b6156" font-size="17">The host owns the graph, the queues and the connections. Each stage runs in its own sandbox.</text>
 
+    <!-- inputs -->
     <g filter="url(#shadow)">
-      <rect x="48" y="188" width="182" height="234" rx="22" fill="#ffffff" stroke="#e2d9c9" stroke-width="2"/>
-      <rect x="72" y="214" width="54" height="7" rx="3.5" fill="#c2410c"/>
-      <text x="72" y="255" fill="#1a1613" font-size="19" font-weight="700">Native input</text>
-      <text x="72" y="281" fill="#6b6156" font-size="13">trusted adapters</text>
-
-      <g transform="translate(72 310)">
-        <rect width="134" height="31" rx="9" fill="#fbf6ee" stroke="#e2d9c9"/>
-        <circle cx="17" cy="15.5" r="5" fill="#c2410c"/>
-        <text x="31" y="20" fill="#1a1613" font-size="13" font-weight="600">MQTT</text>
-      </g>
-      <g transform="translate(72 350)">
-        <rect width="134" height="31" rx="9" fill="#fbf6ee" stroke="#e2d9c9"/>
-        <circle cx="17" cy="15.5" r="5" fill="#d9703f"/>
-        <text x="31" y="20" fill="#1a1613" font-size="13" font-weight="600">HTTP / file</text>
-      </g>
+      <rect x="24" y="262" width="172" height="200" rx="20" fill="#ffffff" stroke="#e2d9c9" stroke-width="2"/>
+    </g>
+    <text x="44" y="296" fill="#1a1613" font-size="18" font-weight="700">Sources</text>
+    <text x="44" y="318" fill="#6b6156" font-size="14">native adapters</text>
+    <g font-size="14" font-weight="600" fill="#1a1613">
+      <rect x="40" y="336" width="140" height="30" rx="8" fill="#fbf6ee" stroke="#e2d9c9"/>
+      <circle cx="56" cy="351" r="5" fill="#c2410c"/><text x="70" y="356">MQTT</text>
+      <rect x="40" y="374" width="140" height="30" rx="8" fill="#fbf6ee" stroke="#e2d9c9"/>
+      <circle cx="56" cy="389" r="5" fill="#d9703f"/><text x="70" y="394">HTTP webhook</text>
+      <rect x="40" y="412" width="140" height="30" rx="8" fill="#fbf6ee" stroke="#e2d9c9"/>
+      <circle cx="56" cy="427" r="5" fill="#ecb392"/><text x="70" y="432">file / stdin</text>
     </g>
 
+    <!-- host process -->
     <g filter="url(#shadow)">
-      <rect x="264" y="170" width="672" height="290" rx="28" fill="#ffffff" stroke="#c2410c" stroke-width="2"/>
-      <rect x="286" y="190" width="151" height="28" rx="14" fill="#c2410c"/>
-      <text x="361.5" y="209" fill="#faf7f2" font-size="12" font-weight="750" text-anchor="middle" letter-spacing="1.5">WAFER PROCESS</text>
-      <text x="902" y="208" fill="#6b6156" font-size="12" font-weight="650" text-anchor="end" letter-spacing="1.2">TOKIO + WASMTIME</text>
+      <rect x="220" y="168" width="748" height="408" rx="26" fill="#ffffff" stroke="#c2410c" stroke-width="2"/>
+    </g>
+    <rect x="252" y="182" width="232" height="28" rx="14" fill="#c2410c"/>
+    <text x="368" y="201" fill="#ffffff" font-size="12.5" font-weight="700" letter-spacing="1.6" text-anchor="middle">WAFER HOST · ONE PROCESS</text>
+    <text x="948" y="201" fill="#6b6156" font-size="12.5" font-weight="700" letter-spacing="1.6" text-anchor="end">TOKIO + WASMTIME</text>
 
-      <path d="M302 315 C340 315 346 275 382 275 H812 C848 275 852 315 898 315" fill="none" stroke="url(#accentFlow)" stroke-width="8" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <!-- callouts -->
+    <g font-size="14">
+      <rect x="271" y="222" width="200" height="84" rx="12" fill="#fdf0e8" stroke="#ecb392"/>
+      <text x="287" y="246" fill="#a1350a" font-weight="700">A fault stays in its stage</text>
+      <text x="287" y="268" fill="#6b6156" font-size="13">The stage is rebuilt alone</text>
+      <text x="287" y="288" fill="#6b6156" font-size="13">while the rest keeps running.</text>
 
-      <g transform="translate(340 238)" filter="url(#shadow)">
-        <rect width="144" height="138" rx="19" fill="#fbf6ee" stroke="#e2d9c9" stroke-width="2"/>
-        <rect x="18" y="18" width="45" height="8" rx="4" fill="#ecb392"/>
-        <rect x="18" y="25" width="45" height="8" rx="4" fill="#d9703f"/>
-        <rect x="18" y="32" width="45" height="31" rx="8" fill="#c2410c"/>
-        <rect x="27" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <rect x="38" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <rect x="49" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <text x="18" y="91" fill="#1a1613" font-size="18" font-weight="750">Transform</text>
-        <text x="18" y="112" fill="#6b6156" font-size="12">Wasm Store 01</text>
-        <text x="18" y="129" fill="#c2410c" font-size="10" font-weight="700" letter-spacing="1.1">TYPED WIT</text>
-      </g>
+      <rect x="491" y="222" width="200" height="84" rx="12" fill="#fdf0e8" stroke="#ecb392"/>
+      <text x="507" y="246" fill="#a1350a" font-weight="700">Hot swap</text>
+      <text x="507" y="268" fill="#6b6156" font-size="13">Switched between records,</text>
+      <text x="507" y="288" fill="#6b6156" font-size="13">and the queue stays in place.</text>
 
-      <g transform="translate(529 238)" filter="url(#shadow)">
-        <rect width="144" height="138" rx="19" fill="#fbf6ee" stroke="#e2d9c9" stroke-width="2"/>
-        <rect x="18" y="18" width="45" height="8" rx="4" fill="#ecb392"/>
-        <rect x="18" y="25" width="45" height="8" rx="4" fill="#d9703f"/>
-        <rect x="18" y="32" width="45" height="31" rx="8" fill="#c2410c"/>
-        <rect x="27" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <rect x="38" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <rect x="49" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <text x="18" y="91" fill="#1a1613" font-size="18" font-weight="750">Filter</text>
-        <text x="18" y="112" fill="#6b6156" font-size="12">Wasm Store 02</text>
-        <text x="18" y="129" fill="#c2410c" font-size="10" font-weight="700" letter-spacing="1.1">SANDBOXED</text>
-      </g>
-
-      <g transform="translate(718 238)" filter="url(#shadow)">
-        <rect width="144" height="138" rx="19" fill="#fbf6ee" stroke="#e2d9c9" stroke-width="2"/>
-        <rect x="18" y="18" width="45" height="8" rx="4" fill="#ecb392"/>
-        <rect x="18" y="25" width="45" height="8" rx="4" fill="#d9703f"/>
-        <rect x="18" y="32" width="45" height="31" rx="8" fill="#c2410c"/>
-        <rect x="27" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <rect x="38" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <rect x="49" y="40" width="7" height="7" rx="2" fill="#a1350a"/>
-        <text x="18" y="91" fill="#1a1613" font-size="18" font-weight="750">Router</text>
-        <text x="18" y="112" fill="#6b6156" font-size="12">Wasm Store 03</text>
-        <text x="18" y="129" fill="#c2410c" font-size="10" font-weight="700" letter-spacing="1.1">HOT-SWAPPABLE</text>
-      </g>
-
-      <g transform="translate(487 293)">
-        <circle cx="0" cy="0" r="4" fill="#ecb392"/><circle cx="13" cy="0" r="4" fill="#d9703f"/><circle cx="26" cy="0" r="4" fill="#c2410c"/>
-      </g>
-      <g transform="translate(676 293)">
-        <circle cx="0" cy="0" r="4" fill="#ecb392"/><circle cx="13" cy="0" r="4" fill="#d9703f"/><circle cx="26" cy="0" r="4" fill="#c2410c"/>
-      </g>
-
-      <rect x="310" y="405" width="580" height="34" rx="17" fill="#1a1613"/>
-      <circle cx="334" cy="422" r="6" fill="#ecb392"/>
-      <text x="350" y="427" fill="#faf7f2" font-size="12" font-weight="650">CONTROL PLANE</text>
-      <text x="479" y="427" fill="#ecb392" font-size="12">hot-swap</text>
-      <text x="568" y="427" fill="#ecb392" font-size="12">reconfigure</text>
-      <text x="670" y="427" fill="#ecb392" font-size="12">metrics</text>
-      <text x="742" y="427" fill="#ecb392" font-size="12">health</text>
+      <rect x="701" y="222" width="200" height="84" rx="12" fill="#fdf0e8" stroke="#ecb392"/>
+      <text x="717" y="246" fill="#a1350a" font-weight="700">Checked before it runs</text>
+      <text x="717" y="268" fill="#6b6156" font-size="13">Typed role, and only the</text>
+      <text x="717" y="288" fill="#6b6156" font-size="13">permissions it is granted.</text>
+    </g>
+    <g stroke="#ecb392" stroke-width="2" stroke-dasharray="4 4">
+      <line x1="371" y1="306" x2="371" y2="320"/>
+      <line x1="591" y1="306" x2="591" y2="320"/>
+      <line x1="801" y1="306" x2="801" y2="320"/>
     </g>
 
+    <!-- flow: card, queue, stage, queue, stage, queue, stage, queues, card -->
+    <g stroke="#c2410c" stroke-width="2.5" fill="none">
+      <line x1="196" y1="368" x2="236" y2="368"/>
+      <line x1="278" y1="368" x2="288" y2="368"/>
+      <line x1="446" y1="368" x2="456" y2="368"/>
+      <line x1="498" y1="368" x2="508" y2="368"/>
+      <line x1="666" y1="368" x2="676" y2="368"/>
+      <line x1="718" y1="368" x2="728" y2="368"/>
+      <line x1="866" y1="351" x2="884" y2="351"/>
+      <line x1="926" y1="351" x2="984" y2="351"/>
+      <line x1="926" y1="427" x2="984" y2="427"/>
+      <path d="M 866 385 H 872 Q 879 385 879 392 V 420 Q 879 427 886 427"/>
+    </g>
+    <g fill="#c2410c">
+      <path d="M 234 362 L 244 368 L 234 374 z"/>
+      <path d="M 286 362 L 296 368 L 286 374 z"/>
+      <path d="M 454 362 L 464 368 L 454 374 z"/>
+      <path d="M 506 362 L 516 368 L 506 374 z"/>
+      <path d="M 674 362 L 684 368 L 674 374 z"/>
+      <path d="M 726 362 L 736 368 L 726 374 z"/>
+      <path d="M 882 345 L 892 351 L 882 357 z"/>
+      <path d="M 982 345 L 992 351 L 982 357 z"/>
+      <path d="M 982 421 L 992 427 L 982 433 z"/>
+      <path d="M 882 421 L 892 427 L 882 433 z"/>
+    </g>
+
+    <!-- queues -->
+    <use href="#queue" x="244" y="348"/>
+    <use href="#queue" x="464" y="348"/>
+    <use href="#queue" x="684" y="348"/>
+    <use href="#queue" x="892" y="331"/>
+    <use href="#queue" x="892" y="407"/>
+
+    <!-- stages -->
+    <g>
+      <rect x="296" y="320" width="150" height="96" rx="16" fill="#fbf6ee" stroke="#c2410c" stroke-width="3"/>
+      <text x="312" y="346" fill="#c2410c" font-size="12" font-weight="700" letter-spacing="1.5">TRANSFORM</text>
+      <text x="312" y="372" fill="#1a1613" font-size="20" font-weight="700">decode</text>
+      <text x="312" y="400" fill="#6b6156" font-size="13">own sandbox</text>
+      <g transform="translate(424 340)" fill="none" stroke="#c2410c" stroke-width="2.2" stroke-linecap="round">
+        <path d="M 7 -6 A 8 8 0 1 0 8 4"/>
+        <path d="M 4 -9 L 8 -5 L 3 -2"/>
+      </g>
+    </g>
+    <g>
+      <rect x="516" y="320" width="150" height="96" rx="16" fill="#fbf6ee" stroke="#c2410c" stroke-width="3"/>
+      <text x="532" y="346" fill="#c2410c" font-size="12" font-weight="700" letter-spacing="1.5">FILTER</text>
+      <text x="532" y="372" fill="#1a1613" font-size="20" font-weight="700">threshold</text>
+      <text x="532" y="400" fill="#6b6156" font-size="13">own sandbox</text>
+      <rect x="604" y="333" width="52" height="20" rx="10" fill="#c2410c"/>
+      <text x="630" y="347" fill="#ffffff" font-size="12" font-weight="700" text-anchor="middle">v1→v2</text>
+    </g>
+    <g>
+      <rect x="736" y="320" width="130" height="96" rx="16" fill="#fbf6ee" stroke="#c2410c" stroke-width="3"/>
+      <text x="752" y="346" fill="#c2410c" font-size="12" font-weight="700" letter-spacing="1.5">ROUTER</text>
+      <text x="752" y="372" fill="#1a1613" font-size="20" font-weight="700">route</text>
+      <text x="752" y="400" fill="#6b6156" font-size="13">picks ports</text>
+    </g>
+    <text x="909" y="324" fill="#6b6156" font-size="12" font-weight="600" text-anchor="middle">alert</text>
+    <text x="909" y="400" fill="#6b6156" font-size="12" font-weight="600" text-anchor="middle">archive</text>
+
+    <!-- control plane -->
+    <rect x="252" y="486" width="696" height="70" rx="16" fill="#1a1613"/>
+    <circle cx="276" cy="512" r="6" fill="#ecb392"/>
+    <text x="292" y="517" fill="#ffffff" font-size="14" font-weight="700" letter-spacing="1">CONTROL PLANE</text>
+    <text x="292" y="541" fill="#b3a89b" font-size="13">HTTP API on the same process</text>
+    <g font-size="14" fill="#ecb392" font-weight="600">
+      <text x="520" y="530">hot swap</text>
+      <text x="610" y="530">reconfigure</text>
+      <text x="718" y="530">nodes</text>
+      <text x="780" y="530">metrics</text>
+      <text x="856" y="530">health</text>
+    </g>
+    <line x1="591" y1="486" x2="591" y2="428" stroke="#a89c8d" stroke-width="2" stroke-dasharray="4 4"/>
+    <path d="M 585 429 L 591 418 L 597 429 z" fill="#a89c8d"/>
+
+    <!-- outputs -->
     <g filter="url(#shadow)">
-      <rect x="970" y="188" width="182" height="234" rx="22" fill="#ffffff" stroke="#e2d9c9" stroke-width="2"/>
-      <rect x="994" y="214" width="54" height="7" rx="3.5" fill="#c2410c"/>
-      <text x="994" y="255" fill="#1a1613" font-size="19" font-weight="700">Native output</text>
-      <text x="994" y="281" fill="#6b6156" font-size="13">delivery adapters</text>
-
-      <g transform="translate(994 310)">
-        <rect width="134" height="31" rx="9" fill="#fbf6ee" stroke="#e2d9c9"/>
-        <circle cx="17" cy="15.5" r="5" fill="#c2410c"/>
-        <text x="31" y="20" fill="#1a1613" font-size="13" font-weight="600">alerts</text>
-      </g>
-      <g transform="translate(994 350)">
-        <rect width="134" height="31" rx="9" fill="#fbf6ee" stroke="#e2d9c9"/>
-        <circle cx="17" cy="15.5" r="5" fill="#d9703f"/>
-        <text x="31" y="20" fill="#1a1613" font-size="13" font-weight="600">archive</text>
-      </g>
+      <rect x="992" y="262" width="176" height="200" rx="20" fill="#ffffff" stroke="#e2d9c9" stroke-width="2"/>
+    </g>
+    <text x="1012" y="296" fill="#1a1613" font-size="18" font-weight="700">Sinks</text>
+    <text x="1012" y="318" fill="#6b6156" font-size="14">native adapters</text>
+    <g font-size="14" font-weight="600" fill="#1a1613">
+      <rect x="1018" y="336" width="136" height="30" rx="8" fill="#fbf6ee" stroke="#e2d9c9"/>
+      <circle cx="1034" cy="351" r="5" fill="#c2410c"/><text x="1048" y="356">MQTT alarms</text>
+      <rect x="1018" y="412" width="136" height="30" rx="8" fill="#fbf6ee" stroke="#e2d9c9"/>
+      <circle cx="1034" cy="427" r="5" fill="#d9703f"/><text x="1048" y="432">file archive</text>
     </g>
 
-    <path d="M230 315 H295" stroke="#c2410c" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
-    <path d="M936 315 H962" stroke="#c2410c" stroke-width="4" stroke-linecap="round" marker-end="url(#arrow)"/>
-
-    <g transform="translate(264 492)">
-      <rect width="190" height="38" rx="19" fill="#fbf6ee" stroke="#e2d9c9"/>
-      <circle cx="23" cy="19" r="6" fill="#c2410c"/>
-      <text x="39" y="24" fill="#1a1613" font-size="12" font-weight="700" letter-spacing="0.6">BOUNDED QUEUES</text>
-    </g>
-    <g transform="translate(474 492)">
-      <rect width="210" height="38" rx="19" fill="#fbf6ee" stroke="#e2d9c9"/>
-      <circle cx="23" cy="19" r="6" fill="#d9703f"/>
-      <text x="39" y="24" fill="#1a1613" font-size="12" font-weight="700" letter-spacing="0.6">PER-STAGE ISOLATION</text>
-    </g>
-    <g transform="translate(704 492)">
-      <rect width="232" height="38" rx="19" fill="#fbf6ee" stroke="#e2d9c9"/>
-      <circle cx="23" cy="19" r="6" fill="#ecb392" stroke="#a1350a"/>
-      <text x="39" y="24" fill="#1a1613" font-size="12" font-weight="700" letter-spacing="0.6">BETWEEN-MESSAGE SWAP</text>
+    <!-- legend -->
+    <g font-size="14" font-weight="600" fill="#1a1613">
+      <use href="#queue" x="48" y="590" transform="translate(48 590) scale(0.6) translate(-48 -590)"/>
+      <text x="80" y="609">bounded queue: wait, drop or dead-letter when full</text>
+      <rect x="470" y="592" width="24" height="20" rx="5" fill="#fbf6ee" stroke="#c2410c" stroke-width="2.5"/>
+      <text x="504" y="609">sandboxed Wasm stage</text>
+      <rect x="690" y="592" width="24" height="20" rx="5" fill="#ffffff" stroke="#e2d9c9" stroke-width="2"/>
+      <text x="724" y="609">trusted native code</text>
     </g>
   </g>
 </svg>

@@ -6,7 +6,7 @@
 
 ## Context
 
-The RQ1 and RQ3 latency numbers come from two recording paths:
+The performance and hot-swap latency numbers come from two recording paths:
 
 - the external MQTT path, where `wafer-loadgen publish` offers messages to a
   broker, the pipeline under test consumes and republishes them, and

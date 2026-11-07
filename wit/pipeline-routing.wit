@@ -6,7 +6,7 @@ package wafer:pipeline@0.1.0;
 // Returning port names only (not transformed messages) enables zero-copy
 // routing — the host clones borrow handles for each destination.
 //
-// Amendment A1 (Session 3): Merge is implicit host topology.
+// Amendment A1: Merge is implicit host topology.
 //
 // See docs/rfcs/RFC-001-wit-contracts.md D3.
 

@@ -1,7 +1,7 @@
 # RFC-009: Implementation Architecture — Module Structure & Crate Boundaries
 
 - **Status:** Implemented
-- **Original session date:** 2026-07-12
+- **Date:** 2026-07-12
 - **Amends:** —
 - **Amended by:** —
 
@@ -37,11 +37,11 @@
 
 ## Abstract
 
-This RFC defines the physical code structure that maps the eight Phase 0 design sessions into Rust workspace crates and modules. The workspace splits into seven host crates (`wafer-types`, `wafer-config`, `wafer-core`, `wafer-runtime`, `wafer-loadgen`, `waferctl`, `wafer-plugin`) with a strict one-way dependency graph, plus a separate `plugins/` workspace targeting `wasm32-wasip2`. Each crate has a clear responsibility boundary: `wafer-types` carries passive domain vocabulary with zero heavy dependencies, `wafer-config` owns parsing and DAG validation, `wafer-core` owns all runtime behavior (engine, orchestrator, runner loops, nodes, metrics, HTTP API), and `wafer-plugin` is the standalone guest SDK. This separation yields sub-2-second incremental compiles for config schema changes without rebuilding wasmtime, and enables three levels of testing (unit, plugin integration via `PluginTestHarness`, and E2E via `ChannelSource` / `ChannelSink`) plus criterion benchmarks. The evaluation harness (`eval/` + `wafer-loadgen`) lives alongside the runtime for measurement without coupling to it.
+This RFC defines the physical code structure that maps the eight Phase 0 design RFCs into Rust workspace crates and modules. The workspace splits into seven host crates (`wafer-types`, `wafer-config`, `wafer-core`, `wafer-runtime`, `wafer-loadgen`, `waferctl`, `wafer-plugin`) with a strict one-way dependency graph, plus a separate `plugins/` workspace targeting `wasm32-wasip2`. Each crate has a clear responsibility boundary: `wafer-types` carries passive domain vocabulary with zero heavy dependencies, `wafer-config` owns parsing and DAG validation, `wafer-core` owns all runtime behavior (engine, orchestrator, runner loops, nodes, metrics, HTTP API), and `wafer-plugin` is the standalone guest SDK. This separation yields sub-2-second incremental compiles for config schema changes without rebuilding wasmtime, and enables three levels of testing (unit, plugin integration via `PluginTestHarness`, and E2E via `ChannelSource` / `ChannelSink`) plus criterion benchmarks. The evaluation harness (`eval/` + `wafer-loadgen`) lives alongside the runtime for measurement without coupling to it.
 
 ## Context
 
-WAFER's Phase 0 produced eight design sessions covering WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, and evaluation harness. Each session specified *what* the architecture should be; this document specifies *where* each piece lives in code — which crate, which module, which file.
+WAFER's Phase 0 produced eight design RFCs covering WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, and evaluation harness. Each RFC specified *what* the architecture should be; this document specifies *where* each piece lives in code — which crate, which module, which file.
 
 The existing codebase (pre-refactor) had all logic in a single `wafer-core` crate with config data structures, parsing, DAG construction, wasmtime-heavy engine code, and test utilities all interleaved. This created 20+ second incremental builds for any config change (because wasmtime recompiles) and made it impossible to test config validation without linking the full runtime.
 

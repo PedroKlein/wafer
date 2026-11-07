@@ -43,7 +43,7 @@
 package main
 
 import (
-	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/wafer/pipeline/types"
+	"github.com/ComputerNetworks-UFRGS/wafer/plugins/go/uppercase/gen/wafer/pipeline/types"
 )
 
 // releaseInputBorrow releases the borrow<buffer> handle the host passed in

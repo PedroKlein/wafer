@@ -15,7 +15,7 @@ authors:
     family-names: Klein
     email: pedroklein1@hotmail.com
     affiliation: "Universidade Federal do Rio Grande do Sul (UFRGS)"
-repository-code: "https://github.com/PedroKlein/wafer"
+repository-code: "https://github.com/ComputerNetworks-UFRGS/wafer"
 license: MIT
 keywords:
   - WebAssembly

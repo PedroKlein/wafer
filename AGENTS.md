@@ -2,23 +2,15 @@
 
 ## Thesis Context
 
-This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFRGS). The research design, evaluation methodology, and thesis framing live in a sibling repo.
+This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFRGS).
 
 | What you need | Where to find it |
 |---------------|------------------|
 | **What to build next** | GitHub issues. `ROADMAP.md` gives the longer-horizon narrative. |
 | **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) |
-| **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
-| **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology), `eval/canonical-matrix.json` (the executable schedule and host profiles), `docs/eval/experiment-runbook.md` (operator steps), `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
-| **Evaluation numbers** | The evaluation is finished. Final results come only from the batches approved in `eval/final-batches.json` and are reported in the thesis (`tcc-doc`, TG2 Chapter 8). Every number under `docs/benchmarks/` or `docs/history/` is a pre-final diagnostic; never quote one as a result. |
-| **RQs and pass/fail criteria** | `tcc-doc/research/analysis/thesis-statement-v3.md` |
-| **Pipeline topologies to implement** | `tcc-doc/context/use-cases.md` |
-| **Old RQ4/5/6 references** | `tcc-doc/RQ-VERSION-MAP.md` (they map to current RQ1–3) |
-| **Literature on a topic** | Obsidian vault `TCC/papers/` |
-
-**Sibling repos:**
-- `github.com/PedroKlein/tcc-doc` — research, evaluation plan, thesis writing
-- `github.com/PedroKlein/obsidian-personal` — knowledge base (notes under `TCC/`)
+| **How experiments should run** | `eval/canonical-matrix.json` (the executable schedule and host profiles), `docs/eval/experiment-runbook.md` (operator steps), `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
+| **Evaluation numbers** | The evaluation is finished. Final results come only from the batches approved in `eval/final-batches.json` and are reported in the thesis. Never quote a diagnostic number as a result. |
+| **RQs and pass/fail criteria** | `verdict_rules` in `eval/canonical-matrix.json` and `docs/requirements/non-functional.md` |
 
 **Key framing:** The runtime IS the contribution (not just hot-swap). RQ1=Performance, RQ2=Isolation, RQ3=Hot-swap.
 
@@ -83,15 +75,15 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 ## Documentation Map
 
-When you need deeper context on any aspect of the project, consult these files. The `docs/` tree follows an arc42-lite layout: architecture views, RFCs, ADRs, interfaces, operations guides, evaluation runbooks and status reports. `docs/history/` is an archive: every file there opens with an "Archived, not current" banner, and nothing in it describes the runtime or the evaluation as they are today. Each entry includes a summary so you know what to expect before reading. If documentation and implementation disagree, trust the source code, WIT files under `wit/`, and `docs/status/implementation-gaps.md`.
+When you need deeper context on any aspect of the project, consult these files. The `docs/` tree follows an arc42-lite layout: architecture views, RFCs, ADRs, interfaces, operations guides, evaluation runbooks and status reports. Each entry includes a summary so you know what to expect before reading. If documentation and implementation disagree, trust the source code, WIT files under `wit/`, and `docs/status/implementation-gaps.md`.
 
 ### Status & Evaluation
 
 | Document | Summary |
 |----------|---------|
 | `docs/status/implementation-status.md` | Current implementation state — what's built, what's tested, per-plugin coverage. |
-| `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID. Only A20 is open; closed entries are archived. **Consult before assuming code matches docs.** |
-| `docs/benchmarks/README.md` | Current benchmark reference pages. The shakedown pages are archived under `docs/history/benchmarks/`. |
+| `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID. Only A20 is open. **Consult before assuming code matches docs.** |
+| `docs/benchmarks/README.md` | Benchmark reference pages. |
 | `docs/benchmarks/hot-swap.md` | Hot-swap phases and the E-Swap experiment definitions. |
 | `docs/benchmarks/ekuiper-comparator.md` | Native eKuiper 2.1.5 comparator: install, Pipeline A, run procedure and the E-Swap-3 rule changes. |
 | `docs/eval/experiment-runbook.md` | **Operator runbook** for running a batch: gates, diagnostic batch, launch, resume, approval, analysis. |
@@ -100,10 +92,6 @@ When you need deeper context on any aspect of the project, consult these files. 
 | `eval/canonical-matrix.json` | **Executable source** of the evaluation: experiments, repetitions, rates, host profiles, verdict thresholds. |
 | `eval/final-batches.json` | The approved final batch of each host. |
 | `eval/RESULT-CONTRACT.md` | **Authoritative shape** of every result directory under `eval/results/`. Every notebook and the result verifier assume this contract. |
-
-### Archive
-
-`docs/history/` holds archived plans (`plans/`), the pre-final readiness and progress logs and the closed gap entries (`status/`), the shakedown benchmark pages (`benchmarks/`) and the Phase 0 session recipes (`workflows/`). Read them only for background; see `docs/history/README.md`.
 
 ### Design & Specification
 

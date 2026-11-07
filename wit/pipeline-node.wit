@@ -6,9 +6,9 @@ package wafer:pipeline@0.1.0;
 //   1. The lifecycle interface (validate → init → process loop → close).
 //   2. Exactly one processing interface (transform, filter, or router).
 //
-// Amendment A2 (Session 3): Transform returns result<output-message, process-error>
+// Amendment A2: Transform returns result<output-message, process-error>
 // directly — no process-outcome wrapper. Filter is a distinct interface.
-// Amendment A1 (Session 3): Merge is implicit host topology — no merge WIT interface.
+// Amendment A1: Merge is implicit host topology — no merge WIT interface.
 //
 // See docs/rfcs/RFC-001-wit-contracts.md.
 

@@ -83,7 +83,7 @@ Each node loop owns an `ErrorPolicyExecutor` struct (not shared across nodes). T
 
 - **Positive: Bounded retry buffer prevents memory growth.** `retry_buffer_capacity` (default 1000) caps the VecDeque. When full, new retries go directly to DLQ with reason `RetryBufferFull`. Combined with capped backoff (30 s), the worst-case memory per node is bounded and predictable on edge hardware.
 
-- **Positive: DLQ envelope carries full replay context.** The `DlqEnvelope` struct includes: timestamp, source node, error category, error message, retry count, reason enum (`BadInput`, `RetriesExhausted`, `RetryBufferFull`, `HotSwapDrain`, `Shutdown`, `QueueFull`, `RecoveryFailed`), original payload, and lineage (`trace_id`, `parent_id`). This enables offline replay and message accounting for the thesis evaluation (RQ3b zero-loss verification).
+- **Positive: DLQ envelope carries full replay context.** The `DlqEnvelope` struct includes: timestamp, source node, error category, error message, retry count, reason enum (`BadInput`, `RetriesExhausted`, `RetryBufferFull`, `HotSwapDrain`, `Shutdown`, `QueueFull`, `RecoveryFailed`), original payload, and lineage (`trace_id`, `parent_id`). This enables offline replay and message accounting, which the evaluation uses to check that a hot swap loses no message.
 
 - **Negative / trade-off: Per-node retry buffer adds memory overhead.** Each Wasm node loop allocates a `VecDeque` that can grow up to `retry_buffer_capacity` entries. On a 10-node pipeline with 1000 capacity, worst case is 10×1000 envelopes in retry buffers simultaneously. Acceptable on target hardware (RPi 4 with 4 GB RAM) but requires monitoring via `NodeMetrics`.
 

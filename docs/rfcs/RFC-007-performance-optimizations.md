@@ -1,7 +1,7 @@
 # RFC-007: Performance Optimizations
 
 - **Status:** Partially implemented — the compiled-component cache runs memory-only (its disk tier is not wired into runtime startup) and plugins compile sequentially (Decision 10 is not implemented); the epoch ticker, code-quality optimizations, per-type fuel, and `StoreLimits` are wired in the launcher, and criterion benchmarks run against the production Wasm path.
-- **Original session date:** 2026-07-12
+- **Date:** 2026-07-12
 - **Amends:** RFC-002 (WaferState gains `limits: StoreLimits` field), RFC-004 (`[engine]` section gains fuel/epoch toggles)
 
 > **Implementation notes.** The compiled-component cache implementation exists,
@@ -26,11 +26,11 @@ This RFC establishes a performance optimization strategy for WAFER's thesis eval
 
 ## Context
 
-With the complete runtime architecture designed in Sessions 1–6, this session decided which performance optimizations to implement before the thesis evaluation and which to defer. The key constraint was maximizing evaluation quality without over-optimizing before measuring.
+With the complete runtime architecture designed in RFC-001 to RFC-006, this RFC decides which performance optimizations to implement before the thesis evaluation and which to defer. The key constraint was maximizing evaluation quality without over-optimizing before measuring.
 
-The post-refactor baseline already incorporates substantial performance decisions from prior sessions: `Bytes` payload with refcount-bump clone (~5ns), `Arc<EnvelopeHeader>` (~5ns clone), persistent Store per node (~77ns per-message overhead), `InstancePre` for hot-swap (~5µs instantiation), `borrow<buffer>` for zero-copy inspection, direct tokio mpsc channels (~100ns send+recv), and a typed nop call boundary measured at ~27ns on x86 (~50-80ns estimated on ARM64).
+The post-refactor baseline already incorporates substantial performance decisions from earlier RFCs: `Bytes` payload with refcount-bump clone (~5ns), `Arc<EnvelopeHeader>` (~5ns clone), persistent Store per node (~77ns per-message overhead), `InstancePre` for hot-swap (~5µs instantiation), `borrow<buffer>` for zero-copy inspection, direct tokio mpsc channels (~100ns send+recv), and a typed nop call boundary measured at ~27ns on x86 (~50-80ns estimated on ARM64).
 
-When this RFC was written (July 2026), the RQ1 targets were <50µs per WIT boundary crossing on RPi 4 and within 30% of eKuiper throughput (~12K msg/s on RPi 3B+); the current criteria and the Raspberry Pi 5 host are defined in `tcc-doc/research/analysis/thesis-statement-v3.md`. RQ2 requires per-node memory containment for attack scenario S4. RQ3 benefits from faster hot-swap preparation via AOT cache (compilation drops from ~30ms to ~1-2ms on RPi 4).
+When this RFC was written (July 2026), the RQ1 targets were <50µs per WIT boundary crossing on RPi 4 and within 30% of eKuiper throughput (~12K msg/s on RPi 3B+); the current criteria and the Raspberry Pi 5 host are defined in `verdict_rules` in `eval/canonical-matrix.json`. RQ2 requires per-node memory containment for attack scenario S4. RQ3 benefits from faster hot-swap preparation via AOT cache (compilation drops from ~30ms to ~1-2ms on RPi 4).
 
 ## Decisions
 

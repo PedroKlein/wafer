@@ -207,7 +207,7 @@ if [ ! -f "$wasm_path" ]; then
   exit 1
 fi
 pkg_name=$(echo "$name" | tr '-' '_')
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+registry=${WAFER_REGISTRY:-ghcr.io/computernetworks-ufrgs}
 ref="$registry/wafer-${pkg_name}:$version"
 echo "Publishing $wasm_path to $ref"
 wkg oci push "$ref" "$wasm_path"
@@ -237,7 +237,7 @@ if [ ! -f "$wasm_path" ]; then
   exit 1
 fi
 pkg_name=$(echo "$name" | tr '-' '_')
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+registry=${WAFER_REGISTRY:-ghcr.io/computernetworks-ufrgs}
 ref="$registry/wafer-${pkg_name}:$version"
 echo "Publishing $wasm_path to $ref"
 wkg oci push -u "$username" -p "$token" "$ref" "$wasm_path"
@@ -256,7 +256,7 @@ if [ $# -ne 1 ]; then
 fi
 version=$1
 plugins=(pass-through uppercase threshold-filter json-parse tensor-prep result-format)
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+registry=${WAFER_REGISTRY:-ghcr.io/computernetworks-ufrgs}
 for name in "${plugins[@]}"; do
   wasm_dir="$name/target/wasm32-wasip2/release"
   if [ -d "$wasm_dir" ] && ls "$wasm_dir"/*.wasm >/dev/null 2>&1; then
@@ -283,7 +283,7 @@ fi
 name=$1
 version=$2
 pkg_name=$(echo "$name" | tr '-' '_')
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+registry=${WAFER_REGISTRY:-ghcr.io/computernetworks-ufrgs}
 ref="$registry/wafer-${pkg_name}:$version"
 output="../downloads/${pkg_name}-${version}.wasm"
 mkdir -p ../downloads
@@ -308,7 +308,7 @@ token=$2
 name=$3
 version=$4
 pkg_name=$(echo "$name" | tr '-' '_')
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+registry=${WAFER_REGISTRY:-ghcr.io/computernetworks-ufrgs}
 ref="$registry/wafer-${pkg_name}:$version"
 output="../downloads/${pkg_name}-${version}.wasm"
 mkdir -p ../downloads

@@ -1,7 +1,7 @@
 # RFC-001: WIT Contracts & Envelope Design
 
 - **Status:** Implemented
-- **Original session date:** 2026-07-05
+- **Date:** 2026-07-05
 - **Amended by:** RFC-003 (§A1 removes Joiner world; §A2 replaces `process-outcome` wrapper with direct `result<output-message, process-error>` return)
 
 > **Current release amendment.** The five project files under `wit/` now form
@@ -29,7 +29,7 @@ WAFER was transitioning from a single-package MVP (`pipeline:transform@0.1.0`) t
 
 Key constraints were: UC1 payloads of 100B–1KB JSON, UC2 payloads of 784B (MNIST digits), all plugins rebuilt from scratch (breaking changes acceptable), and a 4GB memory budget on the primary evaluation hardware (Raspberry Pi 4).
 
-The session surveyed nine source-code-analyzed systems (Torvyn, Wick, Flow-Like, Wassette, Azure IoT, Fluvio, eKuiper, Tremor, Spin) and drew on dataflow process network theory (Lee & Parks 1995) for actor semantics, token self-containment, and firing rules.
+The design surveyed nine source-code-analyzed systems (Torvyn, Wick, Flow-Like, Wassette, Azure IoT, Fluvio, eKuiper, Tremor, Spin) and drew on dataflow process network theory (Lee & Parks 1995) for actor semantics, token self-containment, and firing rules.
 
 ## Decisions
 

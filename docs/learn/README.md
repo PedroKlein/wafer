@@ -1,6 +1,6 @@
 # Learn WAFER from the source
 
-This guide is for someone opening the WAFER code for the first time: a thesis reader, a committee member, or a new contributor. It is a map for reading the Rust source, not a second reference. Each page follows one part of the system through the real files, with short excerpts copied from them, and ends with a few questions to check your understanding.
+This guide is for someone opening the WAFER code for the first time: a researcher checking the evaluation, or a new contributor. It is a map for reading the Rust source, not a second reference. Each page follows one part of the system through the real files, with short excerpts copied from them, and ends with a few questions to check your understanding.
 
 WAFER is a Rust workspace. The `wafer` binary loads a TOML pipeline, validates it, and hands it to the `wafer-core` library, which connects nodes with bounded Tokio channels and runs one task per node. Sources and sinks are native Rust adapters. Transform, Filter, and Router nodes are WebAssembly components called through Wasmtime and the Component Model.
 

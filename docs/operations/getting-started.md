@@ -15,7 +15,7 @@ You need:
 ## 1. Get the code
 
 ```bash
-git clone https://github.com/PedroKlein/wafer.git
+git clone https://github.com/ComputerNetworks-UFRGS/wafer.git
 cd wafer
 cargo --version
 ```

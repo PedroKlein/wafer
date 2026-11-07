@@ -1,6 +1,6 @@
 # Solution Strategy
 
-WAFER's central thesis is that the WebAssembly Component Model can deliver
+WAFER's central claim is that the WebAssembly Component Model can deliver
 per-stage fault isolation on edge hardware without prohibitive overhead. The
 strategy is to push *only* user-supplied processing logic through the Wasm
 boundary and keep everything else in native Rust. This keeps Wasm's costs

@@ -68,7 +68,7 @@ on sub-8GB gateway hardware.
 
 ## Research Questions (v3 — CURRENT)
 
-| RQ | Question | Criterion (summary; authority is `tcc-doc/research/analysis/thesis-statement-v3.md`) |
+| RQ | Question | Criterion (summary; authority is `verdict_rules` in `eval/canonical-matrix.json`) |
 |----|----------|----------------|
 | **RQ1** | What is the performance cost of typed Wasm boundaries on edge hardware? | At 1,000 msg/s: median WAFER p95 / median eKuiper p95 <= 2.0, pooled loss <= 1%, mean achieved/offered >= 0.99. Capacity: WAFER tested-grid delivery ceiling >= 0.70x eKuiper's across the bracketed ratio interval, or `CENSORED`. Per-hop cost is reported against a 50 µs reference, not passed or failed |
 | **RQ2** | Do per-stage sandboxes contain faults without pipeline-wide failure? | Each E-Iso-1..6 attack traps or is denied by the expected mechanism without a host-runtime panic; E-Iso-7: median branch-A throughput drop below 1% of control (one-sided bound) and no stopped runs; trap recovery (E-Iso-8) is measured at run level |
@@ -214,7 +214,7 @@ on ≤4GB ARM.
 
 ## Reference Documents
 
-Paths are relative to the workspace root (`~/Dev/github.com/PedroKlein/`).
+Paths are relative to the repository root.
 Do NOT load all references at once — each is 5,000–15,000 words. Load only the
 one directly relevant to the current task.
 
@@ -223,17 +223,13 @@ or ADRs for *why*.
 
 | Need | Read |
 |------|------|
-| Architecture overview | `wafer/main/docs/architecture/` |
-| Implementation status | `wafer/main/docs/status/implementation-status.md` |
-| WIT contract reference | `wafer/main/docs/interfaces/wit-contracts.md` |
-| HTTP API reference | `wafer/main/docs/interfaces/http-api.md` |
-| Config schema reference | `wafer/main/docs/interfaces/config-schema.md` |
-| RFC archive (design decisions) | `wafer/main/docs/rfcs/` |
-| Architecture Decision Records | `wafer/main/docs/adr/` |
-| Ground-truth WIT contracts | `wafer/main/wit/*.wit` (one `wafer:pipeline@0.1.0` package) |
-| Current thesis statement & RQs | `tcc-doc/main/research/analysis/thesis-statement-v3.md` |
-| Evaluation plan (experiments, stats, threats) | `tcc-doc/main/research/analysis/evaluation-plan.md` |
-| Comparator positioning matrix | `tcc-doc/main/research/analysis/positioning-matrix.md` |
-| Use cases with trade-offs | `tcc-doc/main/context/use-cases.md` |
-| Literature and claim authority | `tcc-doc/main/SOURCES-OF-TRUTH.md` |
-| Similar systems deep search | `tcc-doc/main/findings/similar-systems-2025-2026.md` |
+| Architecture overview | `docs/architecture/` |
+| Implementation status | `docs/status/implementation-status.md` |
+| WIT contract reference | `docs/interfaces/wit-contracts.md` |
+| HTTP API reference | `docs/interfaces/http-api.md` |
+| Config schema reference | `docs/interfaces/config-schema.md` |
+| RFC archive (design decisions) | `docs/rfcs/` |
+| Architecture Decision Records | `docs/adr/` |
+| Ground-truth WIT contracts | `wit/*.wit` (one `wafer:pipeline@0.1.0` package) |
+| Evaluation schedule and criteria | `eval/canonical-matrix.json` |
+| Comparators | `docs/architecture/09-comparators.md` |

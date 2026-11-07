@@ -46,7 +46,7 @@ Output remains `list<u8>` on `output-message`: the component owns the bytes it p
 
 ## See Also
 
-- [RFC-001](../rfcs/RFC-001-wit-contracts.md) — the full WIT contract design session; Decision 7 specifies the asymmetric payload boundary.
+- [RFC-001](../rfcs/RFC-001-wit-contracts.md) — the full WIT contract design; Decision 7 specifies the asymmetric payload boundary.
 - [RFC-002](../rfcs/RFC-002-host-runtime.md) — defines `RuntimeEnvelope` with `Bytes` payload on the host side.
 - [RFC-003](../rfcs/RFC-003-node-types.md) — §A3 amends the envelope to `Arc<EnvelopeHeader> + Bytes`, enabling the near-free clone that makes borrow-only forwarding viable.
 - `wit/pipeline-types.wit` — the `buffer` resource definition with `size`, `read`, `read-all` methods.

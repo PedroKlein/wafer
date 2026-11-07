@@ -1,7 +1,7 @@
 # RFC-008: Evaluation harness design
 
 - **Status:** Implemented
-- **Original session date:** 2026-07-12
+- **Date:** 2026-07-12
 - **Final-method amendment:** 2026-09-04
 - **Depends on:** RFC-001 through RFC-007
 
@@ -190,7 +190,7 @@ The following text is the earlier decision or diagnostic record. It is preserved
 # RFC-008: Evaluation Harness Design
 
 - **Status:** Implemented — production-path harness. RQ1/RQ3 benchmarks measure the real Wasm path (A15 closed 2026-07-20; A16 closed 2026-07-22; A17 closed 2026-08-02 with post-verify polish; A18 closed 2026-08-01; A19 closed 2026-08-02). Only residual gap at time of writing: **A20** (Prometheus `wafer_hot_swap_rollbacks_total` counter, observability follow-up, not blocking thesis) — see [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
-- **Original session date:** 2026-07-12
+- **Date:** 2026-07-12
 - **Depends on:** RFC-001 through RFC-007 (all prior architecture decisions)
 
 > **Historical caveat (resolved).** Earlier revisions of this RFC warned
@@ -208,9 +208,9 @@ This RFC designs the measurement infrastructure for WAFER's thesis evaluation: 2
 
 ## Context
 
-With the complete runtime architecture designed and optimized (Sessions 1–7), this session designs the evaluation harness — the measurement infrastructure that connects the runtime to the thesis evaluation plan. The harness must satisfy 22 experiments across 3 RQs with statistical rigor: N≥30, open-loop load generation, HdrHistogram recording, and warmup exclusion. Reproducibility is mandatory — any figure must be regenerable from published scripts and configs. The observer effect must remain below 0.1%.
+With the complete runtime architecture designed and optimized (RFC-001 to RFC-007), this RFC designs the evaluation harness — the measurement infrastructure that connects the runtime to the thesis evaluation plan. The harness must satisfy 22 experiments across 3 RQs with statistical rigor: N≥30, open-loop load generation, HdrHistogram recording, and warmup exclusion. Reproducibility is mandatory — any figure must be regenerable from published scripts and configs. The observer effect must remain below 0.1%.
 
-Key constraints from prior sessions include: 4 metering configurations (Session 7 D6), a dormant compiled-component cache design (Session 7 D1), StoreLimits per node type (Session 7 D9), unconditional `NodeMetrics` with AtomicU64 counters (Session 5 D10), the 3-layer baseline stack (Session 5 D13), and the TestPipeline E2E builder (Session 6 D6).
+Key constraints from earlier RFCs include: 4 metering configurations (RFC-007 D6), a dormant compiled-component cache design (RFC-007 D1), StoreLimits per node type (RFC-007 D9), unconditional `NodeMetrics` with AtomicU64 counters (RFC-005 D10), the 3-layer baseline stack (RFC-005 D13), and the TestPipeline E2E builder (RFC-006 D6).
 
 The measurement infrastructure IS the pipeline — just with special source/sink adapters. No mocks, no separate benchmark binary, no observer effect >0.1%.
 
@@ -337,6 +337,6 @@ Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1
 
 ### Amendments to prior RFCs noted in source
 
-- Session 5 (RFC-005) D3 node loop gains a `ProcessNode` trait abstraction (Decision 5 here).
-- Session 6 (RFC-006) D6 `TestPipeline` is generalized to a shared `PipelineBuilder` (Decision 15 here).
-- Session 7 (RFC-007) D8 "benchmark-first strategy" is fully specified by this RFC's Implementation Priority section (~28 hours total).
+- RFC-005 D3 node loop gains a `ProcessNode` trait abstraction (Decision 5 here).
+- RFC-006 D6 `TestPipeline` is generalized to a shared `PipelineBuilder` (Decision 15 here).
+- RFC-007 D8 "benchmark-first strategy" is fully specified by this RFC's Implementation Priority section (~28 hours total).
