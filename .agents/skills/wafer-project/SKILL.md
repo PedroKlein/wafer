@@ -214,7 +214,7 @@ on ≤4GB ARM.
 
 ## Reference Documents
 
-Paths are relative to the workspace root (`~/Dev/github.com/PedroKlein/`).
+Paths are relative to the workspace root (the directory that holds the `wafer` and `tcc-doc` checkouts).
 Do NOT load all references at once — each is 5,000–15,000 words. Load only the
 one directly relevant to the current task.
 

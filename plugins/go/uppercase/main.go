@@ -9,9 +9,9 @@ import (
 
 	"go.bytecodealliance.org/cm"
 
-	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/wafer/pipeline/lifecycle"
-	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/wafer/pipeline/transform"
-	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/wafer/pipeline/types"
+	"github.com/ComputerNetworks-UFRGS/wafer/plugins/go/uppercase/gen/wafer/pipeline/lifecycle"
+	"github.com/ComputerNetworks-UFRGS/wafer/plugins/go/uppercase/gen/wafer/pipeline/transform"
+	"github.com/ComputerNetworks-UFRGS/wafer/plugins/go/uppercase/gen/wafer/pipeline/types"
 )
 
 func init() {

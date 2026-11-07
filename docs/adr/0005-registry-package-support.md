@@ -44,7 +44,7 @@ configuration option. This works well for development but creates challenges for
 ### Direct OCI Image References
 
 Plugins are identified using standard OCI image references:
-- Format: `registry/repository:tag` (e.g., `ghcr.io/pedroklein/wafer-uppercase:0.0.1`)
+- Format: `registry/repository:tag` (e.g., `ghcr.io/computernetworks-ufrgs/wafer-uppercase:0.0.1`)
 - Same format used by Docker, Podman, and other container tools
 - No custom namespace mapping or version resolution complexity
 
@@ -65,7 +65,7 @@ plugin_path = "plugins/uppercase.wasm"
 id = "transform"
 node_type = "transform"
 [nodes.config]
-oci = "ghcr.io/pedroklein/wafer-uppercase:0.0.1"
+oci = "ghcr.io/computernetworks-ufrgs/wafer-uppercase:0.0.1"
 ```
 
 > **Note (amended):** The `plugin_path` / `oci` split shown above was superseded

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// OCI image reference (e.g., "ghcr.io/pedroklein/wafer-uppercase:0.0.1").
+/// OCI image reference (e.g., "ghcr.io/computernetworks-ufrgs/wafer-uppercase:0.0.1").
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OciReference {
     reference: String,
@@ -170,11 +170,12 @@ mod tests {
 
     #[test]
     fn test_oci_reference_parse() {
-        let oci = OciReference::parse("ghcr.io/pedroklein/wafer-uppercase:0.0.1").unwrap();
+        let oci =
+            OciReference::parse("ghcr.io/computernetworks-ufrgs/wafer-uppercase:0.0.1").unwrap();
         assert_eq!(oci.registry, "ghcr.io");
-        assert_eq!(oci.repository, "pedroklein/wafer-uppercase");
+        assert_eq!(oci.repository, "computernetworks-ufrgs/wafer-uppercase");
         assert_eq!(oci.tag, "0.0.1");
-        assert_eq!(oci.as_str(), "ghcr.io/pedroklein/wafer-uppercase:0.0.1");
+        assert_eq!(oci.as_str(), "ghcr.io/computernetworks-ufrgs/wafer-uppercase:0.0.1");
 
         let docker = OciReference::parse("docker.io/library/nginx:latest").unwrap();
         assert_eq!(docker.registry, "docker.io");
@@ -189,8 +190,9 @@ mod tests {
 
     #[test]
     fn test_oci_reference_display() {
-        let oci = OciReference::parse("ghcr.io/pedroklein/wafer-uppercase:1.0.0").unwrap();
-        assert_eq!(oci.to_string(), "ghcr.io/pedroklein/wafer-uppercase:1.0.0");
+        let oci =
+            OciReference::parse("ghcr.io/computernetworks-ufrgs/wafer-uppercase:1.0.0").unwrap();
+        assert_eq!(oci.to_string(), "ghcr.io/computernetworks-ufrgs/wafer-uppercase:1.0.0");
     }
 
     #[test]

@@ -8,7 +8,7 @@
 package lifecycle
 
 import (
-	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/wafer/pipeline/types"
+	"github.com/ComputerNetworks-UFRGS/wafer/plugins/go/uppercase/gen/wafer/pipeline/types"
 	"go.bytecodealliance.org/cm"
 )
 
