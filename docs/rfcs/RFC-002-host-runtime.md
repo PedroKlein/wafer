@@ -1,7 +1,7 @@
 # RFC-002: Host-Side Runtime Architecture
 
 - **Status:** Implemented
-- **Original session date:** 2026-07-06
+- **Date:** 2026-07-06
 - **Amends:** —
 - **Amended by:** RFC-003 (§A3 — envelope shape redesigned to `Arc<EnvelopeHeader>` + `Bytes` payload + `Lineage`); RFC-005 (§D6 — drain phase replaced with watch-channel between-messages hot-swap)
 
@@ -34,7 +34,7 @@ budget of <50µs per WIT boundary crossing.
 
 ## Context
 
-With WIT contracts decided (RFC-001 / Session 1), this session designed the host-side Rust implementation that realizes those contracts. Key inputs from RFC-001:
+With WIT contracts decided (RFC-001), this RFC designs the host-side Rust implementation that realizes those contracts. Key inputs from RFC-001:
 
 - Input uses `borrow<buffer>` resource (host memory, read-on-demand)
 - Output uses `list<u8>` (standard Canonical ABI lift)
@@ -43,7 +43,7 @@ With WIT contracts decided (RFC-001 / Session 1), this session designed the host
 - Filter forwarding via buffer reuse (zero-copy)
 - Hot-swap via drain-and-flip (messages in queues must survive)
 
-The session needed to decide concrete Rust types, the wasmtime embedding strategy (Store lifecycle, ResourceTable usage, InstancePre adoption), error policy schema, and prove that hot-swap interacts safely with the buffer resource design.
+The design needed to decide concrete Rust types, the wasmtime embedding strategy (Store lifecycle, ResourceTable usage, InstancePre adoption), error policy schema, and prove that hot-swap interacts safely with the buffer resource design.
 
 ## Decisions
 

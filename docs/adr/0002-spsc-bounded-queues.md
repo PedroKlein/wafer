@@ -39,7 +39,7 @@ The DAG runtime needs inter-node communication channels. Messages flow from upst
 ### Fan-in Problem
 
 > **Note (amended):** The original decision below assumed fan-in required explicit
-> Joiner nodes. RFC-003 §A1 (Session 3) removed the Joiner node type entirely;
+> Joiner nodes. RFC-003 §A1 removed the Joiner node type entirely;
 > fan-in is now implicit multi-producer topology (multiple upstream senders on
 > one `mpsc::Receiver`). See the [Amendment (2026-07-12) — mpsc after RFC-005](#amendment-2026-07-12--mpsc-after-rfc-005)
 > below for current behaviour.
@@ -119,14 +119,14 @@ This decision relates to the pre-refactor SPEC.md (retired) Section 18.2:
 
 ## Amendment (2026-07-12) — mpsc after RFC-005
 
-- **Amending decision**: [RFC-005 Orchestrator & Runtime Simplification](../rfcs/RFC-005-orchestrator.md), Session 5
+- **Amending decision**: [RFC-005 Orchestrator & Runtime Simplification](../rfcs/RFC-005-orchestrator.md)
 - **Nature of change**: Supersedes the SPSC framing; edges are now multi-producer single-consumer (mpsc)
 
 ### Context
 
-RFC-003 (Session 3) eliminated the Joiner node entirely — fan-in is expressed
+RFC-003 eliminated the Joiner node entirely — fan-in is expressed
 as multiple producers sharing the receiver's single `mpsc` channel end. RFC-005
-(Session 5) confirmed the runtime uses `tokio::sync::mpsc::channel` directly
+confirmed the runtime uses `tokio::sync::mpsc::channel` directly
 instead of the `BoundedQueue` wrapper that previously imposed SPSC semantics
 on top of the underlying mpsc primitive.
 

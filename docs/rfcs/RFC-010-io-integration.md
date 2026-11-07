@@ -1,7 +1,7 @@
 # RFC-010: I/O Integration & First End-to-End Pipeline
 
 - **Status:** Implemented
-- **Original session date:** 2026-07-15
+- **Date:** 2026-07-15
 - **Amends:** —
 - **Amended by:** —
 
@@ -13,7 +13,7 @@ This RFC defines how native I/O sources and sinks are wired into the new orchest
 
 Phase 3 delivered the structural runtime: per-type runner loops, error policy executor, Wasm node wrappers, builder with receiver-keyed queue wiring, and `NewPipelineOrchestrator` with JoinSet supervision (275 tests pass, 8 commits on main). However, the pipeline had never run end-to-end — the orchestrator's `spawn_bundles()` spawned placeholder tasks that immediately awaited cancellation. Sources and sinks existed as trait implementations but were not wired into the new builder/orchestrator flow.
 
-This phase was "first light": config → build → send N messages through real Wasm → verify all arrive at sink. The design had to comply with Session 5 D11 (graceful shutdown ordering: sources stop first, sinks drain last) and D12 (orchestrator retains only handles after spawn).
+This phase was "first light": config → build → send N messages through real Wasm → verify all arrive at sink. The design had to comply with RFC-005 D11 (graceful shutdown ordering: sources stop first, sinks drain last) and D12 (orchestrator retains only handles after spawn).
 
 ## Decisions
 

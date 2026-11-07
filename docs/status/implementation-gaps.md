@@ -4,10 +4,6 @@ This document lists every case where an RFC, ADR, or architecture chapter
 describes behavior that the current runtime does **not** implement. Each entry
 has a stable ID (A1, A2, …) that other docs cite. Do not renumber.
 
-The closed entries (A1–A19, A17-B and A21), as filed and with their closure
-notes, are archived in
-[implementation-gaps-closed.md](../history/status/implementation-gaps-closed.md).
-
 Current behavior is summarized in
 [`implementation-status.md`](implementation-status.md). A20 is the only open
 entry. Intermittent CUDA teardown after Jetson inference is a separate open

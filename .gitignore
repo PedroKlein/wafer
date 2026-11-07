@@ -118,5 +118,5 @@ debug
 # eval/ result trees — large generated artifacts.
 eval/results/*/
 
-# Notebook outputs (mise run //eval:figures); thesis copies live in tcc-doc
+# Notebook outputs (mise run //eval:figures)
 eval/analysis/figures/

@@ -1,7 +1,7 @@
 # RFC-004: Config File Schema & Pipeline UX
 
 - **Status:** Implemented
-- **Original session date:** 2026-07-06
+- **Date:** 2026-07-06
 - **Depends on:** RFC-001 (WIT contracts), RFC-002 (host runtime), RFC-003 (node type architecture)
 
 > **Current release amendment.** Runtime metering defaults are unlimited
@@ -27,13 +27,13 @@
 
 ## Abstract
 
-WAFER's pipeline configuration needed a complete redesign after Sessions 1–3 removed the Joiner node type, added Filter as a first-class node, introduced the error policy engine, and established fuel/epoch metering. This RFC replaces the array-based `[[nodes]]` schema with a map-keyed `[nodes.NAME]` structure, consolidates the dual `Config`/`DagConfig` types into a single `Config`, introduces a unified `plugin` field with OCI auto-detection, adds hierarchical error policy configuration (pipeline-level defaults with per-node overrides), defines edge topology without `to_port` (since Joiner was removed), and adopts two-phase validation with accumulated errors. The result is a seven-section TOML schema whose minimal viable config is seven lines.
+WAFER's pipeline configuration needed a complete redesign after RFC-001 to RFC-003 removed the Joiner node type, added Filter as a first-class node, introduced the error policy engine, and established fuel/epoch metering. This RFC replaces the array-based `[[nodes]]` schema with a map-keyed `[nodes.NAME]` structure, consolidates the dual `Config`/`DagConfig` types into a single `Config`, introduces a unified `plugin` field with OCI auto-detection, adds hierarchical error policy configuration (pipeline-level defaults with per-node overrides), defines edge topology without `to_port` (since Joiner was removed), and adopts two-phase validation with accumulated errors. The result is a seven-section TOML schema whose minimal viable config is seven lines.
 
 ## Context
 
-With WIT contracts (Session 1), host runtime (Session 2), and node type architecture (Session 3) decided, the pipeline configuration schema required redesign. The prior schema had `NodeType::Joiner` (removed in Session 3), no `NodeType::Filter` (added in Session 1), no error policy config (added in Session 2), untyped `toml::Value` for node config with no type safety, duplicate `Config`/`DagConfig` types, and string-based source/sink types without enum validation.
+With WIT contracts (RFC-001), host runtime (RFC-002), and node type architecture decided, the pipeline configuration schema required redesign. The prior schema had `NodeType::Joiner` (removed in RFC-003), no `NodeType::Filter` (added in RFC-001), no error policy config (added in RFC-002), untyped `toml::Value` for node config with no type safety, duplicate `Config`/`DagConfig` types, and string-based source/sink types without enum validation.
 
-This session redesigned the complete `pipeline.toml` schema to align with the new architecture: five node categories (Source, Sink, Transform, Filter, Router), implicit merge via multi-producer mpsc, per-node error policy override, fuel/epoch metering configuration, and capability-scoped sandbox settings.
+This RFC redesigns the complete `pipeline.toml` schema to align with the new architecture: five node categories (Source, Sink, Transform, Filter, Router), implicit merge via multi-producer mpsc, per-node error policy override, fuel/epoch metering configuration, and capability-scoped sandbox settings.
 
 ## Decisions
 
@@ -122,7 +122,7 @@ Per-node plugin configuration is a TOML table under `[nodes.X.config]`. At load 
 
 - **`[[nodes]]` array (existing schema)** — Rejected: doesn't prevent duplicate IDs at parse time; requires a separate `id` field; no compile-time exhaustive dispatch.
 - **Separate `plugin_path` and `plugin_ref` fields** — Rejected: mutual-exclusion validation adds complexity; a single `plugin` field with auto-detection is unambiguous (local paths never match `registry/repo:tag` format).
-- **Explicit Joiner/Merge node in config** — Rejected: Session 3 decided merge is implicit multi-producer mpsc with zero config; per-input-edge configuration is already handled by edge-level `capacity` and `overflow`.
+- **Explicit Joiner/Merge node in config** — Rejected: RFC-003 decided merge is implicit multi-producer mpsc with zero config; per-input-edge configuration is already handled by edge-level `capacity` and `overflow`.
 - **`from_port`/`to_port` on edges** — Rejected: only Router has named output ports, so a single `port` field (always the source port) suffices; `to_port` would only be needed for a Joiner which no longer exists.
 - **Separate `DagConfig` and `Config` types** — Rejected: historical artifact duplicating fields; a single `Config` with `Default` for sections not needed in tests is simpler.
 - **Fail-fast validation (first error stops)** — Rejected: accumulated errors provide better developer UX by showing all problems at once.

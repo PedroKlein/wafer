@@ -6,7 +6,7 @@
 
 ## Context
 
-Prior to Session 3 (RFC-003), WAFER had only Transform as a Wasm processing node. A transform that wanted to drop messages returned a "filter" variant from `process-outcome`, which meant every such node still took ownership of the envelope, allocated an output message, and then communicated "discard" through a return-type variant. This design conflated two semantically different operations — data transformation (produces new bytes) and predicate evaluation (inspects existing bytes, produces a boolean verdict). The host runtime could not distinguish the two, so it always paid the full ownership-transfer cost regardless of what the plugin actually needed.
+Before RFC-003, WAFER had only Transform as a Wasm processing node. A transform that wanted to drop messages returned a "filter" variant from `process-outcome`, which meant every such node still took ownership of the envelope, allocated an output message, and then communicated "discard" through a return-type variant. This design conflated two semantically different operations — data transformation (produces new bytes) and predicate evaluation (inspects existing bytes, produces a boolean verdict). The host runtime could not distinguish the two, so it always paid the full ownership-transfer cost regardless of what the plugin actually needed.
 
 The WIT contract in RFC-001 originally included `filter-node` as a separate world, but the host side lacked a distinct processing path. RFC-003 closed that gap by establishing Filter as a first-class node type with a dedicated borrow-only trait signature, an independent WIT interface, its own fuel budget tier, and an optimised host runner loop that forwards or drops with zero allocation.
 

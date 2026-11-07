@@ -10,7 +10,7 @@ by the code, the WIT files under `wit/`, and the
 
 ## Index
 
-| RFC | Title | Status | Session date |
+| RFC | Title | Status | Date |
 |-----|-------|--------|--------------|
 | [RFC-001](RFC-001-wit-contracts.md) | WIT Contracts & Envelope Design | Implemented | 2026-07-05 |
 | [RFC-002](RFC-002-host-runtime.md) | Host-Side Runtime Architecture | Implemented | 2026-07-06 |

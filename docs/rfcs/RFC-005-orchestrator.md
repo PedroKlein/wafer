@@ -1,7 +1,7 @@
 # RFC-005: Orchestrator & Runtime Simplification
 
 - **Status:** Implemented. The Prometheus rollback counter is not exported ([A20](../status/implementation-gaps.md)).
-- **Original session date:** 2026-07-12
+- **Date:** 2026-07-12
 - **Amends:** ADR-0003 (drain-and-flip → watch-channel between-messages)
 
 > **Implementation notes.** The watch-channel primitive is live and
@@ -50,9 +50,9 @@ This RFC redesigns the WAFER orchestrator — builder, queue wiring, runner loop
 
 ## Context
 
-With WIT contracts (Session 1), host runtime (Session 2), node type architecture (Session 3), and config schema (Session 4) decided, this session redesigns the orchestrator to match the new architecture.
+With WIT contracts (RFC-001), host runtime (RFC-002), node type architecture (RFC-003), and config schema decided, this RFC redesigns the orchestrator to match the new architecture.
 
-Key constraints from prior sessions that bound this design:
+Key constraints from earlier RFCs that bound this design:
 - `InstancePre<WaferState>` for fast instantiation (~5µs) (RFC-002 D9)
 - Persistent Store per node (RFC-002 D10)
 - Retry buffer: bounded `VecDeque<RetryEntry>` per node loop (RFC-002 D4)

@@ -92,24 +92,16 @@ docs/
 ├── benchmarks/           Measurement method and comparator setup (Reference)
 │   ├── README.md
 │   ├── hot-swap.md
-│   ├── ekuiper-comparator.md
-│   └── ekuiper-profile-diagnostic.md
-├── api/                  Machine-readable API artefacts
-│   ├── README.md
-│   ├── openapi.yaml
-│   └── bruno-collection/
-└── history/              Archive, not current: plans, pre-final status logs,
-                          closed gap entries, shakedown benchmark pages,
-                          Phase 0 session recipes
+│   └── ekuiper-comparator.md
+└── api/                  Machine-readable API artefacts
+    ├── README.md
+    ├── openapi.yaml
+    └── bruno-collection/
 ```
-
-Files under `history/` open with an "Archived, not current" banner. They
-explain how the project got here; they do not describe the runtime or the
-evaluation as they are today.
 
 ## Reader profiles
 
-- **Thesis reviewer**: read `architecture/00-vision.md`,
+- **Researcher**: read `architecture/00-vision.md`,
   `requirements/non-functional.md`, `architecture/09-comparators.md`,
   and skim `rfcs/README.md` for the amendments graph. To check a claim
   against the source, follow the numbered first-read order in

@@ -1,7 +1,7 @@
 # RFC-006: Plugin Rewrite & Guest SDK
 
 - **Status:** Implemented
-- **Original session date:** 2026-07-12
+- **Date:** 2026-07-12
 - **Amends:** —
 - **Amended by:** current release amendment (banner below)
 
@@ -37,7 +37,7 @@ WAFER's plugin-side developer experience needed a complete redesign to match the
 
 ## Context
 
-With the runtime architecture fully designed (Sessions 1–5 covering WIT contracts, host runtime, node types, config schema, and orchestrator), this session designed the plugin-side experience: how plugins are written, built, tested, and organized. The primary goals were:
+With the runtime architecture fully designed (RFC-001 to RFC-005 covering WIT contracts, host runtime, node types, config schema, and orchestrator), this RFC designs the plugin-side experience: how plugins are written, built, tested, and organized. The primary goals were:
 
 1. Rewrite all plugins to match new WIT contracts (3 worlds: transform/filter/router, plus inference variant)
 2. Design a guest SDK that makes correct plugin development ergonomic

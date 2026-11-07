@@ -1,7 +1,7 @@
 # RFC-003: Node Type Architecture
 
 - **Status:** Implemented
-- **Original session date:** 2026-07-06
+- **Date:** 2026-07-06
 - **Amends:** RFC-001 (§A1 removes Joiner world; §A2 Transform strict 1:1), RFC-002 (§A3 RuntimeEnvelope redesigned with Arc header)
 
 > **Current release amendment.** The config retains five node categories, while
@@ -28,7 +28,7 @@ This RFC designs the host-side node type system — the Rust types, traits, and 
 
 ## Context
 
-With WIT contracts (RFC-001) and host runtime architecture (RFC-002) decided, this session designed the node type system. Key inputs:
+With WIT contracts (RFC-001) and host runtime architecture (RFC-002) decided, this RFC designs the node type system. Key inputs:
 
 - **4 WIT worlds from RFC-001**: `transform-node`, `filter-node`, `router-node`, `joiner-node` (the last subsequently removed by this RFC)
 - **Task-per-node architecture** with bounded mpsc channels
@@ -37,7 +37,7 @@ With WIT contracts (RFC-001) and host runtime architecture (RFC-002) decided, th
 - **InstancePre** for hot-swap fast instantiation (RFC-002 §D9)
 - **Persistent Store per node** (RFC-002 §D10)
 
-The session also revisited the operator taxonomy from first principles, using evidence from Kafka Streams (merge ≠ join), Azure IoT Operations (concatenate is built-in topology), and Flink (`MapFunction` is strict 1:1). This produced amendments to RFC-001 and RFC-002.
+The design also revisited the operator taxonomy from first principles, using evidence from Kafka Streams (merge ≠ join), Azure IoT Operations (concatenate is built-in topology), and Flink (`MapFunction` is strict 1:1). This produced amendments to RFC-001 and RFC-002.
 
 ## Decisions
 
