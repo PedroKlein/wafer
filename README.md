@@ -37,7 +37,7 @@ without losing or duplicating any. We call that replacement a hot swap.
 
 | | |
 | --- | --- |
-| **Sandboxed stages** | Each stage has its own Wasmtime store and memory, and only the capabilities its configuration grants. Optional fuel, epoch and memory limits bound what a faulty stage can consume. |
+| **Sandboxed stages** | Each stage has its own Wasmtime store and memory, and only the capabilities its configuration grants. Memory limits, and optional fuel and epoch limits, bound what a faulty stage can consume. |
 | **Fault containment** | A stage that traps or returns an unrecoverable error is rebuilt from its compiled component while the other stages keep processing. The failed record goes to the dead-letter sink when one is configured. |
 | **Hot swap** | A new version is compiled and initialized in the background, then adopted between two records. The stage's queue, limits and permissions stay in place; its in-memory state does not carry over. If the new version fails to start, the old one keeps running. |
 | **Typed contracts** | One `wafer:pipeline` WIT package defines the Transform, Filter and Router roles and a capability-gated Inference world. The host checks every component against its role before it runs. |
