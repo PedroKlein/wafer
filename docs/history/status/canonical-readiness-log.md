@@ -2,7 +2,7 @@
 
 > **Archived, not current.** Per-experiment shakedown readiness log from before the final Raspberry Pi 5 method was frozen.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [canonical readiness](../../status/canonical-readiness.md).
+> paths or numbers. Current source: [implementation status](../../status/implementation-status.md).
 
 <!-- historical-diagnostic-file -->
 

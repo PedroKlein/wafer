@@ -2,7 +2,7 @@
 
 > **Archived, not current.** macOS shakedown RQ tables; no final verdict.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [canonical readiness](../../status/canonical-readiness.md).
+> paths or numbers. Current source: [implementation status](../../status/implementation-status.md).
 
 <!-- historical-diagnostic-file -->
 
@@ -13,7 +13,7 @@
 > thesis claims. Canonical numbers require Raspberry Pi 5 4 GB with CPU pinning,
 > isolated cores, 60-second runs, and proper Linux scheduling.
 >
-> See [`docs/status/canonical-readiness.md`](../../status/canonical-readiness.md)
+> See [implementation status](../../status/implementation-status.md)
 > for the per-experiment gap analysis.
 >
 > These are pre-fix diagnostic numbers. They predate latency measured from

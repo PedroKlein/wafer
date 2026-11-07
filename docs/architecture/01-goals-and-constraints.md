@@ -6,21 +6,21 @@
 
 WAFER (WebAssembly Flow Execution Runtime) is a single-process DAG pipeline runtime for edge IoT gateways. It composes pipeline stages as typed, sandboxed WebAssembly Component Model modules connected by bounded queues with backpressure.
 
-The evaluated contribution is the integration of typed DAG composition, per-stage fault isolation, and stateless live stage replacement on Linux gateways with at least 4 GB RAM. Performance, isolation, and hot-swap are evaluated as separate claim families.
+The evaluated contribution is the integration of typed DAG composition, per-stage fault isolation, and stateless hot swap of a stage on Linux gateways with at least 4 GB RAM. Performance, fault containment, and hot swap are evaluated as separate claim families.
 
-## Research questions
+## Evaluation questions
 
 The Raspberry Pi 5 4 GB decides every verdict. A Jetson Orin Nano (CPU only) and an x86-64 Linux host repeat the same experiments as replication strata. [Non-functional requirements](../requirements/non-functional.md) map each question to its experiments, [07. Quality requirements](07-quality-requirements.md) to the mechanisms that serve it, and `verdict_rules` in `eval/canonical-matrix.json` holds the thresholds.
 
-- **RQ1:** What is the performance cost of typed Wasm boundaries on edge hardware?
-- **RQ2:** Do per-stage sandboxes contain faults without pipeline-wide failure?
-- **RQ3:** What is the disruption cost of replacing a stage at runtime?
+- **Performance:** What is the performance cost of typed Wasm boundaries on edge hardware?
+- **Fault containment:** Do per-stage sandboxes contain faults without pipeline-wide failure?
+- **Hot swap:** What is the disruption cost of replacing a stage at runtime?
 
 ## Stakeholders
 
 | Stakeholder | Concern | Addressed by |
 |---|---|---|
-| **Thesis reader / evaluator** | Reproducible evidence for the three research questions | Evaluation harness, quantitative benchmarks, documented methodology |
+| **Researcher / evaluator** | Reproducible evidence for the three evaluation questions | Evaluation harness, quantitative benchmarks, documented methodology |
 | **Edge-gateway operator** | 24/7 uptime on constrained hardware with safe updates | Single-process deployment, hot-swap, bounded memory, DLQ for failures |
 | **Plugin author** | Ship logic in any Component-Model language without knowing the host | WIT-typed contracts, `wafer-plugin` guest SDK, per-node capability scoping |
 

@@ -129,11 +129,8 @@ evaluation as they are today.
   RFC(s) under `rfcs/`. Load the domain skills under
   `.agents/skills/` when editing code.
 
-## Cross-repository pointers
+## Contributing
 
-- `github.com/PedroKlein/tcc-doc`: thesis writing, evaluation plan
-  and RQ definitions.
-- `github.com/PedroKlein/obsidian-personal`: literature notes under
-  `TCC/`.
+- `CONTRIBUTING.md`: how to propose a change.
 - `AGENTS.md`: how humans and agents collaborate in this
   repository.

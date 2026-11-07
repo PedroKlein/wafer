@@ -16,9 +16,9 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 | **Old RQ4/5/6 references** | `tcc-doc/RQ-VERSION-MAP.md` (they map to current RQ1–3) |
 | **Literature on a topic** | Obsidian vault `TCC/papers/` |
 
-**Sibling repos:**
-- `github.com/PedroKlein/tcc-doc` — research, evaluation plan, thesis writing
-- `github.com/PedroKlein/obsidian-personal` — knowledge base (notes under `TCC/`)
+**Sibling repos** (private, available only to the author's checkouts):
+- `tcc-doc` — research, evaluation plan, thesis writing
+- the author's Obsidian vault — knowledge base (notes under `TCC/`)
 
 **Key framing:** The runtime IS the contribution (not just hot-swap). RQ1=Performance, RQ2=Isolation, RQ3=Hot-swap.
 

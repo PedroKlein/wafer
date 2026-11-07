@@ -38,7 +38,7 @@ header records them; this table is the complete list.
 | RFC-003 §A2 | RFC-001 | Transform return simplified from `result<process-outcome, process-error>` to `result<output-message, process-error>` — strict 1:1, no variant wrapper. |
 | RFC-003 §A3 | RFC-002 | `RuntimeEnvelope` redesigned to `{ header: Arc<EnvelopeHeader>, payload: Bytes, lineage: Lineage }` so clone is near-free (refcount bumps) for borrow-only nodes. |
 | RFC-005 §D6 | RFC-002, [ADR-0003](../adr/0003-hot-swap-mechanism.md) | Drain-and-flip 4-phase hot-swap replaced with a watch-channel between-messages model (`watch::Sender<Option<SwapPayload>>` per transform, filter and router node). Each runner checks the watch slot between messages and applies the payload before dequeuing the next message; the swap signal also wakes an idle runner. |
-| RFC-007 D9 | RFC-002 | Adds `limits: StoreLimits` to `WaferState` for per-node memory containment (RQ2 scenario S4). |
+| RFC-007 D9 | RFC-002 | Adds `limits: StoreLimits` to `WaferState` for per-node memory containment (the memory-exhaustion attack scenario). |
 | RFC-007 D6 | RFC-004 | Adds per-category `[engine.fuel]` budgets and makes fuel and epoch metering independently switchable for the four-way metering-overhead decomposition; each is off when its values are omitted (the proposed boolean toggles were not implemented). |
 | RFC-007 C1 | RFC-005 | Epoch ticker moves from `tokio::spawn` to a dedicated `std::thread::spawn` OS thread, which keeps firing under runtime saturation. |
 | RFC-008 D5 | RFC-005 | `ProcessNode` trait abstraction generalised so a native Rust baseline can share the orchestrator/channels code paths. |
@@ -53,7 +53,7 @@ header records them; this table is the complete list.
 3. **RFC-005**: how the orchestrator and hot-swap actually run.
 4. **RFC-006**: the guest-side plugin SDK and the plugin inventory.
 5. **RFC-007**: performance optimisations layered on top of the above.
-6. **RFC-008**: how we measure everything for the thesis evaluation.
+6. **RFC-008**: how the evaluation measures the runtime.
 7. **RFC-009**: the implementation architecture that bundles the above into
    the shipped crates.
 8. **RFC-010**: the I/O integration (MQTT / HTTP / file) that made

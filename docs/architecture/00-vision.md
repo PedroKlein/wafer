@@ -1,31 +1,31 @@
 # Vision
 
-WAFER (**W**eb**A**ssembly **F**low **E**xecution **R**untime) is a single-process DAG pipeline runtime for edge IoT gateways. Untrusted processing stages are sandboxed WebAssembly components connected by bounded, policy-aware queues. Filesystem access remains unavailable; stdio, environment, inference, and exact-destination outbound HTTP authority are granted explicitly. Inference is restricted to Wasm Transforms, while outbound HTTP is available to Wasm Transform, Filter, and Router nodes.
+WAFER (**W**eb**A**ssembly **F**low **E**xecution **R**untime) is a single-process pipeline runtime for IoT edge gateways, built on one idea: the stage is the unit of failure and update. The host owns everything that must outlive a stage, namely the pipeline graph, the bounded queue in front of each stage, and the connections to the outside. Each processing stage is a WebAssembly component in its own sandbox inside the host process. Filesystem access is never granted; stdio, environment, inference, and exact-destination outbound HTTP are granted per stage. Inference is restricted to Wasm Transforms, while outbound HTTP is available to Wasm Transform, Filter, and Router nodes.
 
 ## Problem
 
-Edge gateways sit between constrained sensors and cloud analytics. They must parse, filter, route, and enrich telemetry streams continuously. Existing approaches force a trade-off:
+Edge gateways sit between constrained sensors and cloud analytics. They parse, filter, route, and enrich telemetry continuously, and their stages often come from different vendors and change after deployment. A fault in one stage must not stop the gateway, and an operator must be able to change one stage while the rest keeps running. Existing approaches force a trade-off:
 
-- **Cloud-managed platforms** (Azure IoT Operations) use the same Wasm+WIT DAG model but require Kubernetes and ≥16 GB RAM — unsuitable for sub-8 GB gateways.
-- **Monolithic edge processors** (eKuiper) run pipeline logic in a single address space with no per-stage isolation and no live-update mechanism.
+- **Cloud-managed platforms** (Azure IoT Operations) use the same Wasm+WIT DAG model but require Kubernetes and ≥16 GB RAM, which rules out sub-8 GB gateways.
+- **Monolithic edge processors** (eKuiper) run pipeline logic in a single address space with no per-stage isolation and no way to replace one operator while the rest keeps running.
 
-WAFER targets the gap: typed Wasm composition, per-stage fault containment, and live node replacement on a Raspberry Pi 5 4 GB running a single Linux process.
+WAFER targets the gap: typed Wasm stages, per-stage fault containment, and hot swap of one stage at a time, on a Raspberry Pi 5 4 GB running a single Linux process.
 
 ## Contribution
 
-The runtime architecture *is* the contribution. No single feature is elevated; the novelty is the integrated system that simultaneously delivers:
+The contribution is the integrated runtime, not any single feature:
 
-1. **Typed DAG composition** — one `wafer:pipeline@0.1.0` package with Transform, Filter, Router, and capability-gated Inference worlds defines the host/guest contract across five configured node categories.
-2. **Per-stage fault isolation** in one OS process — separate Wasm stores, fuel metering, epoch interruption, and capability scoping ensure a misbehaving node cannot corrupt neighbours.
-3. **Live stage replacement** — the watch-channel mechanism replaces a loaded Wasm processing node between messages. Loss and disruption claims require separate sink/sequence evidence.
+1. **Typed stages** — one `wafer:pipeline@0.1.0` package with Transform, Filter, Router, and capability-gated Inference worlds defines the host/guest contract. The host checks every component against its role before it runs, at startup and on every hot swap.
+2. **Fault containment at stage granularity** — separate Wasm stores, memory limits, fuel metering, epoch interruption, and capability scoping keep a misbehaving stage from affecting its neighbours. A stage that traps is rebuilt alone from its compiled component.
+3. **Hot swap** — a new version is prepared off the processing path and adopted between two records. The stage's queue, limits, and permissions stay in place, so a stage that keeps no state between records is replaced without losing or duplicating messages. Loss and duplication are verified from sink and sequence evidence, not from the swap response.
 
-## Research Questions
+## What the evaluation asks
 
-| RQ | One-line summary |
+| Question | One-line summary |
 |----|-----------------|
-| **RQ1 — Performance** | Quantify the Wasm boundary overhead against native Rust (isolation tax) and eKuiper (competitive viability) on constrained hardware. |
-| **RQ2 — Isolation** | Demonstrate that per-stage sandboxes contain faults (memory, CPU, capabilities) without pipeline-wide failure. |
-| **RQ3 — Hot-swap** | Measure disruption cost of replacing a stage at runtime: pause duration, message accounting, throughput dip. |
+| **Performance** | Quantify the Wasm boundary overhead against native Rust and eKuiper on constrained hardware. |
+| **Fault containment** | Show that per-stage sandboxes contain faults (memory, CPU, capabilities) without pipeline-wide failure. |
+| **Hot swap** | Measure the disruption of replacing a stage at runtime: pause duration, message accounting, throughput dip. |
 
 ## Hardware Targets
 

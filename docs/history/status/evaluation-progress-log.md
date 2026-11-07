@@ -2,7 +2,7 @@
 
 > **Archived, not current.** The macOS shakedown program and early Raspberry Pi pilot and scout batches.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [canonical readiness](../../status/canonical-readiness.md).
+> paths or numbers. Current source: [implementation status](../../status/implementation-status.md).
 
 <!-- historical-diagnostic-file -->
 

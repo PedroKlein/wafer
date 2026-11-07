@@ -2,7 +2,7 @@
 
 This reference lists the current quantitative requirements. The architectural mechanisms behind each group are in [07. Quality requirements](../architecture/07-quality-requirements.md); the executable definitions are in `eval/canonical-matrix.json`. Its `verdict_rules` table declares every threshold below once. A criterion compared with a run-level statistic passes only when the one-sided 95% bootstrap bound on its favourable side meets the threshold, fails only when the bound on the other side misses it, and is otherwise inconclusive; zero-tolerance counts are exact. `eval/RESULT-CONTRACT.md` lists the rule for each criterion.
 
-## RQ1: performance
+## Performance
 
 | ID | Statement | Criterion | Experiment |
 |---|---|---|---|
@@ -17,7 +17,7 @@ E-Perf-1 is a matched operating point, not capacity. Pipeline A is `MQTT source 
 
 E-Backpressure evaluates `slow`, `drop`, and `dead-letter` separately. Each policy reconciles the source-authoritative offered population with delivered and policy-specific disposition counters; no universal lossless criterion applies.
 
-## RQ2: isolation
+## Fault containment
 
 | ID | Statement | Criterion | Experiment |
 |---|---|---|---|
@@ -26,7 +26,7 @@ E-Backpressure evaluates `slow`, `drop`, and `dead-letter` separately. Each poli
 | NFR-ISO-3 | Guest memory is bounded per store. | 64 MiB Transform and 16 MiB Filter/Router defaults unless overridden. | E-Iso-5 |
 | NFR-ISO-4 | Infinite execution is interrupted by the declared mechanism. | Trap and recovery evidence matches the matrix-declared epoch stimulus. | E-Iso-4, E-Iso-8 |
 
-## RQ3: stateless hot-swap
+## Stateless hot swap
 
 | ID | Statement | Criterion | Experiment |
 |---|---|---|---|

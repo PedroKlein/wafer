@@ -2,7 +2,7 @@
 
 > **Archived, not current.** Raspberry Pi 4 and Jetson preflight plan from the macOS shakedown era; many scripts and tasks it names no longer exist.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [the Pi 5 runbook](../../eval/pi5-experiment-runbook.md).
+> paths or numbers. Current source: [the experiment runbook](../../eval/experiment-runbook.md).
 
 **Goal:** Get from "macOS shakedowns clean" to "canonical measurements
 booking-ready on Pi 4 + Jetson Orin Nano." Every RQ pass criterion is

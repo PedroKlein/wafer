@@ -6,9 +6,8 @@
 
 ## Context
 
-WAFER's evaluation measures the per-message cost of the Wasm boundary (RQ1),
-counts what happens to every message under faults (RQ2), and times hot-swaps
-(RQ3). The runtime therefore needs per-node counts that are always
+WAFER's evaluation measures the per-message cost of the Wasm boundary,
+counts what happens to every message under faults, and times hot-swaps. The runtime therefore needs per-node counts that are always
 available, including in the builds that are benchmarked, without the
 counting itself becoming a measurable share of the per-message cost. It also
 needs process memory numbers for the memory experiments, and those samplers
