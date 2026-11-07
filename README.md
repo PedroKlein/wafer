@@ -6,63 +6,71 @@
 </p>
 
 <p align="center">
-  A single-process runtime for typed, sandboxed data pipelines on edge gateways.
+  An IoT gateway runtime where each pipeline stage is the unit of failure and update.
 </p>
 
 <p align="center">
-  <a href="#run-a-pipeline">Run WAFER</a> ·
-  <a href="docs/architecture/00-vision.md">Explore the architecture</a> ·
-  <a href="docs/status/implementation-status.md">Project status</a>
+  <a href="#try-it">Try it</a> ·
+  <a href="docs/operations/getting-started.md">Tutorial</a> ·
+  <a href="docs/architecture/00-vision.md">Architecture</a> ·
+  <a href="docs/README.md">Documentation</a>
 </p>
 
-WAFER executes directed acyclic graphs (DAGs) whose processing stages are
-WebAssembly Component Model components. Native adapters handle ingress and
-egress; bounded Tokio queues connect stages; each Wasm stage owns an isolated
-Wasmtime Store and can be replaced between messages.
+An IoT gateway runs a pipeline of short processing steps, called stages, that
+decode, filter and route sensor readings between local equipment and the
+cloud. Stages often come from different vendors and change after deployment.
+WAFER keeps a fault in one stage from stopping the gateway, and lets an
+operator replace one stage while the rest of the pipeline keeps running.
 
-WAFER is the software artefact of an undergraduate thesis at UFRGS. This
-repository holds the runtime, its plugins and the evaluation harness; the
-thesis text is not part of it (see `CITATION.cff` for how to cite it).
-
-> [!NOTE]
-> WAFER is a research prototype. Final empirical results come only from the
-> batches approved in `eval/final-batches.json`; diagnostic and rehearsal
-> results are not final thesis evidence.
+The runtime, called the host, owns everything that must outlive a stage: the
+pipeline graph, the queue in front of each stage, and the connections to the
+outside. Each stage is a WebAssembly component that runs in its own sandbox
+inside the host process. The host can therefore rebuild a failed stage alone,
+and swap a stage that keeps no state for a new version between two records,
+without losing or duplicating any. We call that replacement a hot swap.
 
 ## What WAFER does
 
 <p align="center">
-  <img src="brand/wafer-runtime-overview.svg" alt="Native inputs flow through bounded queues and isolated Wasm Transform, Filter, and Router stages inside one WAFER process, then leave through native outputs. The control plane manages hot-swap, reconfiguration, metrics, and health." width="100%">
+  <img src="brand/wafer-runtime-overview.svg" alt="Native source adapters feed a pipeline inside one WAFER process. Each stage runs in its own WebAssembly sandbox and reads from a bounded queue owned by the host. A failed stage is rebuilt alone, and a stage can be hot swapped between two records. A control plane exposes hot swap, reconfiguration, node status, metrics and health." width="100%">
 </p>
 
-| Property | Current design |
+| | |
 | --- | --- |
-| Typed plugins | One `wafer:pipeline@0.1.0` WIT package with Transform, Filter, Router, and capability-gated Inference worlds. |
-| Fault containment | One Store and linear memory per Wasm node, with configurable fuel, epoch, memory, and capability limits. Memory limits cover linear memory and tables; fuel and epochs bound Wasm execution time, not time blocked in a host call. |
-| Backpressure | One bounded receiver per destination; each incoming edge chooses `slow`, `drop`, or `dead-letter`. |
-| Live replacement | Loaded Wasm processing nodes switch to a prepared instance between messages. Guest state is not migrated. |
-| I/O boundary | Sources and sinks are native Rust adapters. Processing guests can receive exact-destination outbound `wasi:http` grants. |
-| Deployment | One Linux process and one TOML pipeline definition; no Kubernetes or per-stage containers. |
+| **Sandboxed stages** | Each stage has its own Wasmtime store and memory, and only the capabilities its configuration grants. Optional fuel, epoch and memory limits bound what a faulty stage can consume. |
+| **Fault containment** | A stage that traps or returns an unrecoverable error is rebuilt from its compiled component while the other stages keep processing. The failed record goes to the dead-letter sink when one is configured. |
+| **Hot swap** | A new version is compiled and initialized in the background, then adopted between two records. The stage's queue, limits and permissions stay in place; its in-memory state does not carry over. If the new version fails to start, the old one keeps running. |
+| **Typed contracts** | One `wafer:pipeline` WIT package defines the Transform, Filter and Router roles and a capability-gated Inference world. The host checks every component against its role before it runs. |
+| **Bounded queues** | Every stage reads from one bounded queue. When it is full, each incoming edge either makes the sender wait, drops the record, or sends it to a dead-letter sink, and the host counts each outcome. |
+| **Native I/O** | Sources and sinks are trusted Rust adapters for MQTT, HTTP webhooks, files and standard input and output. |
+| **One process** | A pipeline is one TOML file and one Linux process, with an HTTP control plane and Prometheus metrics. No Kubernetes and no container per stage. |
 
-WAFER does not provide distributed execution, stateful windows, exactly-once
-semantics, or state migration between component versions.
+WAFER does not provide distributed execution, windows or joins, exactly-once
+delivery, or migration of a stage's state between versions.
 
-## Run a pipeline
+## Try it
 
-Prerequisites: [Rust via rustup](https://rustup.rs/),
-[mise](https://mise.jdx.dev/), and a C toolchain.
+You need [Rust through rustup](https://rustup.rs/) and a C toolchain. The
+first build downloads crates and a pinned ONNX Runtime and takes several
+minutes.
 
 ```bash
-git clone https://github.com/PedroKlein/wafer.git
+git clone https://github.com/ComputerNetworks-UFRGS/wafer.git
 cd wafer
-mise trust
-mise run setup
-mise run //plugins:build-plugin uppercase
-printf 'hello wafer\n' | mise run run examples/dag-uppercase.toml
-# HELLO WAFER
+cargo build --locked -p wafer-runtime
+plugins/build-plugins.sh uppercase json-parse
 ```
 
-The example loads this pipeline:
+Start a pipeline that reads lines from standard input, passes them through the
+`uppercase` stage and prints them. Type `hello` and press Enter:
+
+```bash
+cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
+# hello
+# HELLO
+```
+
+The pipeline is defined in [`examples/dag-uppercase.toml`](examples/dag-uppercase.toml):
 
 ```toml
 [engine]
@@ -93,76 +101,71 @@ from = "uppercase"
 to = "sink"
 ```
 
-More runnable topologies are under [`examples/`](examples/), including MQTT,
-HTTP, fan-out, dead-letter handling, metrics, OCI-hosted components, and the
-secondary MNIST inference scenario.
-
-## Observe and update a running pipeline
-
-Start a pipeline without piping EOF into it and leave that terminal open:
+While it runs, the control plane listens on `127.0.0.1:9090`. From a second
+terminal, list the stages and hot swap `uppercase` for the `json-parse`
+component:
 
 ```bash
-mise run run examples/dag-uppercase.toml
-```
-
-The control plane listens on `127.0.0.1:9090` by default. From another terminal:
-
-```bash
-curl -s http://127.0.0.1:9090/health
-curl -s http://127.0.0.1:9090/api/v1/nodes | jq
-curl -s http://127.0.0.1:9090/metrics | head
-```
-
-A loaded Wasm Transform, Filter, or Router reports
-`replacement_eligible: true`. Prepare another compatible component and replace
-it without stopping the pipeline:
-
-```bash
-curl -X POST http://127.0.0.1:9090/api/v1/nodes/uppercase/hot-swap \
+curl -s http://127.0.0.1:9090/api/v1/nodes
+curl -s -X POST http://127.0.0.1:9090/api/v1/nodes/uppercase/hot-swap \
   -H 'content-type: application/json' \
-  -d '{"wasm_path":"./path/to/replacement.component.wasm"}'
+  -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
 ```
 
-The response reports local replacement adoption and the first runner-local
-outcome. It does not prove downstream delivery or zero loss; evaluation-owned
-sink and sequence artifacts establish those claims.
+Back in the first terminal, type `{"temp": 21}`. The same stage now
+pretty-prints JSON, and the pipeline never stopped. The
+[tutorial](docs/operations/getting-started.md) walks through these steps in
+more detail, and [`examples/`](examples/) has more pipelines, with MQTT, HTTP,
+fan-out, dead-letter handling, metrics, components pulled from an OCI
+registry, and an ONNX inference stage.
+
+## Documentation
+
+| If you want to | Read |
+| --- | --- |
+| Run a first pipeline | [Getting started](docs/operations/getting-started.md) |
+| Understand the design | [Architecture](docs/architecture/00-vision.md), [ADRs](docs/adr/) and [RFCs](docs/rfcs/) |
+| Configure a pipeline | [Configuration](docs/operations/configuration.md) and the [schema reference](docs/interfaces/config-schema.md) |
+| Write a stage | [WIT contracts](docs/interfaces/wit-contracts.md) and the [plugin SDK](docs/interfaces/plugin-sdk.md) |
+| Operate a running pipeline | [HTTP API](docs/interfaces/http-api.md) and [observability](docs/operations/observability.md) |
+| Learn the code | [Source-guided learning path](docs/learn/README.md) |
+| See what is implemented | [Implementation status](docs/status/implementation-status.md) |
 
 ## Repository map
 
 | Path | Contents |
 | --- | --- |
-| [`crates/`](crates/) | Runtime, core engine, configuration, shared types, CLI, load generator, and guest SDK. |
-| [`wit/`](wit/) | Project WIT package and pinned dependency interfaces. |
-| [`plugins/`](plugins/) | Rust processing components, attack fixtures, and bounded language demonstrations. |
+| [`crates/`](crates/) | Host runtime, core engine, configuration, shared types, `waferctl`, load generator and guest SDK. |
+| [`wit/`](wit/) | The `wafer:pipeline` WIT package and pinned dependency interfaces. |
+| [`plugins/`](plugins/) | Example stages in Rust, fault-injection components, and Go and Python demonstrations. |
 | [`examples/`](examples/) | Runnable pipeline configurations. |
-| [`docs/`](docs/) | Architecture, interfaces, operations, decisions, status, and benchmark documentation. |
-| [`eval/`](eval/) | Experiment definitions, result contract, execution tooling, and analysis. |
-| [`brand/`](brand/) | WAFER mark and light/dark repository lockups. |
-
-## Documentation
-
-- [Getting started](docs/operations/getting-started.md)
-- [Architecture overview](docs/architecture/00-vision.md)
-- [Configuration reference](docs/interfaces/config-schema.md)
-- [WIT contracts](docs/interfaces/wit-contracts.md)
-- [Plugin SDK](docs/interfaces/plugin-sdk.md)
-- [HTTP API](docs/interfaces/http-api.md)
-- [Implementation status](docs/status/implementation-status.md)
-- [ADRs](docs/adr/) and [RFCs](docs/rfcs/)
-- [Source-guided learning path](docs/learn/README.md)
+| [`docs/`](docs/) | Architecture, interfaces, operations guides, design records and the learning path. |
+| [`eval/`](eval/) | Experiment definitions and the evaluation harness. |
 
 ## Development
 
 ```bash
-mise tasks ls --all
-mise run build
-mise run test
+mise trust && mise run setup
 mise run fmt
 mise run clippy
+mise run test
 ```
 
-Rust is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Development
-conventions and domain-specific guidance live in [`.agents/`](.agents/).
+[mise](https://mise.jdx.dev/) installs the helper tools and runs the tasks;
+`mise tasks ls --all` lists them. Rust is pinned in
+[`rust-toolchain.toml`](rust-toolchain.toml). See
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+## Research
+
+WAFER was built for an undergraduate thesis at the Federal University of Rio
+Grande do Sul (UFRGS), which evaluated it on a Raspberry Pi 5, a Jetson Orin
+Nano and an x86 laptop against a native build and the eKuiper stream
+processor. The evaluation data is archived at
+[doi:10.5281/zenodo.24043514](https://doi.org/10.5281/zenodo.24043514). See
+[`CITATION.cff`](CITATION.cff) for how to cite the work.
+
+WAFER is a research prototype and is not hardened for production use.
 
 ## License
 
