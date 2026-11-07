@@ -38,3 +38,20 @@ preferred-citation:
     name: "Universidade Federal do Rio Grande do Sul"
     address: "Porto Alegre, Brazil"
   year: 2026
+references:
+  - type: data
+    title: >-
+      WAFER evaluation dataset: latency, isolation, hot-swap and power
+      measurements on three edge computers
+    authors:
+      - given-names: Pedro
+        family-names: Klein
+        affiliation: "Universidade Federal do Rio Grande do Sul (UFRGS)"
+      - given-names: Juliano
+        family-names: Wickboldt
+        affiliation: "Universidade Federal do Rio Grande do Sul (UFRGS)"
+    doi: 10.5281/zenodo.24043514
+    url: "https://doi.org/10.5281/zenodo.24043514"
+    publisher:
+      name: Zenodo
+    year: 2026
